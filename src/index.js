@@ -13,6 +13,14 @@ try {
   console.error("Auth ERROR:", e.message);
 }
 
-app.get("/api/health", (req, res) => res.json({ status: "ok", app: "Lumo" }));
+try {
+  const analisisRoutes = require("./routes_analisis");
+  app.use("/api", analisisRoutes);
+  console.log("Analisis OK");
+} catch(e) {
+  console.error("Analisis ERROR:", e.message);
+}
+
+app.get("/api/health", (req, res) => res.json({ status: "ok", app: "Lumo", version: "2.0" }));
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("Lumo backend corriendo en puerto " + PORT));
