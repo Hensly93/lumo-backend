@@ -1,36 +1,42 @@
+// routes_analisis.js — Lumo v2.0
+// Endpoints de análisis del motor híbrido.
+
 const express = require('express');
 const router = express.Router();
-const jwt = require('jsonwebtoken');
 const { analizarNegocio } = require('./motor');
+const { verificarToken } = require('./auth');
 const pool = require('./db');
 
-function authMiddleware(req, res, next) {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Token requerido' });
-  try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
-  } catch(e) {
-    res.status(401).json({ error: 'Token invalido' });
-  }
-}
+// ─── GET /api/analisis ───────────────────────────────────────────────────────
+// Análisis completo del negocio autenticado.
 
-router.get('/analisis', authMiddleware, async (req, res) => {
-  const resultado = await analizarNegocio(req.user.id);
-  res.json(resultado);
-});
-
-router.post('/transacciones', authMiddleware, async (req, res) => {
+router.get('/analisis', verificarToken, async (req, res) => {
   try {
-    const { monto, tipo, empleado, turno, fecha } = req.body;
-    const result = await pool.query(
-      'INSERT INTO transacciones(usuario_id, monto, tipo, empleado, turno, fecha) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',
-      [req.user.id, monto, tipo, empleado, turno, fecha || new Date()]
-    );
-    res.json(result.rows[0]);
-  } catch(e) {
-    res.status(500).json({ error: e.message });
+    const resultado = await analizarNegocio(req.usuario.id);
+    res.json(resultado);
+  } catch (error) {
+    console.error('Error /analisis:', error.message);
+    res.status(500).json({ error: 'Error al analizar el negocio' });
   }
 });
 
-module.exports = router;
+// ─── GET /api/analisis/resumen ───────────────────────────────────────────────
+// Resumen rápido para el Home: pérdida estimada + cantidad de alertas activas.
+
+router.get('/analisis/resumen', verificarToken, async (req, res) => {
+  try {
+    const resultado = await analizarNegocio(req.usuario.id);
+
+    const alertasCriticas = resultado.alertas?.filter(a => a.prioridad === 'critica') || [];
+    const alertasAtencion = resultado.alertas?.filter(a => a.prioridad === 'atencion') || [];
+
+    const perdidaEstimada = resultado.alertas?.reduce(
+      (sum, a) => sum + (a.impacto_estimado_pesos || 0), 0
+    ) || 0;
+
+    res.json({
+      perdida_estimada_pesos: perdidaEstimada,
+      perdida_es_estimada: true,
+      alertas_criticas: alertasCriticas.length,
+      alertas_atencion: alertasAtencion.length,
+      total_alertas: resultado.alertas?.length
