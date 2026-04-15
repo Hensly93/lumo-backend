@@ -1,5 +1,17 @@
 const { getSegmento } = require('./segmentacion');
 
+function calcularMediana(sorted) {
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function calcularIQR(sorted) {
+  const mid = Math.floor(sorted.length / 2);
+  const q1 = calcularMediana(sorted.slice(0, mid));
+  const q3 = calcularMediana(sorted.slice(Math.ceil(sorted.length / 2)));
+  return q3 - q1;
+}
+
 function construirBaseline(transacciones) {
   const grupos = {};
   transacciones.forEach(t => {
@@ -11,12 +23,11 @@ function construirBaseline(transacciones) {
 
   const baseline = {};
   Object.keys(grupos).forEach(clave => {
-    const valores = grupos[clave];
-    const n = valores.length;
-    const media = valores.reduce((a,b) => a+b, 0) / n;
-    const varianza = valores.reduce((a,b) => a + Math.pow(b-media,2), 0) / n;
-    const std = Math.sqrt(varianza);
-    baseline[clave] = { media, std, n, valores };
+    const sorted = [...grupos[clave]].sort((a, b) => a - b);
+    const n = sorted.length;
+    const mediana = calcularMediana(sorted);
+    const iqr = calcularIQR(sorted);
+    baseline[clave] = { mediana, iqr, n };
   });
 
   return baseline;

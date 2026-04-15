@@ -21,6 +21,22 @@ try {
   console.error("Analisis ERROR:", e.message);
 }
 
+try {
+  const mpRoutes = require("./routes_mp");
+  app.use("/api/mp", mpRoutes);
+  console.log("MP OAuth OK");
+} catch(e) {
+  console.error("MP OAuth ERROR:", e.message);
+}
+
+try {
+  const cajaRoutes = require("./routes_caja");
+  app.use("/api/caja", cajaRoutes);
+  console.log("Caja OK");
+} catch(e) {
+  console.error("Caja ERROR:", e.message);
+}
+
 app.get("/api/health", (req, res) => res.json({ status: "ok", app: "Lumo", version: "2.0" }));
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("Lumo backend corriendo en puerto " + PORT));
