@@ -1,42 +1,168 @@
-// routes_analisis.js — Lumo v2.0
-// Endpoints de análisis del motor híbrido.
-
 const express = require('express');
 const router = express.Router();
+const jwt = require('jsonwebtoken');
 const { analizarNegocio } = require('./motor');
-const { verificarToken } = require('./auth');
+const { actualizarBaselineNegocio, getBaselineNegocio } = require('./baseline_negocio');
+const { getBenchmarkSector, normalizarTipoNegocio, TIPOS_VALIDOS } = require('./benchmarks_sector');
+const { calcularPesos } = require('./benchmark_hibrido');
 const pool = require('./db');
 
-// ─── GET /api/analisis ───────────────────────────────────────────────────────
-// Análisis completo del negocio autenticado.
-
-router.get('/analisis', verificarToken, async (req, res) => {
+function authMiddleware(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Token requerido' });
   try {
-    const resultado = await analizarNegocio(req.usuario.id);
-    res.json(resultado);
-  } catch (error) {
-    console.error('Error /analisis:', error.message);
-    res.status(500).json({ error: 'Error al analizar el negocio' });
+    req.user = jwt.verify(token, process.env.JWT_SECRET);
+    next();
+  } catch(e) {
+    res.status(401).json({ error: 'Token invalido' });
+  }
+}
+
+router.get('/analisis', authMiddleware, async (req, res) => {
+  const resultado = await analizarNegocio(req.user.id);
+  res.json(resultado);
+});
+
+router.post('/transacciones', authMiddleware, async (req, res) => {
+  try {
+    const { monto, tipo, empleado, turno, fecha, metodo_pago } = req.body;
+    const result = await pool.query(
+      'INSERT INTO transacciones(usuario_id, monto, tipo, empleado, turno, fecha, metodo_pago) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+      [req.user.id, monto, tipo, empleado, turno, fecha || new Date(), metodo_pago || null]
+    );
+
+    // Actualizar baseline propio (Capa 2) con cada nueva transacción
+    const todas = await pool.query(
+      'SELECT * FROM transacciones WHERE usuario_id = $1 ORDER BY fecha ASC',
+      [req.user.id]
+    );
+    await actualizarBaselineNegocio(req.user.id, todas.rows);
+
+    res.json(result.rows[0]);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// ─── GET /api/analisis/resumen ───────────────────────────────────────────────
-// Resumen rápido para el Home: pérdida estimada + cantidad de alertas activas.
-
-router.get('/analisis/resumen', verificarToken, async (req, res) => {
+router.get('/perfil', authMiddleware, async (req, res) => {
   try {
-    const resultado = await analizarNegocio(req.usuario.id);
+    const uResult = await pool.query(
+      'SELECT id, nombre, email, negocio, tipo_negocio, created_at FROM usuarios WHERE id = $1',
+      [req.user.id]
+    );
+    const usuario = uResult.rows[0];
+    const tipoNegocio = normalizarTipoNegocio(usuario.tipo_negocio || usuario.negocio);
 
-    const alertasCriticas = resultado.alertas?.filter(a => a.prioridad === 'critica') || [];
-    const alertasAtencion = resultado.alertas?.filter(a => a.prioridad === 'atencion') || [];
+    const [benchmarks, baseline, txCount] = await Promise.all([
+      tipoNegocio ? getBenchmarkSector(tipoNegocio) : Promise.resolve({}),
+      getBaselineNegocio(req.user.id),
+      pool.query('SELECT COUNT(*) FROM transacciones WHERE usuario_id = $1', [req.user.id]),
+    ]);
 
-    const perdidaEstimada = resultado.alertas?.reduce(
-      (sum, a) => sum + (a.impacto_estimado_pesos || 0), 0
-    ) || 0;
+    // Formatear benchmarks como array para el frontend
+    const benchmarks_sector = Object.entries(benchmarks).map(([metrica, b]) => ({
+      metrica,
+      valor_min:      Number(b.valor_min),
+      valor_max:      Number(b.valor_max),
+      valor_promedio: Number(b.valor_promedio),
+      fuente:         b.fuente,
+    }));
+
+    // Baseline propio: sólo las métricas ya calculadas
+    const baseline_propio = Object.entries(baseline).map(([metrica, b]) => ({
+      metrica,
+      valor:                Number(b.valor),
+      total_transacciones:  Number(b.total_transacciones),
+      updated_at:           b.updated_at,
+    }));
 
     res.json({
-      perdida_estimada_pesos: perdidaEstimada,
-      perdida_es_estimada: true,
-      alertas_criticas: alertasCriticas.length,
-      alertas_atencion: alertasAtencion.length,
-      total_alertas: resultado.alertas?.length
+      usuario: {
+        id:           usuario.id,
+        nombre:       usuario.nombre,
+        email:        usuario.email,
+        negocio:      usuario.negocio,
+        tipo_negocio: usuario.tipo_negocio,
+        created_at:   usuario.created_at,
+      },
+      tipo_negocio_normalizado: tipoNegocio,
+      tipos_validos:            TIPOS_VALIDOS,
+      total_transacciones:      Number(txCount.rows[0].count),
+      benchmarks_sector,
+      baseline_propio,
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/negocio/perfil', authMiddleware, async (req, res) => {
+  try {
+    const [uResult, txResult] = await Promise.all([
+      pool.query('SELECT negocio, tipo_negocio FROM usuarios WHERE id = $1', [req.user.id]),
+      pool.query('SELECT COUNT(*) FROM transacciones WHERE usuario_id = $1', [req.user.id]),
+    ]);
+
+    const { negocio, tipo_negocio } = uResult.rows[0] || {};
+    const tipoNegocio = normalizarTipoNegocio(tipo_negocio || negocio);
+    const totalTx = Number(txResult.rows[0].count);
+
+    const [benchmarks, baseline] = await Promise.all([
+      tipoNegocio ? getBenchmarkSector(tipoNegocio) : Promise.resolve({}),
+      getBaselineNegocio(req.user.id),
+    ]);
+
+    const pesos = calcularPesos(totalTx);
+    const TX_CAPA2_COMPLETA = 500;
+
+    const capa_1 = Object.entries(benchmarks).map(([metrica, b]) => ({
+      metrica,
+      valor_min:      Number(b.valor_min),
+      valor_max:      Number(b.valor_max),
+      valor_promedio: Number(b.valor_promedio),
+      fuente:         b.fuente,
+    }));
+
+    const capa_2 = Object.entries(baseline).map(([metrica, b]) => ({
+      metrica,
+      valor_actual:        Number(b.valor),
+      total_transacciones: Number(b.total_transacciones),
+      updated_at:          b.updated_at,
+    }));
+
+    res.json({
+      tipo_negocio:            tipo_negocio || null,
+      tipo_negocio_normalizado: tipoNegocio,
+      capa_1,
+      capa_2,
+      capas: {
+        total_transacciones:          totalTx,
+        peso_capa_1:                  Math.round(pesos.peso_capa1 * 100),
+        peso_capa_2:                  Math.round(pesos.peso_capa2 * 100),
+        progreso_capa_2:              `${totalTx}/${TX_CAPA2_COMPLETA}`,
+        porcentaje_progreso_capa_2:   Math.min(Math.round((totalTx / TX_CAPA2_COMPLETA) * 100), 100),
+        transacciones_restantes:      Math.max(TX_CAPA2_COMPLETA - totalTx, 0),
+        capa_2_completa:              totalTx >= TX_CAPA2_COMPLETA,
+      },
+    });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PATCH /api/perfil — actualizar tipo_negocio del usuario
+router.patch('/perfil', authMiddleware, async (req, res) => {
+  try {
+    const { tipo_negocio } = req.body;
+    if (!tipo_negocio) return res.status(400).json({ error: 'tipo_negocio requerido' });
+    if (!TIPOS_VALIDOS.includes(tipo_negocio)) {
+      return res.status(400).json({ error: `Valor inválido. Aceptados: ${TIPOS_VALIDOS.join(', ')}` });
+    }
+    await pool.query('UPDATE usuarios SET tipo_negocio=$1 WHERE id=$2', [tipo_negocio, req.user.id]);
+    res.json({ ok: true, tipo_negocio });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+module.exports = router;

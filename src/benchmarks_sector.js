@@ -1,117 +1,94 @@
-// benchmarks_sector.js — Lumo v2.0
-// Capa 1: benchmarks reales del sector (Maxirest/CAME abril 2026)
-// Incluye ajuste automático por inflación mensual estimada
+const pool = require('./db');
 
-const INFLACION_MENSUAL_ESTIMADA = 0.04; // 4% mensual — actualizar cada mes
+const DATOS_SECTOR = [
+  { tipo_negocio: 'KIOSKO',      metrica: 'ticket_promedio',   valor_min: 2500,   valor_max: 8000,    valor_promedio: 5000   },
+  { tipo_negocio: 'KIOSKO',      metrica: 'ratio_efectivo',    valor_min: 0.75,   valor_max: 0.95,    valor_promedio: 0.85   },
+  { tipo_negocio: 'KIOSKO',      metrica: 'ventas_por_turno',  valor_min: 15000,  valor_max: 80000,   valor_promedio: 40000  },
+  { tipo_negocio: 'ALMACEN',     metrica: 'ticket_promedio',   valor_min: 3000,   valor_max: 10000,   valor_promedio: 6000   },
+  { tipo_negocio: 'ALMACEN',     metrica: 'ratio_efectivo',    valor_min: 0.70,   valor_max: 0.90,    valor_promedio: 0.80   },
+  { tipo_negocio: 'ALMACEN',     metrica: 'ventas_por_turno',  valor_min: 20000,  valor_max: 100000,  valor_promedio: 55000  },
+  { tipo_negocio: 'CAFETERIA',   metrica: 'ticket_promedio',   valor_min: 20000,  valor_max: 45000,   valor_promedio: 30000  },
+  { tipo_negocio: 'CAFETERIA',   metrica: 'ratio_efectivo',    valor_min: 0.30,   valor_max: 0.60,    valor_promedio: 0.45   },
+  { tipo_negocio: 'CAFETERIA',   metrica: 'ventas_por_turno',  valor_min: 80000,  valor_max: 400000,  valor_promedio: 200000 },
+  { tipo_negocio: 'RESTAURANTE', metrica: 'ticket_promedio',   valor_min: 35000,  valor_max: 70000,   valor_promedio: 50000  },
+  { tipo_negocio: 'RESTAURANTE', metrica: 'ratio_efectivo',    valor_min: 0.25,   valor_max: 0.55,    valor_promedio: 0.40   },
+  { tipo_negocio: 'RESTAURANTE', metrica: 'ventas_por_turno',  valor_min: 150000, valor_max: 800000,  valor_promedio: 400000 },
+  { tipo_negocio: 'PARRILLA',    metrica: 'ticket_promedio',   valor_min: 50000,  valor_max: 100000,  valor_promedio: 72000  },
+  { tipo_negocio: 'PARRILLA',    metrica: 'ratio_efectivo',    valor_min: 0.30,   valor_max: 0.60,    valor_promedio: 0.45   },
+  { tipo_negocio: 'PARRILLA',    metrica: 'ventas_por_turno',  valor_min: 200000, valor_max: 1000000, valor_promedio: 550000 },
+  { tipo_negocio: 'PANADERIA',   metrica: 'ticket_promedio',   valor_min: 3000,   valor_max: 12000,   valor_promedio: 7000   },
+  { tipo_negocio: 'PANADERIA',   metrica: 'ratio_efectivo',    valor_min: 0.65,   valor_max: 0.90,    valor_promedio: 0.78   },
+  { tipo_negocio: 'PANADERIA',   metrica: 'ventas_por_turno',  valor_min: 30000,  valor_max: 150000,  valor_promedio: 80000  },
+  { tipo_negocio: 'FARMACIA',    metrica: 'ticket_promedio',   valor_min: 8000,   valor_max: 30000,   valor_promedio: 18000  },
+  { tipo_negocio: 'FARMACIA',    metrica: 'ratio_efectivo',    valor_min: 0.20,   valor_max: 0.50,    valor_promedio: 0.35   },
+  { tipo_negocio: 'FARMACIA',    metrica: 'ventas_por_turno',  valor_min: 50000,  valor_max: 300000,  valor_promedio: 150000 },
+  { tipo_negocio: 'RETAIL',      metrica: 'ticket_promedio',   valor_min: 15000,  valor_max: 60000,   valor_promedio: 35000  },
+  { tipo_negocio: 'RETAIL',      metrica: 'ratio_efectivo',    valor_min: 0.15,   valor_max: 0.45,    valor_promedio: 0.30   },
+  { tipo_negocio: 'RETAIL',      metrica: 'ventas_por_turno',  valor_min: 40000,  valor_max: 250000,  valor_promedio: 120000 },
+];
 
-const BENCHMARKS_SECTOR = {
-  kiosko: {
-    ticket_promedio: { min: 2500, max: 8000 },
-    ratio_efectivo: { min: 0.75, max: 0.95 },
-    ventas_por_turno: { min: 15000, max: 80000 },
-  },
-  almacen: {
-    ticket_promedio: { min: 3000, max: 10000 },
-    ratio_efectivo: { min: 0.70, max: 0.90 },
-    ventas_por_turno: { min: 20000, max: 100000 },
-  },
-  cafeteria: {
-    ticket_promedio: { min: 20000, max: 45000 },
-    ratio_efectivo: { min: 0.35, max: 0.55 },
-    ventas_por_turno: { min: 80000, max: 400000 },
-  },
-  bar: {
-    ticket_promedio: { min: 20000, max: 45000 },
-    ratio_efectivo: { min: 0.35, max: 0.55 },
-    ventas_por_turno: { min: 80000, max: 400000 },
-  },
-  restaurante: {
-    ticket_promedio: { min: 35000, max: 70000 },
-    ratio_efectivo: { min: 0.30, max: 0.50 },
-    ventas_por_turno: { min: 150000, max: 800000 },
-  },
-  parrilla: {
-    ticket_promedio: { min: 50000, max: 100000 },
-    ratio_efectivo: { min: 0.35, max: 0.55 },
-    ventas_por_turno: { min: 200000, max: 1000000 },
-  },
-  panaderia: {
-    ticket_promedio: { min: 3000, max: 12000 },
-    ratio_efectivo: { min: 0.68, max: 0.88 },
-    ventas_por_turno: { min: 30000, max: 150000 },
-  },
-  farmacia: {
-    ticket_promedio: { min: 8000, max: 30000 },
-    ratio_efectivo: { min: 0.25, max: 0.45 },
-    ventas_por_turno: { min: 50000, max: 300000 },
-  },
-  retail: {
-    ticket_promedio: { min: 15000, max: 60000 },
-    ratio_efectivo: { min: 0.20, max: 0.40 },
-    ventas_por_turno: { min: 40000, max: 250000 },
-  },
-};
-
-const ALIASES = {
-  "kiosco": "kiosko",
-  "kiosks": "kiosko",
-  "cafe": "cafeteria",
-  "café": "cafeteria",
-  "cafè": "cafeteria",
-  "resto": "restaurante",
-  "restaurant": "restaurante",
-  "panadería": "panaderia",
-  "farmacía": "farmacia",
-};
-
-function normalizarTipoNegocio(tipo) {
-  if (!tipo) return null;
-  const lower = tipo.toLowerCase().trim();
-  return ALIASES[lower] || (BENCHMARKS_SECTOR[lower] ? lower : null);
+async function poblarBenchmarksSector() {
+  for (const d of DATOS_SECTOR) {
+    await pool.query(
+      `INSERT INTO benchmarks_sector(tipo_negocio, metrica, valor_min, valor_max, valor_promedio, fuente)
+       VALUES($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (tipo_negocio, metrica) DO UPDATE SET
+         valor_min=EXCLUDED.valor_min,
+         valor_max=EXCLUDED.valor_max,
+         valor_promedio=EXCLUDED.valor_promedio,
+         updated_at=NOW()`,
+      [d.tipo_negocio, d.metrica, d.valor_min, d.valor_max, d.valor_promedio, 'Maxirest/CAME abril 2026']
+    );
+  }
 }
 
-function ajustarPorInflacion(benchmark, mesesDesdeBase = 0) {
-  if (mesesDesdeBase === 0) return benchmark;
-  const factor = Math.pow(1 + INFLACION_MENSUAL_ESTIMADA, mesesDesdeBase);
-  return {
-    ticket_promedio: {
-      min: Math.round(benchmark.ticket_promedio.min * factor),
-      max: Math.round(benchmark.ticket_promedio.max * factor),
-    },
-    ratio_efectivo: { ...benchmark.ratio_efectivo },
-    ventas_por_turno: {
-      min: Math.round(benchmark.ventas_por_turno.min * factor),
-      max: Math.round(benchmark.ventas_por_turno.max * factor),
-    },
-  };
-}
-
-function mesesDesdeAbril2026() {
-  const base = new Date(2026, 3, 1);
-  const ahora = new Date();
-  return (
-    (ahora.getFullYear() - base.getFullYear()) * 12 +
-    (ahora.getMonth() - base.getMonth())
+async function getBenchmarkSector(tipoNegocio) {
+  const result = await pool.query(
+    'SELECT * FROM benchmarks_sector WHERE tipo_negocio = $1',
+    [tipoNegocio.toUpperCase()]
   );
+  const benchmarks = {};
+  result.rows.forEach(r => { benchmarks[r.metrica] = r; });
+  return benchmarks;
 }
 
-function getBenchmarkSector(tipoNegocio) {
-  const tipo = normalizarTipoNegocio(tipoNegocio);
-  if (!tipo) return null;
-  const base = BENCHMARKS_SECTOR[tipo];
-  const meses = mesesDesdeAbril2026();
-  return ajustarPorInflacion(base, meses);
+// Valores canónicos aceptados por el sistema (vienen de tipo_negocio en usuarios)
+const TIPOS_VALIDOS = ['kiosko', 'almacen', 'cafeteria_bar', 'restaurante', 'panaderia', 'farmacia', 'retail_indumentaria', 'parrilla'];
+
+const MAP_CANONICO = {
+  kiosko:               'KIOSKO',
+  almacen:              'ALMACEN',
+  cafeteria_bar:        'CAFETERIA',
+  restaurante:          'RESTAURANTE',
+  panaderia:            'PANADERIA',
+  farmacia:             'FARMACIA',
+  retail_indumentaria:  'RETAIL',
+  parrilla:             'PARRILLA',
+};
+
+function normalizarTipoNegocio(negocio) {
+  if (!negocio) return null;
+  const canónico = MAP_CANONICO[negocio.toLowerCase().trim()];
+  if (canónico) return canónico;
+
+  // Fallback fuzzy para el campo libre `negocio` de usuarios legacy
+  const n = negocio.toUpperCase();
+  if (n.includes('KIOSK') || n.includes('KIOSCO'))                                               return 'KIOSKO';
+  if (n.includes('ALMAC'))                                                                        return 'ALMACEN';
+  if (n.includes('CAFE') || n.includes('BAR'))                                                   return 'CAFETERIA';
+  if (n.includes('RESTAURANT') || n.includes('RESTAU'))                                          return 'RESTAURANTE';
+  if (n.includes('PARRILL') || n.includes('ASAD'))                                               return 'PARRILLA';
+  if (n.includes('PANAD') || n.includes('BOLLERIA'))                                             return 'PANADERIA';
+  if (n.includes('FARMAC') || n.includes('DROGU'))                                               return 'FARMACIA';
+  if (n.includes('RETAIL') || n.includes('INDUMENT') || n.includes('ROPA') || n.includes('TIEND')) return 'RETAIL';
+  return null;
 }
 
-function calcularZScoreSector(valor, tipoNegocio, metrica) {
-  const benchmark = getBenchmarkSector(tipoNegocio);
-  if (!benchmark || !benchmark[metrica]) return null;
-  const { min, max } = benchmark[metrica];
-  const media = (min + max) / 2;
-  const desvio = (max - min) / 4;
-  if (desvio === 0) return 0;
-  return (valor - media) / desvio;
+// Trata el rango min-max como ±2σ de una distribución normal → std_estimada = rango / 4
+function calcularZScoreSector(valor, benchmark) {
+  const std_estimada = (Number(benchmark.valor_max) - Number(benchmark.valor_min)) / 4;
+  if (std_estimada === 0) return 0;
+  return (valor - Number(benchmark.valor_promedio)) / std_estimada;
 }
 
-function estaEnRangoSector(valor, tipoNegocio, metrica) {
-  const benchmark = getBenchmarkSector(tipoNeg
+module.exports = { poblarBenchmarksSector, getBenchmarkSector, normalizarTipoNegocio, calcularZScoreSector, TIPOS_VALIDOS };

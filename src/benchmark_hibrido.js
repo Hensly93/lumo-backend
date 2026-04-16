@@ -1,68 +1,37 @@
-// benchmark_hibrido.js — Lumo v2.0
-// Capa 3: transición automática entre benchmark sector y baseline propio.
-// T5-02 resuelto: una sola implementación de z-score propio.
-// T5-06 resuelto: un solo sistema de priorización de alertas.
+// Capa 3: transición inteligente entre benchmarks del sector (Capa 1) y baseline propio (Capa 2)
 
-function calcularPesos(totalTx = 0) {
-  const pesoPropio = Math.min(totalTx / 500, 1.0);
-  const pesoSector = 1 - pesoPropio;
-  return {
-    pesoSector: parseFloat(pesoSector.toFixed(3)),
-    pesoPropio: parseFloat(pesoPropio.toFixed(3)),
-  };
+function calcularPesos(totalTransacciones) {
+  const peso_capa2 = Math.min(totalTransacciones / 500, 1.0);
+  const peso_capa1 = 1 - peso_capa2;
+  return { peso_capa1, peso_capa2 };
+}
+
+// Promedio de los últimos 7 scores para suavizar la transición
+function ventanaMovil7dias(historialScores, scoreActual) {
+  const ventana = [...historialScores, scoreActual].slice(-7);
+  return ventana.reduce((a, b) => a + b, 0) / ventana.length;
+}
+
+function calcularScoreHibrido({ scoreCapa1, scoreCapa2, pesos, historialScores = [] }) {
+  const scoreInstante = (scoreCapa1 * pesos.peso_capa1) + (scoreCapa2 * pesos.peso_capa2);
+  return ventanaMovil7dias(historialScores, scoreInstante);
 }
 
 function determinarCapaOrigen(pesos) {
-  if (pesos.pesoSector >= 0.8) return "sector";
-  if (pesos.pesoPropio >= 0.8) return "propio";
-  return "hibrido";
+  if (pesos.peso_capa2 >= 0.8) return 'CAPA2_PROPIO';
+  if (pesos.peso_capa1 >= 0.8) return 'CAPA1_SECTOR';
+  return 'HIBRIDO';
 }
 
-function calcularZScorePropio(valor, historico = []) {
-  if (!historico || historico.length < 3) return 0;
-
-  const sorted = [...historico].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  const mediana =
-    sorted.length % 2 !== 0
-      ? sorted[mid]
-      : (sorted[mid - 1] + sorted[mid]) / 2;
-
-  const desviaciones = historico.map((v) => Math.abs(v - mediana));
-  const sortedDev = [...desviaciones].sort((a, b) => a - b);
-  const midDev = Math.floor(sortedDev.length / 2);
-  const mad =
-    sortedDev.length % 2 !== 0
-      ? sortedDev[midDev]
-      : (sortedDev[midDev - 1] + sortedDev[midDev]) / 2;
-
-  if (mad === 0) return 0;
-  return parseFloat(((0.6745 * (valor - mediana)) / (1.4826 * mad)).toFixed(3));
+// Z-score de Capa 2: compara valor reciente contra baseline histórico del negocio.
+// Usa std proxy: ±20% del valor de referencia para montos, ±0.10 para ratios.
+function calcularZScorePropio(valor, baselineNegocio, metrica) {
+  const base = baselineNegocio[metrica];
+  if (!base) return 0;
+  const referencia = Number(base.valor);
+  if (referencia === 0) return 0;
+  const std_proxy = metrica === 'ratio_efectivo' ? 0.10 : referencia * 0.20;
+  return (valor - referencia) / std_proxy;
 }
 
-function calcularScoreHibrido(zScoreSector, zScorePropio, pesos) {
-  const zSector = zScoreSector || 0;
-  const zPropio = zScorePropio || 0;
-  const score = zSector * pesos.pesoSector + zPropio * pesos.pesoPropio;
-  return parseFloat(score.toFixed(3));
-}
-
-function priorizarAlerta(alerta) {
-  const score = Math.abs(alerta.score || 0);
-  const señales = alerta.metricas_anomalas?.length || 0;
-  const impacto = alerta.impacto_pesos || 0;
-
-  if (score >= 3.0 && señales >= 3) return "critica";
-  if (score >= 3.5) return "critica";
-  if (impacto >= 50000 && score >= 2.5) return "critica";
-  if (score >= 2.0 && señales >= 2) return "atencion";
-  if (score >= 2.5) return "atencion";
-  return "info";
-}
-
-function estimarImpactoPesos(ventasTurno, zScore) {
-  if (!ventasTurno || ventasTurno <= 0) {
-    return { impacto_estimado_pesos: 0, es_estimado: true };
-  }
-  const proporcion = Math.min(Math.abs(zScore) * 0.05, 0.30);
-  const impacto =
+module.exports = { calcularPesos, calcularScoreHibrido, determinarCapaOrigen, calcularZScorePropio };
