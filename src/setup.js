@@ -99,6 +99,10 @@ async function setup() {
       hora TIMESTAMP DEFAULT NOW()
     )`);
 
+    // --- Alert manager (S7 obj7) ---
+    const { crearTablaAlertas } = require('./alert_manager');
+    await crearTablaAlertas(pool);
+
     await poblarBenchmarksSector();
 
     console.log("Base de datos lista");

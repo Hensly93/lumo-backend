@@ -5,6 +5,9 @@ const { analizarNegocio } = require('./motor');
 const { actualizarBaselineNegocio, getBaselineNegocio } = require('./baseline_negocio');
 const { getBenchmarkSector, normalizarTipoNegocio, TIPOS_VALIDOS } = require('./benchmarks_sector');
 const { calcularPesos } = require('./benchmark_hibrido');
+const { generarPrediccionCompleta } = require('./predicciones');
+const { generarRecomendaciones } = require('./recomendaciones');
+const { gestionarAlertas, registrarFeedback } = require('./alert_manager');
 const pool = require('./db');
 
 function authMiddleware(req, res, next) {
@@ -160,6 +163,50 @@ router.patch('/perfil', authMiddleware, async (req, res) => {
     }
     await pool.query('UPDATE usuarios SET tipo_negocio=$1 WHERE id=$2', [tipo_negocio, req.user.id]);
     res.json({ ok: true, tipo_negocio });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/predicciones — Obj 4+5: proyección facturación + pérdidas
+router.get('/predicciones', authMiddleware, async (req, res) => {
+  try {
+    const resultado = await generarPrediccionCompleta(req.user.id);
+    res.json(resultado);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/recomendaciones — Obj 6: motor de recomendaciones
+router.get('/recomendaciones', authMiddleware, async (req, res) => {
+  try {
+    const resultado = await generarRecomendaciones(req.user.id);
+    res.json(resultado);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/alertas/feedback — Obj 7: feedback loop del dueño
+router.post('/alertas/feedback', authMiddleware, async (req, res) => {
+  try {
+    const { alerta_id, confirmada, notas } = req.body;
+    if (alerta_id == null) return res.status(400).json({ error: 'alerta_id requerido' });
+    const resultado = await registrarFeedback(alerta_id, { confirmada: !!confirmada, notas });
+    res.json(resultado);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/alertas — Obj 7: pipeline de alertas del análisis actual
+router.get('/alertas', authMiddleware, async (req, res) => {
+  try {
+    const analisis = await analizarNegocio(req.user.id);
+    const candidatas = analisis.señales || [];
+    const resultado = await gestionarAlertas(req.user.id, candidatas);
+    res.json(resultado);
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
