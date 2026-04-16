@@ -3,6 +3,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const pool = require('./db');
 const { analizarCruceTurno, detectarGoteo, resumenPatronesNegocio } = require('./cruce_variables');
+const { analizarTurnoConContexto, rankingEmpleadosTurno, contextTurnoActivo, detectarCambioComportamiento } = require('./zscore_contextual');
 
 // Calcula hora aleatoria para conteo: entre 40 y 180 min despues de la apertura
 function calcularHoraConteo(desde) {
@@ -397,6 +398,53 @@ router.get('/historial/:usuario_id', async (req, res) => {
       [req.params.usuario_id, limit]
     );
     res.json(result.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Z-score contextual ──────────────────────────────────────────────────────
+
+// GET /api/caja/contexto-turno/:turno_id — z-score + contexto temporal de un turno cerrado
+router.get('/contexto-turno/:turno_id', async (req, res) => {
+  try {
+    const resultado = await analizarTurnoConContexto(parseInt(req.params.turno_id));
+    res.json(resultado);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/caja/ranking/:usuario_id/:tipo_turno — ranking empleados dentro del mismo turno
+router.get('/ranking/:usuario_id/:tipo_turno', async (req, res) => {
+  try {
+    const { usuario_id, tipo_turno } = req.params;
+    const dias = parseInt(req.query.dias) || 30;
+    const resultado = await rankingEmpleadosTurno(parseInt(usuario_id), tipo_turno, dias);
+    if (!resultado) return res.json({ mensaje: 'Menos de 2 empleados con datos suficientes' });
+    res.json(resultado);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/caja/contexto-activo/:usuario_id/:tipo_turno — contexto del turno en curso
+router.get('/contexto-activo/:usuario_id/:tipo_turno', async (req, res) => {
+  try {
+    const { usuario_id, tipo_turno } = req.params;
+    const resultado = await contextTurnoActivo(parseInt(usuario_id), tipo_turno);
+    res.json(resultado);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/caja/comportamiento/:usuario_id/:empleado/:tipo_turno — titular vs peers
+router.get('/comportamiento/:usuario_id/:empleado/:tipo_turno', async (req, res) => {
+  try {
+    const { usuario_id, empleado, tipo_turno } = req.params;
+    const resultado = await detectarCambioComportamiento(parseInt(usuario_id), empleado, tipo_turno);
+    res.json(resultado);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

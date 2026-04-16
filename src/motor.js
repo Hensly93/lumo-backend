@@ -3,6 +3,7 @@ const { generarInsight, generarInsightMetrica } = require('./insights');
 const { getBenchmarkSector, normalizarTipoNegocio, calcularZScoreSector } = require('./benchmarks_sector');
 const { calcularMetricasNegocio, getBaselineNegocio } = require('./baseline_negocio');
 const { calcularPesos, calcularScoreHibrido, determinarCapaOrigen, calcularZScorePropio } = require('./benchmark_hibrido');
+const { getContextoTemporal, fetchClima, factoresAjuste } = require('./zscore_contextual');
 const pool = require('./db');
 
 const METRICAS = ['ticket_promedio', 'ventas_por_turno', 'ratio_efectivo'];
@@ -212,12 +213,27 @@ async function analizarNegocio(usuarioId) {
     const benchmarkSector = tipoNegocio ? await getBenchmarkSector(tipoNegocio) : {};
     const baselineNegocio = await getBaselineNegocio(usuarioId);
 
+    // Contexto temporal actual + clima
+    const ctx = getContextoTemporal(new Date());
+    const clima = await fetchClima(ctx.fecha_str);
+    const { factor: factorContexto, componentes: componentesContexto } = factoresAjuste(ctx, clima);
+
     // Métricas recientes (últimos 7 días) vs baseline histórico
+    // El baseline se ajusta por el factor de contexto antes de calcular z-score
     const recientes = filtrarUltimosDias(transacciones, 7);
     const metricasRecientes = calcularMetricasNegocio(recientes.length > 0 ? recientes : transacciones);
 
-    // Evaluar todas las señales
-    const señalesMetricas = evaluarSeñalesMetricas(metricasRecientes, benchmarkSector, baselineNegocio, pesos);
+    // Ajustar baseline de ventas_por_turno por contexto
+    const baselineAjustado = { ...baselineNegocio };
+    if (baselineAjustado.ventas_por_turno && factorContexto !== 1.0) {
+      baselineAjustado.ventas_por_turno = {
+        ...baselineAjustado.ventas_por_turno,
+        valor: parseFloat(baselineAjustado.ventas_por_turno.valor) * factorContexto,
+      };
+    }
+
+    // Evaluar todas las señales (con baseline ajustado por contexto)
+    const señalesMetricas = evaluarSeñalesMetricas(metricasRecientes, benchmarkSector, baselineAjustado, pesos);
     const agregados = agregarPorTurno(transacciones);
     const señalesSectorPorTurno = evaluarSeñalesSectorPorTurno(agregados, benchmarkSector);
 
@@ -244,6 +260,15 @@ async function analizarNegocio(usuarioId) {
       medias: medias.length,
       bajas: bajas.length,
       data_quality_score: data_quality,
+      contexto_temporal: {
+        ...ctx,
+        clima,
+        factor_ajuste: factorContexto,
+        componentes_ajuste: componentesContexto,
+        nota: componentesContexto.length > 0
+          ? `Baseline ajustado por: ${componentesContexto.map(c => c.causa).join(', ')}`
+          : 'Sin ajustes por contexto',
+      },
       capas: {
         tipo_negocio: tipoNegocio,
         pesos: { capa1: Math.round(pesos.peso_capa1 * 100), capa2: Math.round(pesos.peso_capa2 * 100) },
