@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const pool = require('./db');
+const { analizarCruceTurno, detectarGoteo, resumenPatronesNegocio } = require('./cruce_variables');
 
 // Calcula hora aleatoria para conteo: entre 40 y 180 min despues de la apertura
 function calcularHoraConteo(desde) {
@@ -396,6 +397,40 @@ router.get('/historial/:usuario_id', async (req, res) => {
       [req.params.usuario_id, limit]
     );
     res.json(result.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Motor de cruce de variables ────────────────────────────────────────────
+
+// GET /api/caja/cruce/:turno_id — análisis cruzado de un turno cerrado
+router.get('/cruce/:turno_id', async (req, res) => {
+  try {
+    const resultado = await analizarCruceTurno(parseInt(req.params.turno_id));
+    res.json(resultado);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/caja/goteo/:usuario_id?dias=21 — detección de goteo (brechas acumuladas)
+router.get('/goteo/:usuario_id', async (req, res) => {
+  try {
+    const dias = parseInt(req.query.dias) || 21;
+    const resultado = await detectarGoteo(parseInt(req.params.usuario_id), dias);
+    res.json(resultado);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/caja/patrones/:usuario_id?limite=30 — resumen histórico de patrones
+router.get('/patrones/:usuario_id', async (req, res) => {
+  try {
+    const limite = parseInt(req.query.limite) || 30;
+    const resultado = await resumenPatronesNegocio(parseInt(req.params.usuario_id), limite);
+    res.json(resultado);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
