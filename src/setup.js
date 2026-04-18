@@ -103,6 +103,18 @@ async function setup() {
     const { crearTablaAlertas } = require('./alert_manager');
     await crearTablaAlertas(pool);
 
+    // --- Multi-local (S8) ---
+    await pool.query(`CREATE TABLE IF NOT EXISTS sucursales_red(
+      id SERIAL PRIMARY KEY,
+      maestro_id INTEGER REFERENCES usuarios(id) ON DELETE CASCADE,
+      sucursal_id INTEGER REFERENCES usuarios(id) ON DELETE CASCADE,
+      nombre_sucursal VARCHAR(100),
+      estado VARCHAR(20) DEFAULT 'pendiente',
+      aceptado_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(maestro_id, sucursal_id)
+    )`);
+
     await poblarBenchmarksSector();
 
     console.log("Base de datos lista");
