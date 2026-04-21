@@ -10,6 +10,7 @@ const { generarRecomendaciones } = require('./recomendaciones');
 const { gestionarAlertas, registrarFeedback } = require('./alert_manager');
 const { adaptarUmbralPorFeedback, getUmbralesUsuario } = require('./motor_conductual');
 const { calcularCUSUMCompleto, resetBaselinePorCambioConfirmado } = require('./cusum');
+const { calcularERMNegocio, calcularRiesgoEmpleado } = require('./erm');
 const pool = require('./db');
 
 function authMiddleware(req, res, next) {
@@ -259,6 +260,26 @@ router.get('/alertas', authMiddleware, async (req, res) => {
     ];
     const resultado = await gestionarAlertas(req.user.id, candidatas);
     res.json({ ...resultado, cusum: cusum.turnos });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/erm — ERM completo del negocio (todos los empleados)
+router.get('/erm', authMiddleware, async (req, res) => {
+  try {
+    const resultado = await calcularERMNegocio(req.user.id);
+    res.json(resultado);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/erm/:empleado — ERM de un empleado específico
+router.get('/erm/:empleado', authMiddleware, async (req, res) => {
+  try {
+    const resultado = await calcularRiesgoEmpleado(req.user.id, req.params.empleado);
+    res.json(resultado);
   } catch(e) {
     res.status(500).json({ error: e.message });
   }

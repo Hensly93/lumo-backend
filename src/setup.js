@@ -117,16 +117,19 @@ async function setup() {
     )`);
 
     // --- Multi-local (S8) ---
-    await pool.query(`CREATE TABLE IF NOT EXISTS sucursales_red(
+    // Locales propios del dueño (nombre + dirección, sin vinculación a otros usuarios)
+    await pool.query(`CREATE TABLE IF NOT EXISTS mis_sucursales(
       id SERIAL PRIMARY KEY,
-      maestro_id INTEGER REFERENCES usuarios(id) ON DELETE CASCADE,
-      sucursal_id INTEGER REFERENCES usuarios(id) ON DELETE CASCADE,
-      nombre_sucursal VARCHAR(100),
-      estado VARCHAR(20) DEFAULT 'pendiente',
-      aceptado_at TIMESTAMP,
-      created_at TIMESTAMP DEFAULT NOW(),
-      UNIQUE(maestro_id, sucursal_id)
+      usuario_id INTEGER REFERENCES usuarios(id) ON DELETE CASCADE,
+      nombre VARCHAR(100) NOT NULL,
+      direccion VARCHAR(200),
+      activo BOOLEAN DEFAULT true,
+      created_at TIMESTAMP DEFAULT NOW()
     )`);
+
+    // Columnas para taggear datos por sucursal (nullable: datos previos quedan sin tag)
+    await pool.query(`ALTER TABLE transacciones ADD COLUMN IF NOT EXISTS sucursal_id INTEGER REFERENCES mis_sucursales(id)`);
+    await pool.query(`ALTER TABLE turnos_caja ADD COLUMN IF NOT EXISTS sucursal_id INTEGER REFERENCES mis_sucursales(id)`);
 
     await poblarBenchmarksSector();
 
