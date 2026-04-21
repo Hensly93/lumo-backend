@@ -187,7 +187,7 @@ function construirAlertasSegmento(anomalias, señalesSectorPorTurno, señalesMet
 
 // ─── Análisis principal ───────────────────────────────────────────────────────
 
-async function analizarNegocio(usuarioId) {
+async function analizarNegocio(usuarioId, sucursalId = null) {
   try {
     const userResult = await pool.query('SELECT negocio, tipo_negocio FROM usuarios WHERE id = $1', [usuarioId]);
     const { negocio = '', tipo_negocio } = userResult.rows[0] || {};
@@ -195,8 +195,10 @@ async function analizarNegocio(usuarioId) {
     const tipoNegocio = normalizarTipoNegocio(tipo_negocio || negocio);
 
     const result = await pool.query(
-      'SELECT * FROM transacciones WHERE usuario_id = $1 ORDER BY fecha ASC',
-      [usuarioId]
+      `SELECT * FROM transacciones WHERE usuario_id = $1
+       AND ($2::integer IS NULL OR sucursal_id = $2)
+       ORDER BY fecha ASC`,
+      [usuarioId, sucursalId]
     );
     const transacciones = result.rows;
 

@@ -47,19 +47,19 @@ function turnosRestantesMes(turnos_por_dia = 3) {
 
 // ─── Proyección de facturación ────────────────────────────────────────────────
 
-async function proyectarFacturacion(usuarioId) {
+async function proyectarFacturacion(usuarioId, sucursalId = null) {
   const ctx = getContextoTemporal(new Date());
   const clima = await fetchClima(ctx.fecha_str);
   const { factor } = factoresAjuste(ctx, clima);
 
-  // Ventas diarias de los últimos 90 días
   const res = await pool.query(
     `SELECT DATE(fecha) as dia, SUM(monto) as total_dia
      FROM transacciones
      WHERE usuario_id=$1 AND fecha >= NOW() - INTERVAL '90 days'
+       AND ($2::integer IS NULL OR sucursal_id = $2)
      GROUP BY DATE(fecha)
      ORDER BY dia ASC`,
-    [usuarioId]
+    [usuarioId, sucursalId]
   );
 
   const diasConDatos = res.rows.length;
@@ -94,8 +94,9 @@ async function proyectarFacturacion(usuarioId) {
   const acumRes = await pool.query(
     `SELECT COALESCE(SUM(monto),0) as total
      FROM transacciones
-     WHERE usuario_id=$1 AND DATE_TRUNC('month', fecha) = DATE_TRUNC('month', NOW())`,
-    [usuarioId]
+     WHERE usuario_id=$1 AND DATE_TRUNC('month', fecha) = DATE_TRUNC('month', NOW())
+       AND ($2::integer IS NULL OR sucursal_id = $2)`,
+    [usuarioId, sucursalId]
   );
   const ventasMesActual = parseFloat(acumRes.rows[0].total);
   const proyeccionMesCompleto = ventasMesActual + proyeccionResto;
@@ -129,15 +130,15 @@ async function proyectarFacturacion(usuarioId) {
 
 // ─── Proyección de pérdidas ────────────────────────────────────────────────────
 
-async function proyectarPerdidas(usuarioId) {
-  // Brechas de los últimos 60 días desde turnos_caja
+async function proyectarPerdidas(usuarioId, sucursalId = null) {
   const res = await pool.query(
     `SELECT brecha, hora_apertura, tipo_turno
      FROM turnos_caja
      WHERE usuario_id=$1 AND estado='cerrado' AND brecha IS NOT NULL
        AND hora_apertura >= NOW() - INTERVAL '60 days'
+       AND ($2::integer IS NULL OR sucursal_id = $2)
      ORDER BY hora_apertura ASC`,
-    [usuarioId]
+    [usuarioId, sucursalId]
   );
 
   const turnosCerrados = res.rows;
@@ -170,8 +171,9 @@ async function proyectarPerdidas(usuarioId) {
     `SELECT COALESCE(SUM(ABS(brecha)),0) as total
      FROM turnos_caja
      WHERE usuario_id=$1 AND estado='cerrado' AND brecha IS NOT NULL
-       AND DATE_TRUNC('month', hora_apertura) = DATE_TRUNC('month', NOW())`,
-    [usuarioId]
+       AND DATE_TRUNC('month', hora_apertura) = DATE_TRUNC('month', NOW())
+       AND ($2::integer IS NULL OR sucursal_id = $2)`,
+    [usuarioId, sucursalId]
   );
   const perdidaMesActual = parseFloat(acumRes.rows[0].total);
 
@@ -202,10 +204,10 @@ async function proyectarPerdidas(usuarioId) {
 
 // ─── Predicción completa (combina facturación + pérdidas) ────────────────────
 
-async function generarPrediccionCompleta(usuarioId) {
+async function generarPrediccionCompleta(usuarioId, sucursalId = null) {
   const [facturacion, perdidas] = await Promise.all([
-    proyectarFacturacion(usuarioId).catch(e => ({ disponible: false, error: e.message })),
-    proyectarPerdidas(usuarioId).catch(e => ({ disponible: false, error: e.message })),
+    proyectarFacturacion(usuarioId, sucursalId).catch(e => ({ disponible: false, error: e.message })),
+    proyectarPerdidas(usuarioId, sucursalId).catch(e => ({ disponible: false, error: e.message })),
   ]);
 
   // Resumen ejecutivo para la pantalla Home del dueño

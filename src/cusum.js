@@ -23,8 +23,7 @@ const ALPHA_BLEND_DIAS = 21;
 
 // ─── Calcular CUSUM para un empleado/turno ────────────────────────────────────
 
-async function calcularCUSUM(usuarioId, tipoTurno, metrica = 'brecha') {
-  // Obtener serie temporal de la métrica en el turno
+async function calcularCUSUM(usuarioId, tipoTurno, metrica = 'brecha', sucursalId = null) {
   const res = await pool.query(
     `SELECT
        brecha as valor,
@@ -33,8 +32,9 @@ async function calcularCUSUM(usuarioId, tipoTurno, metrica = 'brecha') {
      WHERE usuario_id=$1 AND tipo_turno=$2
        AND estado='cerrado' AND brecha IS NOT NULL
        AND hora_apertura >= NOW() - INTERVAL '${VENTANA_DIAS} days'
+       AND ($3::integer IS NULL OR sucursal_id = $3)
      ORDER BY hora_apertura ASC`,
-    [usuarioId, tipoTurno]
+    [usuarioId, tipoTurno, sucursalId]
   );
 
   if (res.rows.length < 5) {
@@ -103,10 +103,10 @@ async function calcularCUSUM(usuarioId, tipoTurno, metrica = 'brecha') {
 
 // ─── CUSUM para todos los turnos del usuario ──────────────────────────────────
 
-async function calcularCUSUMCompleto(usuarioId) {
+async function calcularCUSUMCompleto(usuarioId, sucursalId = null) {
   const TURNOS = ['MANANA', 'TARDE', 'NOCHE'];
   const resultados = await Promise.all(
-    TURNOS.map(t => calcularCUSUM(usuarioId, t).catch(() => ({ disponible: false, turno: t })))
+    TURNOS.map(t => calcularCUSUM(usuarioId, t, 'brecha', sucursalId).catch(() => ({ disponible: false, turno: t })))
   );
 
   const alertas = resultados

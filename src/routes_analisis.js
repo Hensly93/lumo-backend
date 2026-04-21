@@ -25,16 +25,17 @@ function authMiddleware(req, res, next) {
 }
 
 router.get('/analisis', authMiddleware, async (req, res) => {
-  const resultado = await analizarNegocio(req.user.id);
+  const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
+  const resultado = await analizarNegocio(req.user.id, sucursalId);
   res.json(resultado);
 });
 
 router.post('/transacciones', authMiddleware, async (req, res) => {
   try {
-    const { monto, tipo, empleado, turno, fecha, metodo_pago } = req.body;
+    const { monto, tipo, empleado, turno, fecha, metodo_pago, sucursal_id } = req.body;
     const result = await pool.query(
-      'INSERT INTO transacciones(usuario_id, monto, tipo, empleado, turno, fecha, metodo_pago) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *',
-      [req.user.id, monto, tipo, empleado, turno, fecha || new Date(), metodo_pago || null]
+      'INSERT INTO transacciones(usuario_id, monto, tipo, empleado, turno, fecha, metodo_pago, sucursal_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',
+      [req.user.id, monto, tipo, empleado, turno, fecha || new Date(), metodo_pago || null, sucursal_id || null]
     );
 
     // Actualizar baseline propio (Capa 2) con cada nueva transacción
@@ -174,7 +175,8 @@ router.patch('/perfil', authMiddleware, async (req, res) => {
 // GET /api/predicciones — Obj 4+5: proyección facturación + pérdidas
 router.get('/predicciones', authMiddleware, async (req, res) => {
   try {
-    const resultado = await generarPrediccionCompleta(req.user.id);
+    const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
+    const resultado = await generarPrediccionCompleta(req.user.id, sucursalId);
     res.json(resultado);
   } catch(e) {
     res.status(500).json({ error: e.message });
@@ -250,9 +252,10 @@ router.get('/ventas-diarias', authMiddleware, async (req, res) => {
 // GET /api/alertas — Obj 7 + P8: pipeline alertas + CUSUM
 router.get('/alertas', authMiddleware, async (req, res) => {
   try {
+    const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
     const [analisis, cusum] = await Promise.all([
-      analizarNegocio(req.user.id),
-      calcularCUSUMCompleto(req.user.id).catch(() => ({ alertas_cusum: [] })),
+      analizarNegocio(req.user.id, sucursalId),
+      calcularCUSUMCompleto(req.user.id, sucursalId).catch(() => ({ alertas_cusum: [] })),
     ]);
     const candidatas = [
       ...(analisis.señales || []),

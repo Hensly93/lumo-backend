@@ -20,12 +20,16 @@ function calcularTipoTurno() {
 
 // ─── Empleados ──────────────────────────────────────────────────────────────
 
-// GET /api/caja/empleados/:usuario_id
+// GET /api/caja/empleados/:usuario_id?sucursal_id=X
 router.get('/empleados/:usuario_id', async (req, res) => {
   try {
+    const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
     const result = await pool.query(
-      'SELECT id, nombre FROM empleados_negocio WHERE usuario_id=$1 AND activo=true ORDER BY nombre',
-      [req.params.usuario_id]
+      `SELECT id, nombre, sucursal_id FROM empleados_negocio
+       WHERE usuario_id=$1 AND activo=true
+         AND ($2::integer IS NULL OR sucursal_id = $2)
+       ORDER BY nombre`,
+      [req.params.usuario_id, sucursalId]
     );
     res.json(result.rows);
   } catch (e) {
@@ -36,7 +40,7 @@ router.get('/empleados/:usuario_id', async (req, res) => {
 // POST /api/caja/empleados — registrar empleado (lo usa el dueño)
 router.post('/empleados', async (req, res) => {
   try {
-    const { usuario_id, nombre, pin } = req.body;
+    const { usuario_id, nombre, pin, sucursal_id } = req.body;
     if (!usuario_id || !nombre || !pin) {
       return res.status(400).json({ error: 'usuario_id, nombre y pin requeridos' });
     }
@@ -45,11 +49,11 @@ router.post('/empleados', async (req, res) => {
     }
     const pin_hash = await bcrypt.hash(String(pin), 10);
     const result = await pool.query(
-      `INSERT INTO empleados_negocio(usuario_id, nombre, pin_hash)
-       VALUES($1,$2,$3)
-       ON CONFLICT(usuario_id, nombre) DO UPDATE SET pin_hash=$3, activo=true
-       RETURNING id, nombre`,
-      [usuario_id, nombre.trim(), pin_hash]
+      `INSERT INTO empleados_negocio(usuario_id, nombre, pin_hash, sucursal_id)
+       VALUES($1,$2,$3,$4)
+       ON CONFLICT(usuario_id, nombre) DO UPDATE SET pin_hash=$3, sucursal_id=$4, activo=true
+       RETURNING id, nombre, sucursal_id`,
+      [usuario_id, nombre.trim(), pin_hash, sucursal_id || null]
     );
     res.json(result.rows[0]);
   } catch (e) {
@@ -121,7 +125,7 @@ router.post('/validar-pin', async (req, res) => {
 // POST /api/caja/apertura
 router.post('/apertura', async (req, res) => {
   try {
-    const { usuario_id, nombre_empleado, pin, caja_apertura } = req.body;
+    const { usuario_id, nombre_empleado, pin, caja_apertura, sucursal_id } = req.body;
     if (!usuario_id || !nombre_empleado || !pin || caja_apertura === undefined) {
       return res.status(400).json({ error: 'usuario_id, nombre_empleado, pin y caja_apertura requeridos' });
     }
@@ -149,9 +153,9 @@ router.post('/apertura', async (req, res) => {
     const tipoTurno = calcularTipoTurno();
 
     const result = await pool.query(
-      `INSERT INTO turnos_caja(usuario_id, nombre_empleado, tipo_turno, caja_apertura, hora_apertura, conteo_aleatorio_hora)
-       VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [usuario_id, nombre_empleado, tipoTurno, caja_apertura, horaApertura, conteoHora]
+      `INSERT INTO turnos_caja(usuario_id, nombre_empleado, tipo_turno, caja_apertura, hora_apertura, conteo_aleatorio_hora, sucursal_id)
+       VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [usuario_id, nombre_empleado, tipoTurno, caja_apertura, horaApertura, conteoHora, sucursal_id || null]
     );
 
     await pool.query(
