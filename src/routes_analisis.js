@@ -214,6 +214,32 @@ router.get('/umbrales', authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/ventas-diarias?dias=30 — ventas reales por día para el gráfico
+router.get('/ventas-diarias', authMiddleware, async (req, res) => {
+  try {
+    const dias = Math.min(parseInt(req.query.dias) || 30, 90);
+    const result = await pool.query(
+      `SELECT
+         DATE(fecha AT TIME ZONE 'America/Argentina/Buenos_Aires') as dia,
+         SUM(monto) as total,
+         COUNT(*) as transacciones
+       FROM transacciones
+       WHERE usuario_id=$1
+         AND fecha >= NOW() - INTERVAL '${dias} days'
+       GROUP BY dia
+       ORDER BY dia ASC`,
+      [req.user.id]
+    );
+    res.json({ dias: result.rows.map(r => ({
+      dia: r.dia,
+      total: parseFloat(r.total),
+      transacciones: parseInt(r.transacciones),
+    }))});
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/alertas — Obj 7: pipeline de alertas del análisis actual
 router.get('/alertas', authMiddleware, async (req, res) => {
   try {
