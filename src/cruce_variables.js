@@ -128,46 +128,6 @@ async function analizarCruceTurno(turnoId) {
     });
   }
 
-  // Ratio efectivo vs benchmark histórico del mismo empleado
-  const ratioHistRes = await pool.query(
-    `SELECT AVG(
-       (SELECT CAST(value AS FLOAT) FROM (
-         SELECT SUM(CASE WHEN metodo_pago='mp' OR metodo_pago='digital' THEN 0 ELSE monto END) as ef,
-                SUM(monto) as total
-         FROM transacciones WHERE usuario_id=$1 AND fecha >= tc.hora_apertura AND fecha <= tc.hora_cierre
-       ) sub
-       WHERE sub.total > 0
-     ) as ratio_ef
-     FROM turnos_caja tc WHERE tc.usuario_id=$1 AND tc.estado='cerrado' AND tc.id != $2 LIMIT 20`,
-    [t.usuario_id, turnoId]
-  );
-
-  // Señal: ratio efectivo anómalo (se usa el ratio de la sesión vs promedio histórico)
-  const turnosMismoTipo = turnos.filter(r => r.tipo_turno === t.tipo_turno);
-  if (turnosMismoTipo.length >= 5 && cantidadTx > 0) {
-    // Señal de ticket promedio bajo vs mismo tipo de turno
-    const ticketsTurno = turnosMismoTipo.map(r => {
-      // Aproximamos ticket promedio con ventas/cantidad no disponible directamente
-      return parseFloat(r.caja_esperada || 0);
-    }).filter(v => v > 0);
-
-    if (ticketsTurno.length >= 3 && ticketPromedio > 0) {
-      const medTicket = calcularMediana(ticketsTurno.map(v => v / 8)); // aprox tickets
-      const madTicket = calcularMAD(ticketsTurno.map(v => v / 8), medTicket);
-      if (madTicket > 0) {
-        const zTicket = robustZScore(ticketPromedio, medTicket, madTicket);
-        if (Math.abs(zTicket) >= 2.0) {
-          señales.push({
-            tipo: 'TICKET_ANOMALO',
-            descripcion: `Ticket promedio ${zTicket < 0 ? 'bajo' : 'alto'} vs mismo tipo de turno`,
-            valor: redondear(ticketPromedio),
-            peso: 'medio',
-          });
-        }
-      }
-    }
-  }
-
   // Cantidad de transacciones baja vs ventas (ventas altas con pocas tx = tickets inflados)
   if (cantidadTx > 0 && totalVentas > 0) {
     const ticketReal = totalVentas / cantidadTx;

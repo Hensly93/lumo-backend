@@ -27,7 +27,7 @@ async function calcularCUSUM(usuarioId, tipoTurno, metrica = 'brecha') {
   // Obtener serie temporal de la métrica en el turno
   const res = await pool.query(
     `SELECT
-       ABS(brecha) as valor,
+       brecha as valor,
        hora_apertura
      FROM turnos_caja
      WHERE usuario_id=$1 AND tipo_turno=$2
@@ -125,7 +125,6 @@ async function calcularCUSUMCompleto(usuarioId) {
 // recalcula el baseline con alpha-blending para incorporar el nuevo nivel.
 
 async function resetBaselinePorCambioConfirmado(usuarioId) {
-  // Obtener todas las transacciones recientes
   const txRes = await pool.query(
     'SELECT * FROM transacciones WHERE usuario_id=$1 ORDER BY fecha ASC',
     [usuarioId]
@@ -133,7 +132,6 @@ async function resetBaselinePorCambioConfirmado(usuarioId) {
 
   if (txRes.rows.length < 10) return { ok: false, motivo: 'insuficientes_transacciones' };
 
-  // Alpha-blending: peso mayor a los últimos ALPHA_BLEND_DIAS días
   const ahora = new Date();
   const cutoff = new Date(ahora.getTime() - ALPHA_BLEND_DIAS * 24 * 60 * 60 * 1000);
 
@@ -142,28 +140,54 @@ async function resetBaselinePorCambioConfirmado(usuarioId) {
 
   if (recientes.length < 5) return { ok: false, motivo: 'pocos_datos_recientes' };
 
-  // Recalcular baseline pesando más los datos recientes (alpha = 0.7)
   const alpha = 0.7;
-  const montoReciente = recientes.reduce((a, b) => a + parseFloat(b.monto), 0) / recientes.length;
-  const montoHistorico = historicas.length > 0
-    ? historicas.reduce((a, b) => a + parseFloat(b.monto), 0) / historicas.length
-    : montoReciente;
 
-  const nuevoBaseline = alpha * montoReciente + (1 - alpha) * montoHistorico;
+  function metricasDesde(rows) {
+    if (!rows.length) return null;
+    const montos = rows.map(t => parseFloat(t.monto)).filter(m => m > 0);
+    const ticket = montos.reduce((a, b) => a + b, 0) / (montos.length || 1);
 
-  // Actualizar baseline_negocio
-  await pool.query(
-    `INSERT INTO baseline_negocio(usuario_id, metrica, valor, total_transacciones, updated_at)
-     VALUES($1,'ticket_promedio',$2,$3,NOW())
-     ON CONFLICT (usuario_id, metrica) DO UPDATE
-     SET valor=$2, total_transacciones=$3, updated_at=NOW()`,
-    [usuarioId, Math.round(nuevoBaseline * 100) / 100, txRes.rows.length]
-  );
+    const porTurno = {};
+    rows.forEach(t => {
+      const dia = new Date(t.fecha).toISOString().split('T')[0];
+      const clave = `${t.turno || 'SIN_TURNO'}_${dia}`;
+      porTurno[clave] = (porTurno[clave] || 0) + parseFloat(t.monto);
+    });
+    const totalesTurno = Object.values(porTurno);
+    const ventasTurno = totalesTurno.reduce((a, b) => a + b, 0) / (totalesTurno.length || 1);
+
+    const conMetodo = rows.filter(t => t.metodo_pago);
+    const ratioEf = conMetodo.length > 0
+      ? conMetodo.filter(t => t.metodo_pago?.toLowerCase() === 'efectivo').length / conMetodo.length
+      : null;
+
+    return { ticket, ventasTurno, ratioEf };
+  }
+
+  const mRec = metricasDesde(recientes);
+  const mHist = historicas.length >= 5 ? metricasDesde(historicas) : mRec;
+
+  const actualizaciones = [
+    ['ticket_promedio',  alpha * mRec.ticket      + (1 - alpha) * mHist.ticket],
+    ['ventas_por_turno', alpha * mRec.ventasTurno + (1 - alpha) * mHist.ventasTurno],
+  ];
+  if (mRec.ratioEf !== null && mHist.ratioEf !== null) {
+    actualizaciones.push(['ratio_efectivo', alpha * mRec.ratioEf + (1 - alpha) * mHist.ratioEf]);
+  }
+
+  for (const [metrica, valor] of actualizaciones) {
+    await pool.query(
+      `INSERT INTO baseline_negocio(usuario_id, metrica, valor, total_transacciones, updated_at)
+       VALUES($1,$2,$3,$4,NOW())
+       ON CONFLICT (usuario_id, metrica) DO UPDATE
+       SET valor=$2, total_transacciones=$3, updated_at=NOW()`,
+      [usuarioId, Math.round(valor * 100) / 100, txRes.rows.length]
+    );
+  }
 
   return {
     ok: true,
-    baseline_anterior: Math.round(montoHistorico),
-    baseline_nuevo: Math.round(nuevoBaseline),
+    metricas_actualizadas: actualizaciones.map(([m, v]) => ({ metrica: m, valor_nuevo: Math.round(v) })),
     alpha_usado: alpha,
     dias_ventana: ALPHA_BLEND_DIAS,
     n_recientes: recientes.length,

@@ -11,7 +11,7 @@ function calcularMetricasNegocio(transacciones) {
   // ratio_efectivo: sólo calculable si hay datos de metodo_pago
   const conMetodo = transacciones.filter(t => t.metodo_pago);
   const ratio_efectivo = conMetodo.length > 0
-    ? conMetodo.filter(t => t.metodo_pago === 'EFECTIVO').length / conMetodo.length
+    ? conMetodo.filter(t => t.metodo_pago?.toLowerCase() === 'efectivo').length / conMetodo.length
     : null;
 
   // ventas_por_turno: promedio del total de ventas agrupado por turno+día

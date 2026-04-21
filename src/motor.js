@@ -4,6 +4,7 @@ const { getBenchmarkSector, normalizarTipoNegocio, calcularZScoreSector } = requ
 const { calcularMetricasNegocio, getBaselineNegocio } = require('./baseline_negocio');
 const { calcularPesos, calcularScoreHibrido, determinarCapaOrigen, calcularZScorePropio } = require('./benchmark_hibrido');
 const { getContextoTemporal, fetchClima, factoresAjuste } = require('./zscore_contextual');
+const { calcularUmbralCelda, condicionDesdeContexto } = require('./motor_conductual');
 const pool = require('./db');
 
 const METRICAS = ['ticket_promedio', 'ventas_por_turno', 'ratio_efectivo'];
@@ -237,8 +238,14 @@ async function analizarNegocio(usuarioId) {
     const agregados = agregarPorTurno(transacciones);
     const señalesSectorPorTurno = evaluarSeñalesSectorPorTurno(agregados, benchmarkSector);
 
+    // P6: umbral dinámico para la celda del contexto actual
+    const turnoActual = ctx.hora < 14 ? 'MANANA' : ctx.hora < 20 ? 'TARDE' : 'NOCHE';
+    const umbralDinamico = await calcularUmbralCelda(
+      usuarioId, turnoActual, ctx.diaSemana, condicionDesdeContexto({ ...ctx, clima })
+    ).catch(() => UMBRAL_SEÑAL);
+
     // Detección de segmento (Capa 2 - z-score robusto por turno+franja+quincena)
-    const anomalias = detectarAnomalias(agregados);
+    const anomalias = detectarAnomalias(agregados, umbralDinamico);
 
     // Construir alertas finales con regla de ≥2 señales
     const alertasMetricas = construirAlertasMetricas(
@@ -268,6 +275,8 @@ async function analizarNegocio(usuarioId) {
         nota: componentesContexto.length > 0
           ? `Baseline ajustado por: ${componentesContexto.map(c => c.causa).join(', ')}`
           : 'Sin ajustes por contexto',
+        umbral_dinamico: umbralDinamico,
+        turno_detectado: turnoActual,
       },
       capas: {
         tipo_negocio: tipoNegocio,
