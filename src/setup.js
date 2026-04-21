@@ -103,6 +103,19 @@ async function setup() {
     const { crearTablaAlertas } = require('./alert_manager');
     await crearTablaAlertas(pool);
 
+    // --- Motor conductual — umbrales dinámicos P6+P7 (S8) ---
+    await pool.query(`CREATE TABLE IF NOT EXISTS umbrales_celda(
+      id SERIAL PRIMARY KEY,
+      usuario_id INTEGER REFERENCES usuarios(id) ON DELETE CASCADE,
+      tipo_turno VARCHAR(20) NOT NULL,
+      dia_semana INTEGER NOT NULL,
+      condicion VARCHAR(20) DEFAULT 'normal',
+      umbral_actual DECIMAL(5,2) DEFAULT 2.50,
+      n_feedbacks INTEGER DEFAULT 0,
+      updated_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(usuario_id, tipo_turno, dia_semana, condicion)
+    )`);
+
     // --- Multi-local (S8) ---
     await pool.query(`CREATE TABLE IF NOT EXISTS sucursales_red(
       id SERIAL PRIMARY KEY,

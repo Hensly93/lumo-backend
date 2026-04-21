@@ -8,6 +8,7 @@ const { calcularPesos } = require('./benchmark_hibrido');
 const { generarPrediccionCompleta } = require('./predicciones');
 const { generarRecomendaciones } = require('./recomendaciones');
 const { gestionarAlertas, registrarFeedback } = require('./alert_manager');
+const { adaptarUmbralPorFeedback, getUmbralesUsuario } = require('./motor_conductual');
 const pool = require('./db');
 
 function authMiddleware(req, res, next) {
@@ -188,13 +189,26 @@ router.get('/recomendaciones', authMiddleware, async (req, res) => {
   }
 });
 
-// POST /api/alertas/feedback — Obj 7: feedback loop del dueño
+// POST /api/alertas/feedback — Obj 7 + P7: feedback loop + EWTA
 router.post('/alertas/feedback', authMiddleware, async (req, res) => {
   try {
     const { alerta_id, confirmada, notas } = req.body;
     if (alerta_id == null) return res.status(400).json({ error: 'alerta_id requerido' });
-    const resultado = await registrarFeedback(alerta_id, { confirmada: !!confirmada, notas });
-    res.json(resultado);
+    // 1. Registrar feedback
+    await registrarFeedback(alerta_id, { confirmada: !!confirmada, notas });
+    // 2. Adaptar umbral EWTA en background (no bloquea la respuesta)
+    const ewta = await adaptarUmbralPorFeedback(req.user.id, alerta_id).catch(() => null);
+    res.json({ ok: true, ewta });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/umbrales — P6+P7: ver umbrales dinámicos actuales
+router.get('/umbrales', authMiddleware, async (req, res) => {
+  try {
+    const umbrales = await getUmbralesUsuario(req.user.id);
+    res.json({ umbrales, default: 2.5 });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
