@@ -9,6 +9,7 @@ const { generarPrediccionCompleta } = require('./predicciones');
 const { generarRecomendaciones } = require('./recomendaciones');
 const { gestionarAlertas, registrarFeedback } = require('./alert_manager');
 const { adaptarUmbralPorFeedback, getUmbralesUsuario } = require('./motor_conductual');
+const { calcularCUSUMCompleto, resetBaselinePorCambioConfirmado } = require('./cusum');
 const pool = require('./db');
 
 function authMiddleware(req, res, next) {
@@ -196,9 +197,14 @@ router.post('/alertas/feedback', authMiddleware, async (req, res) => {
     if (alerta_id == null) return res.status(400).json({ error: 'alerta_id requerido' });
     // 1. Registrar feedback
     await registrarFeedback(alerta_id, { confirmada: !!confirmada, notas });
-    // 2. Adaptar umbral EWTA en background (no bloquea la respuesta)
+    // 2. Adaptar umbral EWTA
     const ewta = await adaptarUmbralPorFeedback(req.user.id, alerta_id).catch(() => null);
-    res.json({ ok: true, ewta });
+    // 3. Si es TP confirmado → Baseline Reset Protocol (P8)
+    let reset = null;
+    if (confirmada) {
+      reset = await resetBaselinePorCambioConfirmado(req.user.id).catch(() => null);
+    }
+    res.json({ ok: true, ewta, reset });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
@@ -240,13 +246,19 @@ router.get('/ventas-diarias', authMiddleware, async (req, res) => {
   }
 });
 
-// GET /api/alertas — Obj 7: pipeline de alertas del análisis actual
+// GET /api/alertas — Obj 7 + P8: pipeline alertas + CUSUM
 router.get('/alertas', authMiddleware, async (req, res) => {
   try {
-    const analisis = await analizarNegocio(req.user.id);
-    const candidatas = analisis.señales || [];
+    const [analisis, cusum] = await Promise.all([
+      analizarNegocio(req.user.id),
+      calcularCUSUMCompleto(req.user.id).catch(() => ({ alertas_cusum: [] })),
+    ]);
+    const candidatas = [
+      ...(analisis.señales || []),
+      ...(cusum.alertas_cusum || []),
+    ];
     const resultado = await gestionarAlertas(req.user.id, candidatas);
-    res.json(resultado);
+    res.json({ ...resultado, cusum: cusum.turnos });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
