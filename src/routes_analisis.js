@@ -5,12 +5,14 @@ const { analizarNegocio } = require('./motor');
 const { actualizarBaselineNegocio, getBaselineNegocio } = require('./baseline_negocio');
 const { getBenchmarkSector, normalizarTipoNegocio, TIPOS_VALIDOS } = require('./benchmarks_sector');
 const { calcularPesos } = require('./benchmark_hibrido');
-const { generarPrediccionCompleta } = require('./predicciones');
+const { calcularPrediccion } = require('./prediccion_adaptativa');
+const { generarMensajePrediccion } = require('./prediccion_mensaje');
 const { generarRecomendaciones } = require('./recomendaciones');
 const { gestionarAlertas, registrarFeedback } = require('./alert_manager');
 const { adaptarUmbralPorFeedback, getUmbralesUsuario } = require('./motor_conductual');
 const { calcularCUSUMCompleto, resetBaselinePorCambioConfirmado } = require('./cusum');
 const { calcularERMNegocio, calcularRiesgoEmpleado } = require('./erm');
+const { notificarUsuario } = require('./push');
 const pool = require('./db');
 
 function authMiddleware(req, res, next) {
@@ -157,27 +159,87 @@ router.get('/negocio/perfil', authMiddleware, async (req, res) => {
   }
 });
 
-// PATCH /api/perfil — actualizar tipo_negocio del usuario
+// PATCH /api/perfil — actualizar tipo_negocio y/o onboarding_done
 router.patch('/perfil', authMiddleware, async (req, res) => {
   try {
-    const { tipo_negocio } = req.body;
-    if (!tipo_negocio) return res.status(400).json({ error: 'tipo_negocio requerido' });
-    if (!TIPOS_VALIDOS.includes(tipo_negocio)) {
-      return res.status(400).json({ error: `Valor inválido. Aceptados: ${TIPOS_VALIDOS.join(', ')}` });
+    const { tipo_negocio, onboarding_done, provincia, ciudad, zona } = req.body;
+    if (tipo_negocio === undefined && onboarding_done === undefined && provincia === undefined && ciudad === undefined && zona === undefined) {
+      return res.status(400).json({ error: 'Se requiere al menos un campo para actualizar' });
     }
-    await pool.query('UPDATE usuarios SET tipo_negocio=$1 WHERE id=$2', [tipo_negocio, req.user.id]);
-    res.json({ ok: true, tipo_negocio });
+    if (tipo_negocio !== undefined) {
+      if (!TIPOS_VALIDOS.includes(tipo_negocio)) {
+        return res.status(400).json({ error: `Tipo inválido. Opciones: ${TIPOS_VALIDOS.join(', ')}` });
+      }
+      await pool.query('UPDATE usuarios SET tipo_negocio=$1 WHERE id=$2', [tipo_negocio, req.user.id]);
+    }
+    if (onboarding_done !== undefined) {
+      await pool.query('UPDATE usuarios SET onboarding_done=$1 WHERE id=$2', [!!onboarding_done, req.user.id]);
+    }
+    if (provincia !== undefined || ciudad !== undefined || zona !== undefined) {
+      const sets = [];
+      const vals = [];
+      if (provincia !== undefined) { sets.push(`provincia=$${sets.length + 1}`); vals.push(provincia); }
+      if (ciudad !== undefined)    { sets.push(`ciudad=$${sets.length + 1}`);    vals.push(ciudad); }
+      if (zona !== undefined)      { sets.push(`zona=$${sets.length + 1}`);      vals.push(zona); }
+      vals.push(req.user.id);
+      await pool.query(`UPDATE usuarios SET ${sets.join(',')} WHERE id=$${vals.length}`, vals);
+    }
+    res.json({ ok: true });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// GET /api/predicciones — Obj 4+5: proyección facturación + pérdidas
+// GET /api/predicciones — S9: motor adaptativo W1/W2/W3 + mensaje NICOLE
 router.get('/predicciones', authMiddleware, async (req, res) => {
   try {
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
-    const resultado = await generarPrediccionCompleta(req.user.id, sucursalId);
-    res.json(resultado);
+
+    const prediccion = await calcularPrediccion(req.user.id, sucursalId);
+    if (!prediccion.disponible) return res.json(prediccion);
+
+    // Obtener datos del negocio para el mensaje de NICOLE
+    const uRes = await pool.query(
+      'SELECT tipo_negocio, zona, ciudad, negocio FROM usuarios WHERE id = $1',
+      [req.user.id]
+    );
+    const u = uRes.rows[0] ?? {};
+    const negocio = {
+      tipo_negocio:   u.tipo_negocio,
+      zona:           u.zona,
+      ciudad:         u.ciudad,
+      nombre_negocio: u.negocio,
+    };
+
+    // Historial reciente: últimas 3 predicciones con error real
+    const histRes = await pool.query(
+      `SELECT pn.fecha_target, pn.valor_predicho, hp.error_porcentual
+       FROM predicciones_negocio pn
+       JOIN historial_predicciones hp ON hp.prediccion_id = pn.id
+       WHERE pn.usuario_id = $1
+         AND ($2::integer IS NULL OR pn.sucursal_id = $2)
+       ORDER BY pn.fecha_prediccion DESC
+       LIMIT 3`,
+      [req.user.id, sucursalId]
+    );
+    const historial_reciente = histRes.rows;
+
+    // Generar mensaje NICOLE para la primera predicción guardada
+    const primeraId = await pool.query(
+      `SELECT id FROM predicciones_negocio
+       WHERE usuario_id = $1 AND fecha_prediccion = CURRENT_DATE
+         AND ($2::integer IS NULL OR sucursal_id = $2)
+       ORDER BY id ASC LIMIT 1`,
+      [req.user.id, sucursalId]
+    );
+
+    let mensaje_nicole = null;
+    if (primeraId.rows.length) {
+      const r = await generarMensajePrediccion(primeraId.rows[0].id, negocio, pool, historial_reciente);
+      mensaje_nicole = r.mensaje;
+    }
+
+    res.json({ ...prediccion, mensaje_nicole });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
@@ -263,6 +325,193 @@ router.get('/alertas', authMiddleware, async (req, res) => {
     ];
     const resultado = await gestionarAlertas(req.user.id, candidatas);
     res.json({ ...resultado, cusum: cusum.turnos });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/nicole/chat — chat conversacional con NICOLE
+router.post('/nicole/chat', authMiddleware, async (req, res) => {
+  try {
+    const { mensaje, historial = [] } = req.body;
+    if (!mensaje?.trim()) return res.status(400).json({ error: 'mensaje requerido' });
+
+    // Armar contexto completo del negocio en paralelo
+    const [uRes, ventasRes, empleadosRes, alertasRes, predRes] = await Promise.all([
+
+      // Perfil
+      pool.query(
+        'SELECT negocio, tipo_negocio, ciudad, zona FROM usuarios WHERE id=$1',
+        [req.user.id]
+      ),
+
+      // Ventas últimos 30 días — total, ticket promedio, por día
+      pool.query(
+        `SELECT
+           COUNT(*)                            AS total_tx,
+           COALESCE(SUM(monto), 0)             AS total_ventas,
+           COALESCE(AVG(monto), 0)             AS ticket_promedio,
+           DATE(fecha AT TIME ZONE 'America/Argentina/Buenos_Aires') AS dia,
+           SUM(monto)                          AS venta_dia
+         FROM transacciones
+         WHERE usuario_id=$1 AND fecha >= NOW() - INTERVAL '30 days'
+         GROUP BY dia
+         ORDER BY dia ASC`,
+        [req.user.id]
+      ),
+
+      // Empleados: ticket promedio y ratio efectivo por turno
+      pool.query(
+        `SELECT
+           empleado,
+           turno,
+           COUNT(*)                                                      AS transacciones,
+           COALESCE(AVG(monto), 0)                                       AS ticket_promedio,
+           COALESCE(
+             SUM(CASE WHEN LOWER(metodo_pago) = 'efectivo' THEN 1 ELSE 0 END)::float
+             / NULLIF(SUM(CASE WHEN metodo_pago IS NOT NULL THEN 1 ELSE 0 END), 0),
+             0
+           )                                                             AS ratio_efectivo
+         FROM transacciones
+         WHERE usuario_id=$1
+           AND empleado IS NOT NULL
+           AND fecha >= NOW() - INTERVAL '30 days'
+         GROUP BY empleado, turno
+         ORDER BY empleado, turno`,
+        [req.user.id]
+      ),
+
+      // Alertas últimos 7 días
+      pool.query(
+        `SELECT tipo, prioridad, mensaje, timestamp
+         FROM alertas
+         WHERE usuario_id=$1
+           AND descartada = false
+           AND timestamp >= NOW() - INTERVAL '7 days'
+         ORDER BY timestamp DESC
+         LIMIT 5`,
+        [req.user.id]
+      ).catch(() => ({ rows: [] })),
+
+      // Predicción activa más reciente
+      pool.query(
+        `SELECT fecha_target, valor_predicho, confianza, horizonte, mensaje_nicole
+         FROM predicciones_negocio
+         WHERE usuario_id=$1
+           AND fecha_target >= CURRENT_DATE
+         ORDER BY fecha_prediccion DESC, fecha_target ASC
+         LIMIT 1`,
+        [req.user.id]
+      ).catch(() => ({ rows: [] })),
+    ]);
+
+    const u = uRes.rows[0] ?? {};
+
+    // Resumir ventas
+    const dias = ventasRes.rows;
+    const totalVentas = dias.reduce((a, r) => a + parseFloat(r.venta_dia), 0);
+    const ticketProm  = dias.length ? dias.reduce((a, r) => a + parseFloat(r.ticket_promedio), 0) / dias.length : 0;
+    const ventasStr   = dias.length
+      ? `Total 30d: $${Math.round(totalVentas).toLocaleString('es-AR')}, ticket promedio: $${Math.round(ticketProm).toLocaleString('es-AR')}, días con ventas: ${dias.length}`
+      : 'sin ventas registradas en los últimos 30 días';
+
+    // Resumir empleados
+    const empleadosStr = empleadosRes.rows.length
+      ? empleadosRes.rows.map(e =>
+          `${e.empleado} (${e.turno || 'sin turno'}): ticket $${Math.round(e.ticket_promedio).toLocaleString('es-AR')}, efectivo ${Math.round(e.ratio_efectivo * 100)}%, ${e.transacciones} tx`
+        ).join(' | ')
+      : 'sin datos de empleados';
+
+    // Resumir alertas
+    const alertasStr = alertasRes.rows.length
+      ? alertasRes.rows.map(r => `[${r.prioridad}] ${r.mensaje}`).join(' | ')
+      : 'ninguna';
+
+    // Predicción activa
+    const pred = predRes.rows[0];
+    const predStr = pred
+      ? `Próxima predicción: $${Math.round(pred.valor_predicho).toLocaleString('es-AR')} para ${pred.fecha_target} (confianza ${Math.round(pred.confianza * 100)}%, horizonte ${pred.horizonte})${pred.mensaje_nicole ? '. ' + pred.mensaje_nicole : ''}`
+      : 'sin predicción activa';
+
+    const systemPrompt = `Sos NICOLE, la IA de Lumo. Tu nombre es NICOLE, no sos ChatGPT ni Claude. Solo hablás sobre el negocio del dueño usando los datos reales que te paso. Español rioplatense informal, tono de socia de confianza, nunca decís fraude, siempre en pesos argentinos, máximo 5 líneas por respuesta.
+
+DATOS DEL NEGOCIO (hoy ${new Date().toLocaleDateString('es-AR')}):
+Perfil: ${u.negocio || 'sin nombre'} · ${u.tipo_negocio || 'tipo desconocido'} · ${u.ciudad || 'sin ciudad'}${u.zona ? ` zona ${u.zona}` : ''}
+Ventas 30d: ${ventasStr}
+Empleados: ${empleadosStr}
+Alertas 7d: ${alertasStr}
+Predicción: ${predStr}`;
+
+    // Normalizar historial — acepta {rol, texto} y {role, content}
+    const normalizar = (m) => {
+      const rawRole = m.role ?? m.rol ?? 'user';
+      const content  = m.content ?? m.texto ?? '';
+      const role     = rawRole === 'nicole' || rawRole === 'assistant' ? 'assistant' : 'user';
+      return { role, content };
+    };
+
+    const messages = [
+      ...historial.slice(-10).map(normalizar),
+      { role: 'user', content: mensaje },
+    ];
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 400,
+        temperature: 0.7,
+        system: systemPrompt,
+        messages,
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Claude API ${response.status}: ${err}`);
+    }
+
+    const data = await response.json();
+    const respuesta = data.content?.[0]?.text?.trim() ?? 'No pude generar una respuesta. Intentá de nuevo.';
+    res.json({ respuesta });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/push/subscribe — guardar suscripción push del navegador
+router.post('/push/subscribe', authMiddleware, async (req, res) => {
+  try {
+    const { endpoint, keys } = req.body;
+    if (!endpoint || !keys?.p256dh || !keys?.auth) {
+      return res.status(400).json({ error: 'endpoint y keys requeridos' });
+    }
+    await pool.query(
+      `INSERT INTO push_subscriptions(usuario_id, endpoint, p256dh, auth)
+       VALUES($1,$2,$3,$4)
+       ON CONFLICT (endpoint) DO UPDATE SET p256dh=$3, auth=$4`,
+      [req.user.id, endpoint, keys.p256dh, keys.auth]
+    );
+    res.json({ ok: true });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/push/subscribe — cancelar suscripción
+router.delete('/push/subscribe', authMiddleware, async (req, res) => {
+  try {
+    const { endpoint } = req.body;
+    await pool.query(
+      'DELETE FROM push_subscriptions WHERE usuario_id=$1 AND endpoint=$2',
+      [req.user.id, endpoint]
+    );
+    res.json({ ok: true });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }

@@ -51,6 +51,24 @@ try {
   console.error("Multilocal ERROR:", e.message);
 }
 
+try {
+  const { triggerManual } = require("./job_nocturno");
+  app.post("/api/job/trigger", async (req, res) => {
+    if (req.headers['x-internal-key'] !== process.env.INTERNAL_KEY) {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+    try {
+      const resultado = await triggerManual();
+      res.json(resultado);
+    } catch(e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+  console.log("Job nocturno OK");
+} catch(e) {
+  console.error("Job nocturno ERROR:", e.message);
+}
+
 app.get("/api/health", (req, res) => res.json({ status: "ok", app: "Lumo", version: "2.0" }));
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("Lumo backend corriendo en puerto " + PORT));

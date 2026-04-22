@@ -7,7 +7,7 @@ const { TIPOS_VALIDOS } = require("./benchmarks_sector");
 
 router.post("/register", async (req, res) => {
   try {
-    const { nombre, email, password, negocio, tipo_negocio } = req.body;
+    const { nombre, email, password, negocio, tipo_negocio, provincia, ciudad, zona } = req.body;
     if (!nombre || !email || !password || !negocio) {
       return res.status(400).json({ error: "Campos obligatorios: nombre, email, password, negocio" });
     }
@@ -20,8 +20,8 @@ router.post("/register", async (req, res) => {
     }
     const hash = await bcrypt.hash(password, 10);
     const result = await pool.query(
-      "INSERT INTO usuarios(nombre,email,password,negocio,tipo_negocio) VALUES($1,$2,$3,$4,$5) RETURNING id,nombre,email,negocio,tipo_negocio",
-      [nombre, email, hash, negocio, tipo_negocio || null]
+      "INSERT INTO usuarios(nombre,email,password,negocio,tipo_negocio,provincia,ciudad,zona) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,nombre,email,negocio,tipo_negocio,onboarding_done,provincia,ciudad,zona",
+      [nombre, email, hash, negocio, tipo_negocio || null, provincia || null, ciudad || null, zona || null]
     );
     const token = jwt.sign({ id: result.rows[0].id }, process.env.JWT_SECRET, { expiresIn: "30d" });
     res.json({ token, usuario: result.rows[0] });
@@ -41,9 +41,9 @@ router.post("/login", async (req, res) => {
     if (!valid) {
       return res.status(400).json({ error: "Credenciales incorrectas" });
     }
-    const { id, nombre, email: em, negocio, tipo_negocio } = result.rows[0];
+    const { id, nombre, email: em, negocio, tipo_negocio, onboarding_done } = result.rows[0];
     const token = jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: "30d" });
-    res.json({ token, usuario: { id, nombre, email: em, negocio, tipo_negocio } });
+    res.json({ token, usuario: { id, nombre, email: em, negocio, tipo_negocio, onboarding_done } });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

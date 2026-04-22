@@ -53,15 +53,17 @@ async function getBenchmarkSector(tipoNegocio) {
 }
 
 // Valores canónicos aceptados por el sistema (vienen de tipo_negocio en usuarios)
-const TIPOS_VALIDOS = ['kiosko', 'almacen', 'cafeteria_bar', 'restaurante', 'panaderia', 'farmacia', 'retail_indumentaria', 'parrilla'];
+const TIPOS_VALIDOS = ['kiosko', 'almacen', 'cafeteria', 'cafeteria_bar', 'restaurante', 'panaderia', 'farmacia', 'retail', 'retail_indumentaria', 'parrilla'];
 
 const MAP_CANONICO = {
   kiosko:               'KIOSKO',
   almacen:              'ALMACEN',
+  cafeteria:            'CAFETERIA',
   cafeteria_bar:        'CAFETERIA',
   restaurante:          'RESTAURANTE',
   panaderia:            'PANADERIA',
   farmacia:             'FARMACIA',
+  retail:               'RETAIL',
   retail_indumentaria:  'RETAIL',
   parrilla:             'PARRILLA',
 };
