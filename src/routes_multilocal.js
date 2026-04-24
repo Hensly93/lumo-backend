@@ -149,4 +149,19 @@ router.delete('/sucursal/:id', authMiddleware, async (req, res) => {
   }
 });
 
+// ─── GET /api/multilocal/sucursales-publicas/:usuario_id ─────────────────────
+// Sin auth — usada por la vista de empleado para listar locales al abrir turno
+router.get('/sucursales-publicas/:usuario_id', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, nombre, direccion FROM mis_sucursales
+       WHERE usuario_id=$1 AND activo=true ORDER BY nombre ASC`,
+      [req.params.usuario_id]
+    );
+    res.json(result.rows);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
