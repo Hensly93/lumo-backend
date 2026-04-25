@@ -311,20 +311,13 @@ router.get('/ventas-diarias', authMiddleware, async (req, res) => {
   }
 });
 
-// GET /api/alertas — Obj 7 + P8: pipeline alertas + CUSUM
+// GET /api/alertas — motor unificado: métricas + CUSUM + deduplicación
 router.get('/alertas', authMiddleware, async (req, res) => {
   try {
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
-    const [analisis, cusum] = await Promise.all([
-      analizarNegocio(req.user.id, sucursalId),
-      calcularCUSUMCompleto(req.user.id, sucursalId).catch(() => ({ alertas_cusum: [] })),
-    ]);
-    const candidatas = [
-      ...(analisis.señales || []),
-      ...(cusum.alertas_cusum || []),
-    ];
-    const resultado = await gestionarAlertas(req.user.id, candidatas);
-    res.json({ ...resultado, cusum: cusum.turnos });
+    const analisis = await analizarNegocio(req.user.id, sucursalId);
+    const resultado = await gestionarAlertas(req.user.id, analisis.señales || []);
+    res.json({ ...resultado, cusum: analisis.cusum });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }

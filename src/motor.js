@@ -5,6 +5,7 @@ const { calcularMetricasNegocio, getBaselineNegocio } = require('./baseline_nego
 const { calcularPesos, calcularScoreHibrido, determinarCapaOrigen, calcularZScorePropio } = require('./benchmark_hibrido');
 const { getContextoTemporal, fetchClima, factoresAjuste } = require('./zscore_contextual');
 const { calcularUmbralCelda, condicionDesdeContexto } = require('./motor_conductual');
+const { calcularCUSUMCompleto } = require('./cusum');
 const pool = require('./db');
 
 const METRICAS = ['ticket_promedio', 'ventas_por_turno', 'ratio_efectivo'];
@@ -250,18 +251,34 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
     // Detección de segmento (Capa 2 - z-score robusto por turno+franja+quincena)
     const anomalias = detectarAnomalias(agregados, umbralDinamico);
 
-    // Construir alertas finales con regla de ≥2 señales
-    const alertasMetricas = construirAlertasMetricas(
-      señalesMetricas, metricasRecientes, benchmarkSector, baselineNegocio, pesos, tipoNegocio
-    );
-    const alertasSegmento = construirAlertasSegmento(
-      anomalias, señalesSectorPorTurno, señalesMetricas, pesos
-    );
+    // CUSUM en paralelo — P6-3: activo dentro del motor
+    const [alertasMetricas, alertasSegmento, cusumResult] = await Promise.all([
+      Promise.resolve(construirAlertasMetricas(
+        señalesMetricas, metricasRecientes, benchmarkSector, baselineNegocio, pesos, tipoNegocio
+      )),
+      Promise.resolve(construirAlertasSegmento(
+        anomalias, señalesSectorPorTurno, señalesMetricas, pesos
+      )),
+      calcularCUSUMCompleto(usuarioId, sucursalId).catch(() => ({ alertas_cusum: [], turnos: [] })),
+    ]);
 
     const todasAlertas = [...alertasMetricas, ...alertasSegmento];
     const criticas = todasAlertas.filter(a => a.confianza?.nivel === 'ALTA');
     const medias   = todasAlertas.filter(a => a.confianza?.nivel === 'MEDIA');
     const bajas    = todasAlertas.filter(a => a.confianza?.nivel === 'BAJA');
+
+    // señales: motor + CUSUM, formateadas para gestionarAlertas
+    // Las alertas del motor necesitan prioridad/mensaje normalizados
+    const señalesMotor = todasAlertas.map(a => ({
+      ...a,
+      prioridad: a.confianza?.nivel === 'ALTA' ? 'critico'
+                 : a.confianza?.nivel === 'MEDIA' ? 'atencion'
+                 : 'info',
+      mensaje: a.insight || '',
+      accion:  a.accion  || '',
+      contexto: a.turno || a.metrica || '',
+    }));
+    const señales = [...señalesMotor, ...(cusumResult.alertas_cusum || [])];
 
     return {
       total_transacciones: transacciones.length,
@@ -286,7 +303,9 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
         pesos: { capa1: Math.round(pesos.peso_capa1 * 100), capa2: Math.round(pesos.peso_capa2 * 100) },
         transacciones_para_capa2_completa: 500
       },
-      alertas: todasAlertas.slice(0, 20),
+      alertas:  todasAlertas.slice(0, 20), // backward compat — análisis raw
+      señales,                              // para gestionarAlertas en /alertas
+      cusum:    cusumResult.turnos,         // estado CUSUM por turno para el frontend
     };
   } catch(e) {
     console.error(e);
