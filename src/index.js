@@ -68,6 +68,14 @@ try {
 }
 
 try {
+  const historialRoutes = require("./routes_historial");
+  app.use("/api/historial", historialRoutes);
+  console.log("Historial OK");
+} catch(e) {
+  console.error("Historial ERROR:", e.message);
+}
+
+try {
   const { triggerManual } = require("./job_nocturno");
   app.post("/api/job/trigger", async (req, res) => {
     if (req.headers['x-internal-key'] !== process.env.INTERNAL_KEY) {
