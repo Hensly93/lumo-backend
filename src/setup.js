@@ -35,6 +35,8 @@ async function setup() {
     await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS provincia VARCHAR(100)`);
     await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ciudad VARCHAR(100)`);
     await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS zona VARCHAR(100)`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS pos VARCHAR(100)`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS logo TEXT`);
 
     await pool.query(`CREATE TABLE IF NOT EXISTS integraciones_mp(
       id SERIAL PRIMARY KEY,

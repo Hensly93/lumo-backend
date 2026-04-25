@@ -52,6 +52,14 @@ try {
 }
 
 try {
+  const usuarioRoutes = require("./routes_usuario");
+  app.use("/api/usuario", usuarioRoutes);
+  console.log("Usuario OK");
+} catch(e) {
+  console.error("Usuario ERROR:", e.message);
+}
+
+try {
   const { triggerManual } = require("./job_nocturno");
   app.post("/api/job/trigger", async (req, res) => {
     if (req.headers['x-internal-key'] !== process.env.INTERNAL_KEY) {
