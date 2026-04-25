@@ -5,6 +5,8 @@ const pool = require('./db');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const Anthropic = require('@anthropic-ai/sdk');
+const { actualizarBaselineNegocio } = require('./baseline_negocio');
+const { detectarPreciosDesactualizados, cruzarCatalogoConTicket } = require('./cruce_catalogo');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -279,7 +281,37 @@ router.patch('/:id', auth, async (req, res) => {
       [nombre || null, categoria || null, precio_venta ?? null, precio_costo ?? null, unidad || null, req.params.id, req.user.id]
     );
     if (r.rowCount === 0) return res.status(404).json({ error: 'Producto no encontrado' });
+
+    // Punto 3: recalibrar baseline cuando cambia un precio (fire-and-forget)
+    if (precio_venta != null) {
+      setImmediate(async () => {
+        try {
+          const todas = await pool.query(
+            'SELECT * FROM transacciones WHERE usuario_id=$1 ORDER BY fecha ASC',
+            [req.user.id]
+          );
+          if (todas.rows.length >= 5) await actualizarBaselineNegocio(req.user.id, todas.rows);
+        } catch (e) {
+          console.error('[RECALIBRACION PRECIO]', e.message);
+        }
+      });
+    }
+
     res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── GET /api/productos/precios-alertas ───────────────────────────────────────
+// Punto 5: productos desactualizados + cruce ticket vs catálogo
+router.get('/precios-alertas', auth, async (req, res) => {
+  try {
+    const [stale, cruce] = await Promise.all([
+      detectarPreciosDesactualizados(req.user.id),
+      cruzarCatalogoConTicket(req.user.id),
+    ]);
+    res.json({ stale, cruce });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
