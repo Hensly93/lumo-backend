@@ -38,6 +38,22 @@ async function setup() {
     await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS pos VARCHAR(100)`);
     await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS logo TEXT`);
 
+    // --- Catálogo de productos (S16) ---
+    await pool.query(`CREATE TABLE IF NOT EXISTS productos (
+      id           SERIAL PRIMARY KEY,
+      usuario_id   INTEGER REFERENCES usuarios(id) ON DELETE CASCADE,
+      nombre       VARCHAR(200) NOT NULL,
+      categoria    VARCHAR(100),
+      precio_venta DECIMAL(12,2),
+      precio_costo DECIMAL(12,2),
+      unidad       VARCHAR(50) DEFAULT 'unidad',
+      activo       BOOLEAN DEFAULT true,
+      created_at   TIMESTAMP DEFAULT NOW(),
+      updated_at   TIMESTAMP DEFAULT NOW()
+    )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_productos_usuario ON productos(usuario_id) WHERE activo=true`);
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_productos_nombre ON productos(usuario_id, nombre)`);
+
     await pool.query(`CREATE TABLE IF NOT EXISTS integraciones_mp(
       id SERIAL PRIMARY KEY,
       usuario_id INTEGER UNIQUE REFERENCES usuarios(id) ON DELETE CASCADE,

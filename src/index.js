@@ -60,6 +60,14 @@ try {
 }
 
 try {
+  const productosRoutes = require("./routes_productos");
+  app.use("/api/productos", productosRoutes);
+  console.log("Productos OK");
+} catch(e) {
+  console.error("Productos ERROR:", e.message);
+}
+
+try {
   const { triggerManual } = require("./job_nocturno");
   app.post("/api/job/trigger", async (req, res) => {
     if (req.headers['x-internal-key'] !== process.env.INTERNAL_KEY) {
