@@ -6,6 +6,7 @@ const { calcularPesos, calcularScoreHibrido, determinarCapaOrigen, calcularZScor
 const { getContextoTemporal, fetchClima, factoresAjuste } = require('./zscore_contextual');
 const { calcularUmbralCelda, condicionDesdeContexto } = require('./motor_conductual');
 const { calcularCUSUMCompleto } = require('./cusum');
+const { detectarPatronesSemana } = require('./patron_semanal');
 const pool = require('./db');
 
 const METRICAS = ['ticket_promedio', 'ventas_por_turno', 'ratio_efectivo'];
@@ -251,8 +252,8 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
     // Detección de segmento (Capa 2 - z-score robusto por turno+franja+quincena)
     const anomalias = detectarAnomalias(agregados, umbralDinamico);
 
-    // CUSUM en paralelo — P6-3: activo dentro del motor
-    const [alertasMetricas, alertasSegmento, cusumResult] = await Promise.all([
+    // CUSUM + patrones semanales en paralelo con la construcción de alertas — P6-3 + P6-4
+    const [alertasMetricas, alertasSegmento, cusumResult, patronesSemana] = await Promise.all([
       Promise.resolve(construirAlertasMetricas(
         señalesMetricas, metricasRecientes, benchmarkSector, baselineNegocio, pesos, tipoNegocio
       )),
@@ -260,6 +261,7 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
         anomalias, señalesSectorPorTurno, señalesMetricas, pesos
       )),
       calcularCUSUMCompleto(usuarioId, sucursalId).catch(() => ({ alertas_cusum: [], turnos: [] })),
+      detectarPatronesSemana(usuarioId, sucursalId).catch(() => []),
     ]);
 
     const todasAlertas = [...alertasMetricas, ...alertasSegmento];
@@ -278,7 +280,11 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
       accion:  a.accion  || '',
       contexto: a.turno || a.metrica || '',
     }));
-    const señales = [...señalesMotor, ...(cusumResult.alertas_cusum || [])];
+    const señales = [
+      ...señalesMotor,
+      ...(cusumResult.alertas_cusum || []),
+      ...(patronesSemana || []),
+    ];
 
     return {
       total_transacciones: transacciones.length,
@@ -303,9 +309,10 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
         pesos: { capa1: Math.round(pesos.peso_capa1 * 100), capa2: Math.round(pesos.peso_capa2 * 100) },
         transacciones_para_capa2_completa: 500
       },
-      alertas:  todasAlertas.slice(0, 20), // backward compat — análisis raw
-      señales,                              // para gestionarAlertas en /alertas
-      cusum:    cusumResult.turnos,         // estado CUSUM por turno para el frontend
+      alertas:          todasAlertas.slice(0, 20), // backward compat — análisis raw
+      señales,                                    // para gestionarAlertas en /alertas
+      cusum:            cusumResult.turnos,        // estado CUSUM por turno
+      patrones_semana:  patronesSemana,            // patrones estructurales detectados
     };
   } catch(e) {
     console.error(e);
