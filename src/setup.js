@@ -160,6 +160,7 @@ async function setup() {
     // Reemplazar unique constraint vieja por una que incluya dia_semana
     await pool.query(`ALTER TABLE baseline_negocio DROP CONSTRAINT IF EXISTS baseline_negocio_usuario_id_metrica_key`);
     await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_baseline_dia ON baseline_negocio(usuario_id, metrica, dia_semana)`);
+    await pool.query(`ALTER TABLE baseline_negocio ADD COLUMN IF NOT EXISTS std_dev DECIMAL(15,4)`);
     await pool.query(`ALTER TABLE transacciones ADD COLUMN IF NOT EXISTS sucursal_id INTEGER REFERENCES mis_sucursales(id)`);
     await pool.query(`ALTER TABLE turnos_caja ADD COLUMN IF NOT EXISTS sucursal_id INTEGER REFERENCES mis_sucursales(id)`);
     await pool.query(`ALTER TABLE empleados_negocio ADD COLUMN IF NOT EXISTS sucursal_id INTEGER REFERENCES mis_sucursales(id)`);

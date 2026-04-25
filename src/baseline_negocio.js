@@ -5,6 +5,14 @@ const DIA_GLOBAL = 7;
 const MIN_TX_DIA = 5;   // mínimo de transacciones para guardar baseline diario
 const MIN_TX_USAR = 10; // mínimo para preferir el baseline diario sobre el global
 
+// Desviación estándar muestral (n-1). Devuelve null si hay menos de 2 valores.
+function stdDev(valores) {
+  if (!valores || valores.length < 2) return null;
+  const media = valores.reduce((a, b) => a + b, 0) / valores.length;
+  const varianza = valores.reduce((s, v) => s + Math.pow(v - media, 2), 0) / (valores.length - 1);
+  return Math.sqrt(varianza);
+}
+
 function calcularMetricasNegocio(transacciones) {
   if (!transacciones || transacciones.length === 0) return null;
 
@@ -12,11 +20,25 @@ function calcularMetricasNegocio(transacciones) {
   const ticket_promedio = montos.length > 0
     ? montos.reduce((a, b) => a + b, 0) / montos.length
     : 0;
+  const ticket_std = stdDev(montos);
 
   const conMetodo = transacciones.filter(t => t.metodo_pago);
   const ratio_efectivo = conMetodo.length > 0
     ? conMetodo.filter(t => t.metodo_pago?.toLowerCase() === 'efectivo').length / conMetodo.length
     : null;
+
+  // std del ratio: calculado sobre los ratios por turno+día (no sobre txs individuales)
+  const porTurnoRatio = {};
+  conMetodo.forEach(t => {
+    const clave = `${t.turno || 'ST'}_${new Date(t.fecha).toISOString().split('T')[0]}`;
+    if (!porTurnoRatio[clave]) porTurnoRatio[clave] = { ef: 0, total: 0 };
+    porTurnoRatio[clave].total++;
+    if (t.metodo_pago?.toLowerCase() === 'efectivo') porTurnoRatio[clave].ef++;
+  });
+  const ratiosPorTurno = Object.values(porTurnoRatio)
+    .filter(r => r.total >= 3)
+    .map(r => r.ef / r.total);
+  const ratio_std = stdDev(ratiosPorTurno);
 
   const porTurno = {};
   transacciones.forEach(t => {
@@ -28,8 +50,14 @@ function calcularMetricasNegocio(transacciones) {
   const ventas_por_turno = totalesTurno.length > 0
     ? totalesTurno.reduce((a, b) => a + b, 0) / totalesTurno.length
     : 0;
+  const ventas_std = stdDev(totalesTurno);
 
-  return { ticket_promedio, ratio_efectivo, ventas_por_turno, total: transacciones.length };
+  return {
+    ticket_promedio,  ticket_std,
+    ratio_efectivo,   ratio_std,
+    ventas_por_turno, ventas_std,
+    total: transacciones.length,
+  };
 }
 
 // Agrupa transacciones por día de semana y calcula métricas de cada grupo
@@ -50,21 +78,22 @@ function calcularMetricasPorDia(transacciones) {
 
 async function upsertBaseline(client, usuarioId, diaSemana, metricas) {
   const campos = [
-    ['ticket_promedio', metricas.ticket_promedio],
-    ['ventas_por_turno', metricas.ventas_por_turno],
+    ['ticket_promedio',  metricas.ticket_promedio,  metricas.ticket_std],
+    ['ventas_por_turno', metricas.ventas_por_turno, metricas.ventas_std],
   ];
   if (metricas.ratio_efectivo !== null) {
-    campos.push(['ratio_efectivo', metricas.ratio_efectivo]);
+    campos.push(['ratio_efectivo', metricas.ratio_efectivo, metricas.ratio_std]);
   }
-  for (const [metrica, valor] of campos) {
+  for (const [metrica, valor, std] of campos) {
     await client.query(
-      `INSERT INTO baseline_negocio(usuario_id, metrica, valor, total_transacciones, dia_semana, updated_at)
-       VALUES($1,$2,$3,$4,$5,NOW())
+      `INSERT INTO baseline_negocio(usuario_id, metrica, valor, std_dev, total_transacciones, dia_semana, updated_at)
+       VALUES($1,$2,$3,$4,$5,$6,NOW())
        ON CONFLICT (usuario_id, metrica, dia_semana) DO UPDATE SET
          valor               = EXCLUDED.valor,
+         std_dev             = EXCLUDED.std_dev,
          total_transacciones = EXCLUDED.total_transacciones,
          updated_at          = NOW()`,
-      [usuarioId, metrica, valor, metricas.total, diaSemana]
+      [usuarioId, metrica, valor, std ?? null, metricas.total, diaSemana]
     );
   }
 }

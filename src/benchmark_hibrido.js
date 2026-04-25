@@ -24,14 +24,16 @@ function determinarCapaOrigen(pesos) {
 }
 
 // Z-score de Capa 2: compara valor reciente contra baseline histórico del negocio.
-// Usa std proxy: ±20% del valor de referencia para montos, ±0.10 para ratios.
+// Usa std_dev real cuando está disponible; proxy fijo solo como fallback.
 function calcularZScorePropio(valor, baselineNegocio, metrica) {
   const base = baselineNegocio[metrica];
   if (!base) return 0;
   const referencia = Number(base.valor);
   if (referencia === 0) return 0;
+  const std_real = base.std_dev && Number(base.std_dev) > 0 ? Number(base.std_dev) : null;
   const std_proxy = metrica === 'ratio_efectivo' ? 0.10 : referencia * 0.20;
-  return (valor - referencia) / std_proxy;
+  const std = std_real ?? std_proxy;
+  return (valor - referencia) / std;
 }
 
 module.exports = { calcularPesos, calcularScoreHibrido, determinarCapaOrigen, calcularZScorePropio };
