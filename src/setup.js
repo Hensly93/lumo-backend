@@ -151,6 +151,15 @@ async function setup() {
 
     // Columnas para taggear datos por sucursal (nullable: datos previos quedan sin tag)
     await pool.query(`ALTER TABLE turnos_caja ADD COLUMN IF NOT EXISTS gasto_inesperado BOOLEAN DEFAULT false`);
+
+    // --- Baseline por día de semana (Punto 6) ---
+    // dia_semana: 0-6 = día específico (JS getDay), 7 = global (fallback)
+    await pool.query(`ALTER TABLE baseline_negocio ADD COLUMN IF NOT EXISTS dia_semana INTEGER NOT NULL DEFAULT 7`);
+    // Migrar filas existentes al global (dia_semana=7) — idempotente
+    await pool.query(`UPDATE baseline_negocio SET dia_semana=7 WHERE dia_semana IS NULL OR dia_semana=7`);
+    // Reemplazar unique constraint vieja por una que incluya dia_semana
+    await pool.query(`ALTER TABLE baseline_negocio DROP CONSTRAINT IF EXISTS baseline_negocio_usuario_id_metrica_key`);
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_baseline_dia ON baseline_negocio(usuario_id, metrica, dia_semana)`);
     await pool.query(`ALTER TABLE transacciones ADD COLUMN IF NOT EXISTS sucursal_id INTEGER REFERENCES mis_sucursales(id)`);
     await pool.query(`ALTER TABLE turnos_caja ADD COLUMN IF NOT EXISTS sucursal_id INTEGER REFERENCES mis_sucursales(id)`);
     await pool.query(`ALTER TABLE empleados_negocio ADD COLUMN IF NOT EXISTS sucursal_id INTEGER REFERENCES mis_sucursales(id)`);

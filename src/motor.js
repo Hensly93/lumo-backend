@@ -214,7 +214,8 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
 
     const pesos = calcularPesos(transacciones.length);
     const benchmarkSector = tipoNegocio ? await getBenchmarkSector(tipoNegocio) : {};
-    const baselineNegocio = await getBaselineNegocio(usuarioId);
+    const diaSemana = new Date().getDay(); // 0=domingo, 6=sábado
+    const baselineNegocio = await getBaselineNegocio(usuarioId, diaSemana);
 
     // Contexto temporal actual + clima
     const ctx = getContextoTemporal(new Date());

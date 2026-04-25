@@ -177,10 +177,10 @@ async function resetBaselinePorCambioConfirmado(usuarioId) {
 
   for (const [metrica, valor] of actualizaciones) {
     await pool.query(
-      `INSERT INTO baseline_negocio(usuario_id, metrica, valor, total_transacciones, updated_at)
-       VALUES($1,$2,$3,$4,NOW())
-       ON CONFLICT (usuario_id, metrica) DO UPDATE
-       SET valor=$2, total_transacciones=$3, updated_at=NOW()`,
+      `INSERT INTO baseline_negocio(usuario_id, metrica, valor, total_transacciones, dia_semana, updated_at)
+       VALUES($1,$2,$3,$4,7,NOW())
+       ON CONFLICT (usuario_id, metrica, dia_semana) DO UPDATE
+       SET valor=EXCLUDED.valor, total_transacciones=EXCLUDED.total_transacciones, updated_at=NOW()`,
       [usuarioId, Math.round(valor * 100) / 100, txRes.rows.length]
     );
   }
