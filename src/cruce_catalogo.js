@@ -1,22 +1,14 @@
 // cruce_catalogo.js — Lumo S17
 // Integración entre catálogo de productos y comportamiento real de ventas.
 //
-// Función 1: cruzarCatalogoConTicket
-//   Compara ticket promedio real (transacciones) vs precio promedio del catálogo.
-//   Si divergen ≥20% → señal para NICOLE.
-//
-// Función 2: detectarPreciosDesactualizados
-//   Detecta productos sin actualizar hace >30 días y sugiere precio ajustado
-//   por inflación estimada (4% mensual — referencia Argentina).
-//   NO actualiza automáticamente — solo sugiere, el dueño confirma.
+// cruzarCatalogoConTicket: compara ticket promedio real vs precio promedio del
+// catálogo. Si divergen ≥20% → señal analítica para NICOLE.
 
 const pool = require('./db');
 
-const INFLACION_MENSUAL    = 0.04;  // 4% estimado Argentina
-const DIAS_STALE           = 30;    // días sin actualizar para considerar desactualizado
-const UMBRAL_DIVERGENCIA   = 0.20;  // 20% de divergencia ticket vs catálogo
+const UMBRAL_DIVERGENCIA    = 0.20;  // 20% de divergencia ticket vs catálogo
 const MIN_PRODUCTOS_ACTIVOS = 3;
-const MIN_TX_TICKET        = 10;
+const MIN_TX_TICKET         = 10;
 
 // ─── 1. Cruce ticket real vs precio promedio del catálogo ─────────────────────
 
@@ -79,59 +71,4 @@ async function cruzarCatalogoConTicket(usuarioId, sucursalId = null) {
   };
 }
 
-// ─── 2. Precios desactualizados ───────────────────────────────────────────────
-
-async function detectarPreciosDesactualizados(usuarioId) {
-  const res = await pool.query(
-    `SELECT id, nombre, categoria, precio_venta, updated_at
-     FROM productos
-     WHERE usuario_id=$1 AND activo=true AND precio_venta IS NOT NULL
-       AND updated_at < NOW() - INTERVAL '${DIAS_STALE} days'
-     ORDER BY updated_at ASC
-     LIMIT 20`,
-    [usuarioId]
-  );
-
-  if (res.rows.length === 0) return [];
-
-  const hoy = Date.now();
-  return res.rows.map(p => {
-    const diasSin       = Math.floor((hoy - new Date(p.updated_at).getTime()) / 86400000);
-    const mesesSin      = diasSin / 30;
-    const precioActual  = parseFloat(p.precio_venta);
-    const precioSugerido = Math.round(precioActual * Math.pow(1 + INFLACION_MENSUAL, mesesSin));
-    const incrementoPct  = Math.round(((precioSugerido - precioActual) / precioActual) * 100);
-
-    return {
-      id:               p.id,
-      nombre:           p.nombre,
-      categoria:        p.categoria,
-      precio_actual:    precioActual,
-      precio_sugerido:  precioSugerido,
-      incremento_pct:   incrementoPct,
-      dias_sin_actualizar: diasSin,
-    };
-  });
-}
-
-// ─── 3. Señal NICOLE para precios masivamente desactualizados ─────────────────
-// Solo genera señal si hay ≥3 productos stale para no ser ruidoso.
-
-async function señalPreciosDesactualizados(usuarioId) {
-  const stale = await detectarPreciosDesactualizados(usuarioId);
-  if (stale.length < 3) return null;
-
-  const nombreEj = stale[0].nombre;
-  const diasEj   = stale[0].dias_sin_actualizar;
-
-  return {
-    tipo:      'PRECIOS_DESACTUALIZADOS',
-    prioridad: 'ineficiencia',
-    contexto:  'catalogo_precios',
-    mensaje:   `${stale.length} productos sin actualizar hace más de ${DIAS_STALE} días. Ej: "${nombreEj}" lleva ${diasEj} días sin cambio — con inflación del 4% mensual el precio real puede estar desfasado.`,
-    accion:    'Revisá los precios en el Catálogo y actualizá los que correspondan.',
-    datos:     { total_stale: stale.length, productos: stale.slice(0, 5) },
-  };
-}
-
-module.exports = { cruzarCatalogoConTicket, detectarPreciosDesactualizados, señalPreciosDesactualizados };
+module.exports = { cruzarCatalogoConTicket };

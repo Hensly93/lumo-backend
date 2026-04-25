@@ -191,6 +191,33 @@ async function compararConRealidad(db) {
   };
 }
 
+// ─── Paso 4: Recordatorio amigable si el catálogo lleva 15 días sin actualizarse ─
+// Lógica: CURRENT_DATE - MAX(updated_at) es múltiplo de 15 → envía push una vez
+// por ciclo de 15 días de inactividad (sin almacenar estado extra).
+
+async function recordatorioPreciosCatalogo(db) {
+  const usuariosRes = await db.query(`
+    SELECT p.usuario_id
+    FROM productos p
+    WHERE p.activo = true
+    GROUP BY p.usuario_id
+    HAVING (CURRENT_DATE - MAX(p.updated_at::date)) >= 15
+       AND (CURRENT_DATE - MAX(p.updated_at::date)) % 15 = 0
+  `);
+
+  let enviados = 0;
+  for (const { usuario_id } of usuariosRes.rows) {
+    await notificarUsuario(usuario_id, {
+      title: '¿Actualizaste tus precios?',
+      body: 'Mantené el catálogo al día para que NICOLE pueda ayudarte mejor.',
+      url: '/catalogo',
+    }, db).catch(() => {});
+    enviados++;
+  }
+
+  return { paso: 'recordatorio_precios_catalogo', enviados };
+}
+
 // ─── Flujo principal ──────────────────────────────────────────────────────────
 
 async function runJobNocturno(db = pool) {
@@ -202,6 +229,7 @@ async function runJobNocturno(db = pool) {
     pasos.push(await agregarDatosDia(db));
     pasos.push(await calcularPredicciones(db));
     pasos.push(await compararConRealidad(db));
+    pasos.push(await recordatorioPreciosCatalogo(db));
   } catch (e) {
     console.error('[JOB NOCTURNO] Error fatal:', e.message);
     return { ok: false, error: e.message, pasos };

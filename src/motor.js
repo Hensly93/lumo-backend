@@ -7,7 +7,7 @@ const { getContextoTemporal, fetchClima, factoresAjuste } = require('./zscore_co
 const { calcularUmbralCelda, condicionDesdeContexto } = require('./motor_conductual');
 const { calcularCUSUMCompleto } = require('./cusum');
 const { detectarPatronesSemana } = require('./patron_semanal');
-const { cruzarCatalogoConTicket, señalPreciosDesactualizados } = require('./cruce_catalogo');
+const { cruzarCatalogoConTicket } = require('./cruce_catalogo');
 const pool = require('./db');
 
 const METRICAS = ['ticket_promedio', 'ventas_por_turno', 'ratio_efectivo'];
@@ -254,7 +254,7 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
     const anomalias = detectarAnomalias(agregados, umbralDinamico);
 
     // Todos los motores en paralelo — P6-3, P6-4, S17
-    const [alertasMetricas, alertasSegmento, cusumResult, patronesSemana, cruceCatalogo, señalStale] = await Promise.all([
+    const [alertasMetricas, alertasSegmento, cusumResult, patronesSemana, cruceCatalogo] = await Promise.all([
       Promise.resolve(construirAlertasMetricas(
         señalesMetricas, metricasRecientes, benchmarkSector, baselineNegocio, pesos, tipoNegocio
       )),
@@ -264,7 +264,6 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
       calcularCUSUMCompleto(usuarioId, sucursalId).catch(() => ({ alertas_cusum: [], turnos: [] })),
       detectarPatronesSemana(usuarioId, sucursalId).catch(() => []),
       cruzarCatalogoConTicket(usuarioId, sucursalId).catch(() => ({ disponible: false })),
-      señalPreciosDesactualizados(usuarioId).catch(() => null),
     ]);
 
     const todasAlertas = [...alertasMetricas, ...alertasSegmento];
@@ -286,7 +285,6 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
     // Señales del catálogo
     const señalesCatalogo = [];
     if (cruceCatalogo.señal) señalesCatalogo.push(cruceCatalogo.señal);
-    if (señalStale) señalesCatalogo.push(señalStale);
 
     const señales = [
       ...señalesMotor,

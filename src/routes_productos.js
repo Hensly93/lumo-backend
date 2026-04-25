@@ -6,7 +6,7 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 const Anthropic = require('@anthropic-ai/sdk');
 const { actualizarBaselineNegocio } = require('./baseline_negocio');
-const { detectarPreciosDesactualizados, cruzarCatalogoConTicket } = require('./cruce_catalogo');
+const { cruzarCatalogoConTicket } = require('./cruce_catalogo');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -304,14 +304,11 @@ router.patch('/:id', auth, async (req, res) => {
 });
 
 // ─── GET /api/productos/precios-alertas ───────────────────────────────────────
-// Punto 5: productos desactualizados + cruce ticket vs catálogo
+// Cruce ticket real vs precio promedio del catálogo (señal analítica para NICOLE)
 router.get('/precios-alertas', auth, async (req, res) => {
   try {
-    const [stale, cruce] = await Promise.all([
-      detectarPreciosDesactualizados(req.user.id),
-      cruzarCatalogoConTicket(req.user.id),
-    ]);
-    res.json({ stale, cruce });
+    const cruce = await cruzarCatalogoConTicket(req.user.id);
+    res.json({ cruce });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
