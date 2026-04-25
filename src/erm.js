@@ -98,6 +98,7 @@ async function calcularRiesgoEmpleado(usuarioId, nombreEmpleado) {
      FROM turnos_caja
      WHERE usuario_id=$1 AND nombre_empleado=$2
        AND estado='cerrado'
+       AND (gasto_inesperado IS NOT TRUE)
        AND hora_apertura >= NOW() - INTERVAL '30 days'`,
     [usuarioId, nombreEmpleado]
   );
@@ -125,6 +126,7 @@ async function calcularRiesgoEmpleado(usuarioId, nombreEmpleado) {
   const turnosRes = await pool.query(
     `SELECT DISTINCT tipo_turno FROM turnos_caja
      WHERE usuario_id=$1 AND nombre_empleado=$2 AND estado='cerrado'
+       AND (gasto_inesperado IS NOT TRUE)
        AND hora_apertura >= NOW() - INTERVAL '30 days'`,
     [usuarioId, nombreEmpleado]
   );
@@ -151,6 +153,7 @@ async function calcularRiesgoEmpleado(usuarioId, nombreEmpleado) {
     `SELECT ABS(COALESCE(brecha,0)) as brecha_abs
      FROM turnos_caja
      WHERE usuario_id=$1 AND nombre_empleado=$2 AND estado='cerrado'
+       AND (gasto_inesperado IS NOT TRUE)
      ORDER BY hora_apertura DESC LIMIT 15`,
     [usuarioId, nombreEmpleado]
   );

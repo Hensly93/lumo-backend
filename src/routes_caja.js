@@ -4,6 +4,8 @@ const bcrypt = require('bcryptjs');
 const pool = require('./db');
 const { analizarCruceTurno, detectarGoteo, resumenPatronesNegocio } = require('./cruce_variables');
 const { analizarTurnoConContexto, rankingEmpleadosTurno, contextTurnoActivo, detectarCambioComportamiento } = require('./zscore_contextual');
+const { calcularRiesgoEmpleado } = require('./erm');
+const { notificarUsuario } = require('./push');
 
 // Calcula hora aleatoria para conteo: entre 40 y 180 min despues de la apertura
 function calcularHoraConteo(desde) {
@@ -232,11 +234,16 @@ router.get('/conteo-pendiente/:turno_id', async (req, res) => {
     const conteo1 = verificarConteo(t.conteo_aleatorio_hora, t.conteo_aleatorio_respondido, t.conteo_aleatorio_omitido, 1);
     if (conteo1) return res.json(conteo1);
 
-    // Marcar como omitido si pasaron los 15 min
+    // Marcar como omitido si pasaron los 15 min — Fix 5: push al dueño
     if (t.conteo_aleatorio_hora && !t.conteo_aleatorio_respondido && !t.conteo_aleatorio_omitido) {
       const min = Math.floor((ahora - new Date(t.conteo_aleatorio_hora)) / 60000);
       if (min >= 15) {
         await pool.query('UPDATE turnos_caja SET conteo_aleatorio_omitido=true WHERE id=$1', [t.id]);
+        notificarUsuario(t.usuario_id, {
+          title: 'Conteo de caja no respondido',
+          body: `${t.nombre_empleado} no respondió el conteo aleatorio a tiempo`,
+          url: '/dashboard',
+        }, pool).catch(() => {});
       }
     }
 
@@ -247,6 +254,11 @@ router.get('/conteo-pendiente/:turno_id', async (req, res) => {
       const min = Math.floor((ahora - new Date(t.conteo_aleatorio2_hora)) / 60000);
       if (min >= 15) {
         await pool.query('UPDATE turnos_caja SET conteo_aleatorio2_omitido=true WHERE id=$1', [t.id]);
+        notificarUsuario(t.usuario_id, {
+          title: 'Conteo de caja no respondido',
+          body: `${t.nombre_empleado} no respondió el segundo conteo aleatorio a tiempo`,
+          url: '/dashboard',
+        }, pool).catch(() => {});
       }
     }
 
@@ -362,6 +374,34 @@ router.post('/cierre', async (req, res) => {
     );
 
     const estado = Math.abs(brechaPorc) > 10 ? 'critico' : Math.abs(brechaPorc) > 5 ? 'atencion' : 'ok';
+    const brechaAbs = Math.abs(brecha);
+    const hayBrecha = brechaAbs >= 200;
+
+    // Fix 1+2+3: ERM + push al dueño (fire-and-forget, no bloquea la respuesta)
+    setImmediate(async () => {
+      try {
+        const erm = await calcularRiesgoEmpleado(t.usuario_id, t.nombre_empleado).catch(() => null);
+        const ermNivel = erm?.nivel ?? 'sin_datos';
+
+        if (hayBrecha) {
+          // Fix 2+3: brecha detectada → push preguntando si fue gasto inesperado
+          await notificarUsuario(t.usuario_id, {
+            title: `Brecha de $${Math.round(brechaAbs).toLocaleString('es-AR')} en el cierre`,
+            body: `${t.nombre_empleado} · ${t.tipo_turno} · ERM: ${ermNivel} — ¿Fue un gasto inesperado?`,
+            url: `/dashboard?turno_id=${turno_id}&accion=gasto`,
+          }, pool);
+        } else {
+          // Fix 2: turno limpio → push positivo
+          await notificarUsuario(t.usuario_id, {
+            title: 'Turno cerrado sin novedades',
+            body: `${t.nombre_empleado} · ${t.tipo_turno} · Caja cuadrada`,
+            url: '/dashboard',
+          }, pool);
+        }
+      } catch (e) {
+        console.error('[CIERRE ERM/PUSH]', e.message);
+      }
+    });
 
     res.json({
       ok: true,
@@ -483,6 +523,29 @@ router.get('/patrones/:usuario_id', async (req, res) => {
     const limite = parseInt(req.query.limite) || 30;
     const resultado = await resumenPatronesNegocio(parseInt(req.params.usuario_id), limite);
     res.json(resultado);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Fix 3+4: Confirmar gasto inesperado ────────────────────────────────────
+// Marca el turno y excluye su brecha del ERM y del baseline futuro.
+
+// POST /api/caja/gasto-inesperado
+router.post('/gasto-inesperado', async (req, res) => {
+  try {
+    const { turno_id, usuario_id } = req.body;
+    if (!turno_id || !usuario_id) {
+      return res.status(400).json({ error: 'turno_id y usuario_id requeridos' });
+    }
+    const r = await pool.query(
+      `UPDATE turnos_caja SET gasto_inesperado=true
+       WHERE id=$1 AND usuario_id=$2 AND estado='cerrado'
+       RETURNING id, nombre_empleado, brecha`,
+      [turno_id, usuario_id]
+    );
+    if (r.rowCount === 0) return res.status(404).json({ error: 'Turno no encontrado' });
+    res.json({ ok: true, turno: r.rows[0] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

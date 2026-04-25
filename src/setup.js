@@ -150,6 +150,7 @@ async function setup() {
     )`);
 
     // Columnas para taggear datos por sucursal (nullable: datos previos quedan sin tag)
+    await pool.query(`ALTER TABLE turnos_caja ADD COLUMN IF NOT EXISTS gasto_inesperado BOOLEAN DEFAULT false`);
     await pool.query(`ALTER TABLE transacciones ADD COLUMN IF NOT EXISTS sucursal_id INTEGER REFERENCES mis_sucursales(id)`);
     await pool.query(`ALTER TABLE turnos_caja ADD COLUMN IF NOT EXISTS sucursal_id INTEGER REFERENCES mis_sucursales(id)`);
     await pool.query(`ALTER TABLE empleados_negocio ADD COLUMN IF NOT EXISTS sucursal_id INTEGER REFERENCES mis_sucursales(id)`);
