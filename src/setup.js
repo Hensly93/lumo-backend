@@ -37,6 +37,9 @@ async function setup() {
     await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS zona VARCHAR(100)`);
     await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS pos VARCHAR(100)`);
     await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS logo TEXT`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cuit VARCHAR(13)`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS razon_social VARCHAR(200)`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS notificaciones_config JSONB DEFAULT '{}'`);
 
     // --- Catálogo de productos (S16) ---
     await pool.query(`CREATE TABLE IF NOT EXISTS productos (

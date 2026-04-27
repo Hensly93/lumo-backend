@@ -25,7 +25,7 @@ function auth(req, res, next) {
 router.get('/perfil', auth, async (req, res) => {
   try {
     const r = await pool.query(
-      'SELECT id, nombre, email, negocio, tipo_negocio, provincia, ciudad, zona, pos, logo FROM usuarios WHERE id=$1',
+      'SELECT id, nombre, email, negocio, tipo_negocio, provincia, ciudad, zona, pos, logo, cuit, razon_social FROM usuarios WHERE id=$1',
       [req.user.id]
     );
     if (r.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
@@ -38,30 +38,33 @@ router.get('/perfil', auth, async (req, res) => {
 // ─── PATCH /api/usuario/perfil ────────────────────────────────────────────────
 router.patch('/perfil', auth, async (req, res) => {
   try {
-    const { nombre, negocio, tipo_negocio, provincia, ciudad, zona, pos } = req.body;
+    const { nombre, negocio, tipo_negocio, provincia, ciudad, zona, pos, cuit, razon_social } = req.body;
     const r = await pool.query(
       `UPDATE usuarios SET
-        nombre       = COALESCE($1, nombre),
-        negocio      = COALESCE($2, negocio),
-        tipo_negocio = COALESCE($3, tipo_negocio),
-        provincia    = COALESCE($4, provincia),
-        ciudad       = COALESCE($5, ciudad),
-        zona         = COALESCE($6, zona),
-        pos          = COALESCE($7, pos)
-       WHERE id=$8
-       RETURNING id, nombre, email, negocio, tipo_negocio, provincia, ciudad, zona, pos, logo`,
+        nombre        = COALESCE($1, nombre),
+        negocio       = COALESCE($2, negocio),
+        tipo_negocio  = COALESCE($3, tipo_negocio),
+        provincia     = COALESCE($4, provincia),
+        ciudad        = COALESCE($5, ciudad),
+        zona          = COALESCE($6, zona),
+        pos           = COALESCE($7, pos),
+        cuit          = COALESCE($8, cuit),
+        razon_social  = COALESCE($9, razon_social)
+       WHERE id=$10
+       RETURNING id, nombre, email, negocio, tipo_negocio, provincia, ciudad, zona, pos, logo, cuit, razon_social`,
       [
-        nombre    || null,
-        negocio   || null,
+        nombre       || null,
+        negocio      || null,
         tipo_negocio || null,
-        provincia || null,
-        ciudad    || null,
-        zona      || null,
-        pos       || null,
+        provincia    || null,
+        ciudad       || null,
+        zona         || null,
+        pos          || null,
+        cuit         || null,
+        razon_social || null,
         req.user.id,
       ]
     );
-    // Actualizar localStorage-friendly snapshot
     res.json(r.rows[0]);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -180,6 +183,43 @@ router.delete('/empleados/:id', auth, async (req, res) => {
       [req.params.id, req.user.id]
     );
     if (r.rowCount === 0) return res.status(404).json({ error: 'Empleado no encontrado' });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── GET /api/usuario/notificaciones ─────────────────────────────────────────
+router.get('/notificaciones', auth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      'SELECT notificaciones_config FROM usuarios WHERE id=$1',
+      [req.user.id]
+    );
+    const defaults = {
+      alertas_criticas:  true,
+      alertas_medias:    true,
+      conteos_perdidos:  true,
+      resumen_diario:    false,
+    };
+    res.json({ ...defaults, ...(r.rows[0]?.notificaciones_config || {}) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── PATCH /api/usuario/notificaciones ───────────────────────────────────────
+router.patch('/notificaciones', auth, async (req, res) => {
+  try {
+    const allowed = ['alertas_criticas', 'alertas_medias', 'conteos_perdidos', 'resumen_diario'];
+    const patch = {};
+    for (const key of allowed) {
+      if (req.body[key] !== undefined) patch[key] = Boolean(req.body[key]);
+    }
+    await pool.query(
+      `UPDATE usuarios SET notificaciones_config = notificaciones_config || $1::jsonb WHERE id=$2`,
+      [JSON.stringify(patch), req.user.id]
+    );
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
