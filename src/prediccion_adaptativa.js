@@ -31,7 +31,7 @@ function toISODate(date) {
 
 // ─── Calcular predicción ──────────────────────────────────────────────────────
 
-async function calcularPrediccion(usuario_id, sucursal_id = null, db = pool) {
+async function calcularPrediccion(usuario_id, sucursal_id = null, db = pool, riesgo_contexto = null) {
   // 1. Días de datos
   const minRes = await db.query(
     `SELECT MIN(fecha) as primera, COUNT(*) as total
@@ -173,6 +173,11 @@ async function calcularPrediccion(usuario_id, sucursal_id = null, db = pool) {
     predicciones,
     total_fechas: predicciones.length,
     eventos_en_ventana: Object.keys(eventosPorFecha).length,
+    riesgo_contexto: riesgo_contexto ? {
+      risk_score_final:     riesgo_contexto.risk_score_final,
+      confirmacion_cruzada: riesgo_contexto.confirmacion_cruzada,
+      debe_emitir:          riesgo_contexto.debe_emitir,
+    } : null,
   };
 }
 

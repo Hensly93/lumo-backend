@@ -5,9 +5,7 @@ const { calcularMetricasNegocio, getBaselineNegocio } = require('./baseline_nego
 const { calcularPesos, calcularScoreHibrido, determinarCapaOrigen, calcularZScorePropio } = require('./benchmark_hibrido');
 const { getContextoTemporal, fetchClima, factoresAjuste } = require('./zscore_contextual');
 const { calcularUmbralCelda, condicionDesdeContexto } = require('./motor_conductual');
-const { calcularCUSUMCompleto } = require('./cusum');
-const { detectarPatronesSemana } = require('./patron_semanal');
-const { cruzarCatalogoConTicket } = require('./cruce_catalogo');
+const { orchestrate } = require('./orchestrator');
 const pool = require('./db');
 
 const METRICAS = ['ticket_promedio', 'ventas_por_turno', 'ratio_efectivo'];
@@ -114,9 +112,9 @@ function evaluarSeñalesSectorPorTurno(agregados, benchmarkSector) {
 // ─── Construcción de alertas de métricas ─────────────────────────────────────
 // REGLA: sólo emite si ≥2 métricas son anómalas simultáneamente.
 
-function construirAlertasMetricas(señalesMetricas, metricasRecientes, benchmarkSector, baselineNegocio, pesos, tipoNegocio) {
+function construirAlertasMetricas(señalesMetricas, metricasRecientes, benchmarkSector, baselineNegocio, pesos, tipoNegocio, saltarGate = false) {
   const metricasAnomalas = Object.keys(señalesMetricas);
-  if (metricasAnomalas.length < 2) return []; // menos de 2 señales → silencio
+  if (!saltarGate && metricasAnomalas.length < 2) return []; // menos de 2 señales → silencio
 
   return metricasAnomalas.map(metrica => {
     const { scoreHibrido } = señalesMetricas[metrica];
@@ -215,6 +213,29 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
       };
     }
 
+    // Llamar a orchestrator para obtener contexto
+    const contexto = await orchestrate({ negocio_id: usuarioId, uid: null, turno_actual: null });
+
+    const debe_emitir          = contexto?.debe_emitir          ?? true;
+    const confirmacion_cruzada = contexto?.confirmacion_cruzada ?? false;
+    const risk_score_final     = contexto?.risk_score_final     ?? 0;
+    const orchQuality          = contexto?.data_quality         ?? { modulos_ok: 0, modulos_fallidos: 0, tasa_disponibilidad: 100 };
+
+    if (!debe_emitir) {
+      return {
+        alertas:            [],
+        señales:            [],
+        mensaje:            'Orquestador: score insuficiente para emitir señales',
+        risk_score_final,
+        data_quality_score: { ...data_quality, ...orchQuality },
+      };
+    }
+
+    // Outputs del orquestador — ya procesados, no se re-ejecutan los módulos
+    const cusumResult    = contexto?.señales_individuales?.cusum    ?? { alertas_cusum: [], turnos: [] };
+    const patronesSemana = contexto?.señales_individuales?.patron_semanal ?? [];
+    const cruceCatalogo  = contexto?.señales_individuales?.cruce_catalogo ?? { disponible: false };
+
     const pesos = calcularPesos(transacciones.length);
     const benchmarkSector = tipoNegocio ? await getBenchmarkSector(tipoNegocio) : {};
     const diaSemana = new Date().getDay(); // 0=domingo, 6=sábado
@@ -253,17 +274,14 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
     // Detección de segmento (Capa 2 - z-score robusto por turno+franja+quincena)
     const anomalias = detectarAnomalias(agregados, umbralDinamico);
 
-    // Todos los motores en paralelo — P6-3, P6-4, S17
-    const [alertasMetricas, alertasSegmento, cusumResult, patronesSemana, cruceCatalogo] = await Promise.all([
+    // CUSUM, patrones y catálogo ya vienen del orquestador — no se re-ejecutan aquí
+    const [alertasMetricas, alertasSegmento] = await Promise.all([
       Promise.resolve(construirAlertasMetricas(
-        señalesMetricas, metricasRecientes, benchmarkSector, baselineNegocio, pesos, tipoNegocio
+        señalesMetricas, metricasRecientes, benchmarkSector, baselineNegocio, pesos, tipoNegocio, confirmacion_cruzada
       )),
       Promise.resolve(construirAlertasSegmento(
         anomalias, señalesSectorPorTurno, señalesMetricas, pesos
       )),
-      calcularCUSUMCompleto(usuarioId, sucursalId).catch(() => ({ alertas_cusum: [], turnos: [] })),
-      detectarPatronesSemana(usuarioId, sucursalId).catch(() => []),
-      cruzarCatalogoConTicket(usuarioId, sucursalId).catch(() => ({ disponible: false })),
     ]);
 
     const todasAlertas = [...alertasMetricas, ...alertasSegmento];
@@ -299,7 +317,9 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
       criticas: criticas.length,
       medias: medias.length,
       bajas: bajas.length,
-      data_quality_score: data_quality,
+      risk_score_final,
+      confirmacion_cruzada,
+      data_quality_score: { ...data_quality, ...orchQuality },
       contexto_temporal: {
         ...ctx,
         clima,

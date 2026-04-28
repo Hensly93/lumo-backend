@@ -27,9 +27,13 @@ function authMiddleware(req, res, next) {
 }
 
 router.get('/analisis', authMiddleware, async (req, res) => {
-  const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
-  const resultado = await analizarNegocio(req.user.id, sucursalId);
-  res.json(resultado);
+  try {
+    const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
+    const resultado = await analizarNegocio(req.user.id, sucursalId);
+    res.json(resultado);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 router.post('/transacciones', authMiddleware, async (req, res) => {
