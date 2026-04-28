@@ -5,6 +5,56 @@ const jwt = require('jsonwebtoken');
 const pool = require('./db');
 const multer = require('multer');
 
+// Helper: Log acción a audit_logs
+async function logAudit(usuarioId, accion, detalles = null, req = null) {
+  try {
+    const ipAddress = req?.ip || req?.connection?.remoteAddress || null;
+    const userAgent = req?.get('user-agent') || null;
+    await pool.query(
+      `INSERT INTO audit_logs(usuario_id, accion, detalles, ip_address, user_agent)
+       VALUES($1, $2, $3, $4, $5)`,
+      [usuarioId, accion, detalles ? JSON.stringify(detalles) : null, ipAddress, userAgent]
+    );
+  } catch (e) {
+    console.error('Error logging audit:', e.message);
+  }
+}
+
+// Helper: Cancelar suscripción en Mercado Pago
+async function cancelarSuscripcionMP(mp_subscription_id) {
+  const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
+
+  if (!mp_subscription_id || !MP_ACCESS_TOKEN) {
+    console.warn('⚠️ No se puede cancelar en MP: falta ID o token');
+    return { success: false, mensaje: 'No se pudo contactar a Mercado Pago' };
+  }
+
+  try {
+    const response = await fetch(
+      `https://api.mercadopago.com/v1/preapproval/${mp_subscription_id}`,
+      {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${MP_ACCESS_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    if (response.ok) {
+      console.log('✅ Suscripción cancelada en MP:', mp_subscription_id);
+      return { success: true, mensaje: 'Suscripción cancelada en Mercado Pago' };
+    } else {
+      const errorData = await response.json().catch(() => ({}));
+      console.error('❌ Error MP:', response.status, errorData);
+      return { success: false, mensaje: `Error al cancelar en Mercado Pago (${response.status})` };
+    }
+  } catch (error) {
+    console.error('❌ Error cancelarSuscripcionMP:', error.message);
+    return { success: false, mensaje: 'Error de conexión con Mercado Pago' };
+  }
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 2 * 1024 * 1024 }, // 2MB máx
@@ -223,6 +273,228 @@ router.patch('/notificaciones', auth, async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── PATCH /api/usuario/me/subscription/cancel ─────────────────────────────
+router.patch('/me/subscription/cancel', auth, async (req, res) => {
+  try {
+    const usuarioId = req.user.id;
+
+    // Verificar que existe y obtener estado actual
+    const user = await pool.query(
+      `SELECT id, subscription_status, cancelled_at, mp_subscription_id FROM usuarios WHERE id=$1`,
+      [usuarioId]
+    );
+    if (user.rows.length === 0) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const userData = user.rows[0];
+
+    // Si ya está cancelada, no hacer nada
+    if (userData.subscription_status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        error: 'La suscripción ya está cancelada',
+        datos: { subscription_status: 'cancelled', cancelled_at: userData.cancelled_at },
+      });
+    }
+
+    // PASO 1: Si existe suscripción en MP, cancelarla primero
+    let mpResult = { success: true, mensaje: 'N/A' };
+    if (userData.mp_subscription_id) {
+      mpResult = await cancelarSuscripcionMP(userData.mp_subscription_id);
+      if (!mpResult.success) {
+        console.warn('⚠️ MP cancelation failed pero continuamos:', mpResult.mensaje);
+        // No bloqueamos por error en MP, solo log
+      }
+    }
+
+    // Calcular fecha de fin (hoy + 30 días = período de gracia)
+    const endDate = new Date();
+    endDate.setDate(endDate.getDate() + 30);
+
+    // Actualizar usuario: marcar como cancelado
+    const result = await pool.query(
+      `UPDATE usuarios SET
+        subscription_status = 'cancelada',
+        subscription_end_date = $1,
+        cancelled_at = NOW()
+       WHERE id=$2
+       RETURNING id, email, subscription_status, subscription_end_date, cancelled_at, mp_subscription_id`,
+      [endDate, usuarioId]
+    );
+
+    // Loguear acción
+    await logAudit(usuarioId, 'subscription_cancelled', {
+      subscription_status: 'cancelada',
+      subscription_end_date: endDate,
+      mp_result: mpResult,
+    }, req);
+
+    res.json({
+      success: true,
+      mensaje: `Suscripción cancelada. Acceso disponible hasta ${endDate.toLocaleDateString('es-AR')}.`,
+      mercado_pago: mpResult,
+      datos: result.rows[0],
+    });
+  } catch (e) {
+    console.error('cancel-subscription error:', e.message);
+    res.status(500).json({
+      success: false,
+      error: 'Error cancelando suscripción: ' + e.message,
+    });
+  }
+});
+
+// ─── DELETE /api/usuario/me (borrar cuenta) ────────────────────────────────
+router.delete('/me', auth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const usuarioId = req.user.id;
+    const { password } = req.body;
+
+    if (!password) {
+      return res.status(400).json({
+        success: false,
+        error: 'Contraseña requerida para borrar cuenta',
+      });
+    }
+
+    // Obtener usuario y verificar contraseña
+    const userResult = await client.query(
+      `SELECT id, email, password, subscription_status, created_at, mp_subscription_id FROM usuarios WHERE id=$1`,
+      [usuarioId]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Usuario no encontrado',
+      });
+    }
+
+    const userData = userResult.rows[0];
+
+    // Verificar contraseña
+    const passwordValid = await bcrypt.compare(password, userData.password);
+    if (!passwordValid) {
+      await logAudit(usuarioId, 'delete_attempt_invalid_password', null, req);
+      return res.status(401).json({
+        success: false,
+        error: 'Contraseña incorrecta',
+      });
+    }
+
+    // VALIDACIÓN 1: No permitir borrar si está en trial (< 7 días desde creación)
+    const createdAt = new Date(userData.created_at);
+    const daysSinceCreation = Math.floor((Date.now() - createdAt) / (1000 * 60 * 60 * 24));
+    if (daysSinceCreation < 7 && userData.subscription_status === 'trial') {
+      return res.status(403).json({
+        success: false,
+        error: 'No puedes borrar tu cuenta durante el período de prueba (7 días). Intenta después.',
+      });
+    }
+
+    // VALIDACIÓN 2: No permitir si tiene suscripción activa sin cancelar
+    if (userData.subscription_status === 'activa') {
+      return res.status(403).json({
+        success: false,
+        error: 'Debes cancelar tu suscripción antes de borrar la cuenta. Usa PATCH /api/usuario/me/subscription/cancel',
+      });
+    }
+
+    // VALIDACIÓN 3: Si existe suscripción en MP, cancelarla primero
+    let mpDeletionResult = { success: true, mensaje: 'N/A' };
+    if (userData.mp_subscription_id) {
+      mpDeletionResult = await cancelarSuscripcionMP(userData.mp_subscription_id);
+      if (!mpDeletionResult.success) {
+        // No bloqueamos pero log la falla
+        console.warn('⚠️ No se pudo cancelar suscripción en MP, pero continuamos con borrado local:', mpDeletionResult.mensaje);
+        await logAudit(usuarioId, 'delete_mp_cancellation_failed', {
+          mp_subscription_id: userData.mp_subscription_id,
+          error: mpDeletionResult.mensaje,
+        }, req);
+      }
+    }
+
+    // Comenzar transacción
+    await client.query('BEGIN');
+
+    // PASO 1: Si tiene suscripción cancelada, marcarla como expirada
+    if (userData.subscription_status === 'cancelled') {
+      await client.query(
+        `UPDATE usuarios SET subscription_status='expired' WHERE id=$1`,
+        [usuarioId]
+      );
+    }
+
+    // PASO 2: Loguear borrado
+    await client.query(
+      `INSERT INTO audit_logs(usuario_id, accion, detalles, ip_address, user_agent)
+       VALUES($1, $2, $3, $4, $5)`,
+      [
+        usuarioId,
+        'account_deletion_initiated',
+        JSON.stringify({ email: userData.email, reason: 'user_requested' }),
+        req.ip || req.connection?.remoteAddress || null,
+        req.get('user-agent') || null,
+      ]
+    );
+
+    // PASO 3: Guardar registro en deleted_accounts (para prevenir re-registro 30 días)
+    const restorationDate = new Date();
+    restorationDate.setDate(restorationDate.getDate() + 30);
+
+    await client.query(
+      `INSERT INTO deleted_accounts(usuario_id, email, deletion_scheduled_at, restoration_available_until, reason)
+       VALUES($1, $2, NOW(), $3, $4)`,
+      [usuarioId, userData.email, restorationDate, 'user_requested']
+    );
+
+    // PASO 4: Eliminar datos en cascada (respeta ON DELETE CASCADE pero también limpia algunas tablas)
+    // Tablas con FK a usuarios y ON DELETE CASCADE se eliminarán automáticamente
+
+    // Tablas que podría haber sin ON DELETE CASCADE (las borramos explícitamente):
+    await client.query(`DELETE FROM transacciones WHERE usuario_id=$1`, [usuarioId]);
+    await client.query(`DELETE FROM empleados_negocio WHERE usuario_id=$1`, [usuarioId]);
+    await client.query(`DELETE FROM baseline_negocio WHERE usuario_id=$1`, [usuarioId]);
+    await client.query(`DELETE FROM productos WHERE usuario_id=$1`, [usuarioId]);
+    await client.query(`DELETE FROM integraciones_mp WHERE usuario_id=$1`, [usuarioId]);
+    await client.query(`DELETE FROM mis_sucursales WHERE usuario_id=$1`, [usuarioId]);
+    await client.query(`DELETE FROM turnos_caja WHERE usuario_id=$1`, [usuarioId]);
+    await client.query(`DELETE FROM conteos_caja WHERE usuario_id IN (SELECT id FROM turnos_caja WHERE usuario_id=$1)`, [usuarioId]);
+    await client.query(`DELETE FROM egresos_caja WHERE usuario_id=$1`, [usuarioId]);
+    await client.query(`DELETE FROM alertas WHERE usuario_id=$1`, [usuarioId]);
+    await client.query(`DELETE FROM predicciones_negocio WHERE usuario_id=$1`, [usuarioId]);
+    await client.query(`DELETE FROM historial_predicciones WHERE prediccion_id IN (SELECT id FROM predicciones_negocio WHERE usuario_id=$1)`, [usuarioId]);
+
+    // PASO 5: FINALMENTE, borrar el usuario
+    await client.query(`DELETE FROM usuarios WHERE id=$1`, [usuarioId]);
+
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      mensaje: 'Cuenta eliminada exitosamente. Tus datos han sido borrados permanentemente.',
+      aviso: 'No podrás registrarte con este email durante 30 días.',
+      mercado_pago: mpDeletionResult,
+      datos: {
+        email: userData.email,
+        deleted_at: new Date().toISOString(),
+        restoration_available_until: restorationDate.toISOString(),
+      },
+    });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('delete-account error:', e.message);
+    res.status(500).json({
+      success: false,
+      error: 'Error borrando cuenta: ' + e.message,
+    });
+  } finally {
+    client.release();
   }
 });
 

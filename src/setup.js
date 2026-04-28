@@ -40,6 +40,17 @@ async function setup() {
     await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cuit VARCHAR(13)`);
     await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS razon_social VARCHAR(200)`);
     await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS notificaciones_config JSONB DEFAULT '{}'`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(50) DEFAULT 'trial'`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS subscription_end_date DATE`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS deletion_scheduled_at TIMESTAMP`);
+
+    // --- Integración Mercado Pago (suscripciones) ---
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS mp_subscription_id VARCHAR(255)`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS mp_customer_id VARCHAR(255)`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS plan_id VARCHAR(50)`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(50) DEFAULT 'activa'`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS subscription_end_date TIMESTAMP`);
 
     // --- Catálogo de productos (S16) ---
     await pool.query(`CREATE TABLE IF NOT EXISTS productos (
@@ -224,6 +235,27 @@ async function setup() {
       p256dh TEXT NOT NULL,
       auth TEXT NOT NULL,
       created_at TIMESTAMP DEFAULT NOW()
+    )`);
+
+    // --- Auditoría y control de cuentas ---
+    await pool.query(`CREATE TABLE IF NOT EXISTS audit_logs (
+      id SERIAL PRIMARY KEY,
+      usuario_id INTEGER REFERENCES usuarios(id) ON DELETE CASCADE,
+      accion VARCHAR(100) NOT NULL,
+      detalles JSONB,
+      ip_address VARCHAR(45),
+      user_agent TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_usuario ON audit_logs(usuario_id, created_at DESC)`);
+
+    await pool.query(`CREATE TABLE IF NOT EXISTS deleted_accounts (
+      id SERIAL PRIMARY KEY,
+      usuario_id INTEGER NOT NULL,
+      email VARCHAR(100) NOT NULL,
+      deleted_at TIMESTAMP DEFAULT NOW(),
+      restoration_available_until TIMESTAMP,
+      reason VARCHAR(255)
     )`);
 
     // Poblar contexto_pais con eventos Argentina 2026 (idempotente)
