@@ -5,6 +5,7 @@ const pool = require('./db');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const Anthropic = require('@anthropic-ai/sdk');
+const { actualizarBaselineNegocio, getBaselineNegocio } = require('./baseline_negocio');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -294,7 +295,7 @@ router.post('/upload-historial', auth, upload.single('archivo'), async (req, res
            COUNT(DISTINCT DATE(fecha)) as dias_datos,
            ROUND(AVG(monto)::numeric, 2) as ticket_promedio
          FROM transacciones
-         WHERE usuario_id=$1 AND origen='importado'`,
+         WHERE usuario_id=$1`,
         [req.user.id]
       );
 
@@ -303,16 +304,49 @@ router.post('/upload-historial', auth, upload.single('archivo'), async (req, res
       const total_mp = parseFloat(m.total_mp || 0);
       const total_dinero = total_efectivo + total_mp;
       const ratio_efectivo = total_dinero > 0 ? total_efectivo / total_dinero : 0;
+      const dias_datos = parseInt(m.dias_datos);
+
+      // Auto-trigger: recalcular baseline inmediatamente post-importación
+      let baseline_status = '⏳ Baseline en construcción';
+      let baseline_listo = false;
+
+      try {
+        const allTransacciones = await pool.query(
+          `SELECT * FROM transacciones WHERE usuario_id=$1 ORDER BY fecha ASC`,
+          [req.user.id]
+        );
+
+        await actualizarBaselineNegocio(req.user.id, allTransacciones.rows);
+        console.log('✅ Baseline calculado inmediatamente post-importación');
+
+        // Verificar confianza temporal
+        if (dias_datos >= 30) {
+          baseline_status = '✅ Baseline LISTO (30+ días)';
+          baseline_listo = true;
+        } else if (dias_datos >= 8) {
+          const dias_faltantes = 8 - dias_datos;
+          baseline_status = `⚠️ Baseline en construcción (${dias_faltantes} días más para confianza media)`;
+          baseline_listo = true;
+        } else {
+          const dias_faltantes = 8 - dias_datos;
+          baseline_status = `⏳ Datos insuficientes (necesita ${dias_faltantes}+ días)`;
+        }
+      } catch (error) {
+        console.error('⚠️ Baseline no calculado, se hará en job_nocturno:', error.message);
+        baseline_status = '⏳ Baseline en construcción (se calculará en próxima ejecución)';
+      }
 
       res.json({
         success: true,
         transacciones_cargadas: insertadas,
-        dias_datos: parseInt(m.dias_datos),
+        dias_datos,
         total_efectivo: Math.round(total_efectivo),
         total_mercado_pago: Math.round(total_mp),
         ratio_efectivo: Math.round(ratio_efectivo * 100) / 100,
         ticket_promedio: Math.round(parseFloat(m.ticket_promedio) || 0),
-        mensaje: `${insertadas} transacciones: ${Math.round(ratio_efectivo * 100)}% efectivo, ${Math.round((1 - ratio_efectivo) * 100)}% Mercado Pago. Baseline listo.`,
+        baseline_status,
+        baseline_listo,
+        mensaje: `${insertadas} transacciones: ${Math.round(ratio_efectivo * 100)}% efectivo, ${Math.round((1 - ratio_efectivo) * 100)}% Mercado Pago. ${baseline_status}`,
         advertencias: rechazadas.length > 0 ? `${rechazadas.length} transacciones rechazadas (métodos de pago no válidos)` : null,
       });
     } catch (e) {
