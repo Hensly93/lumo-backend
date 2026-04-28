@@ -20,6 +20,14 @@ try {
 }
 
 try {
+  const negocioRoutes = require("./routes_negocio");
+  app.use("/api/negocio", negocioRoutes);
+  console.log("Negocio OK");
+} catch(e) {
+  console.error("Negocio ERROR:", e.message);
+}
+
+try {
   const dataQualityRoutes = require("./routes_data_quality");
   app.use("/api/negocio", dataQualityRoutes);
   console.log("Data Quality OK");

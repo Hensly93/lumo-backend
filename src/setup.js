@@ -70,6 +70,8 @@ async function setup() {
 
     await pool.query(`ALTER TABLE transacciones ADD COLUMN IF NOT EXISTS mp_payment_id BIGINT`);
 
+    await pool.query(`ALTER TABLE transacciones ADD COLUMN IF NOT EXISTS origin VARCHAR(50) DEFAULT 'real'`);
+
     await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_mp_payment
       ON transacciones(usuario_id, mp_payment_id)
       WHERE mp_payment_id IS NOT NULL`);
