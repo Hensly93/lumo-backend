@@ -84,7 +84,7 @@ router.get('/data-quality-score', auth, async (req, res) => {
     if (transacciones.length === 0) {
       return res.json({
         score: 0,
-        transactionsCount: 0,
+        total_transacciones: 0,
         daysCount: 0,
         message: "Sin transacciones aún. Comenzá a registrar ventas para que el motor de detección funcione.",
         status: "critical"
@@ -108,7 +108,7 @@ router.get('/data-quality-score', auth, async (req, res) => {
 
     res.json({
       score: dq.score,
-      transactionsCount: transacciones.length,
+      total_transacciones: transacciones.length,
       daysCount: diasHistorial,
       message: mensaje,
       status: status,
@@ -116,7 +116,14 @@ router.get('/data-quality-score', auth, async (req, res) => {
     });
   } catch (e) {
     console.error("Error en data-quality-score:", e);
-    res.status(500).json({ error: e.message });
+    // En lugar de devolver 500, devolver JSON por defecto
+    res.json({
+      score: 0,
+      total_transacciones: 0,
+      daysCount: 0,
+      message: "Sin datos suficientes",
+      status: "critical"
+    });
   }
 });
 
