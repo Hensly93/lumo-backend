@@ -6,6 +6,7 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 const Anthropic = require('@anthropic-ai/sdk');
 const { actualizarBaselineNegocio, getBaselineNegocio } = require('./baseline_negocio');
+const { calculateWowMoment } = require('./wow_moment');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -358,6 +359,18 @@ router.post('/upload-historial', auth, upload.single('archivo'), async (req, res
   } catch (e) {
     console.error('upload-historial error:', e.message);
     res.status(500).json({ error: 'Error cargando historial: ' + e.message });
+  }
+});
+
+// ─── GET /api/negocio/wow-moment ──────────────────────────────────────────────
+// Devuelve top 3 patrones impactantes del negocio (últimos 30 días)
+router.get('/wow-moment', auth, async (req, res) => {
+  try {
+    const resultado = await calculateWowMoment(req.user.id, pool);
+    res.json(resultado);
+  } catch (e) {
+    console.error('wow-moment error:', e.message);
+    res.status(500).json({ error: 'Error calculando patrones: ' + e.message });
   }
 });
 
