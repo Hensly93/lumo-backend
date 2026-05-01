@@ -21,16 +21,26 @@ const TOTAL_MODULOS = 6;
 
 function calcularRiskScoreMotor(deteccion) {
   if (!deteccion || deteccion.length === 0) return 0;
-  const anomalias = deteccion.filter(a => a.es_anomalia);
-  if (anomalias.length === 0) return 0;
 
-  const metricas_unicas = new Set(anomalias.map(a => a.metrica)).size; // 0-3
-  const max_z = Math.max(...anomalias.map(a => Math.abs(a.zscore)));
+  // Extraer z-scores por métrica
+  const getZ = (metrica) => {
+    const a = deteccion.find(d => d.metrica === metrica);
+    return a ? Math.abs(a.zscore || 0) : 0;
+  };
 
-  return Math.min(
-    Math.round((metricas_unicas / 3) * 60 + Math.min(max_z / 4, 1.0) * 40),
-    100
-  );
+  const z_ticket = getZ('ticket_promedio');
+  const z_ratio  = getZ('ratio_efectivo');
+  const z_ventas = getZ('ventas_turno');
+
+  // Consistencia: 1 si hay al menos 2 señales anómalas simultáneas, 0 si no
+  const anomalias = deteccion.filter(d => d.es_anomalia);
+  const consistencia = anomalias.length >= 2 ? 1 : 0;
+
+  // Fórmula inamovible Lumo
+  const loss_score = (z_ticket * 0.3) + (z_ratio * 0.4) + (z_ventas * 0.2) + (consistencia * 0.1);
+
+  // Normalizar a 0-100 (z-score típico máximo ~4.0)
+  return Math.min(Math.round((loss_score / 4.0) * 100), 100);
 }
 
 // ─── Score de contexto (ERM + CUSUM) ─────────────────────────────────────────
