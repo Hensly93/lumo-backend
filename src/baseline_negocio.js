@@ -5,22 +5,28 @@ const DIA_GLOBAL = 7;
 const MIN_TX_DIA = 5;   // mínimo de transacciones para guardar baseline diario
 const MIN_TX_USAR = 10; // mínimo para preferir el baseline diario sobre el global
 
-// Desviación estándar muestral (n-1). Devuelve null si hay menos de 2 valores.
-function stdDev(valores) {
-  if (!valores || valores.length < 2) return null;
-  const media = valores.reduce((a, b) => a + b, 0) / valores.length;
-  const varianza = valores.reduce((s, v) => s + Math.pow(v - media, 2), 0) / (valores.length - 1);
-  return Math.sqrt(varianza);
+// Estadísticas robustas: mediana e IQR en lugar de media y desviación estándar
+function mediana(valores) {
+  if (!valores || valores.length === 0) return null;
+  const sorted = [...valores].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid-1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+function iqr(valores) {
+  if (!valores || valores.length < 4) return null;
+  const sorted = [...valores].sort((a, b) => a - b);
+  const q1 = sorted[Math.floor(sorted.length * 0.25)];
+  const q3 = sorted[Math.floor(sorted.length * 0.75)];
+  return q3 - q1;
 }
 
 function calcularMetricasNegocio(transacciones) {
   if (!transacciones || transacciones.length === 0) return null;
 
   const montos = transacciones.map(t => Number(t.monto)).filter(m => m > 0);
-  const ticket_promedio = montos.length > 0
-    ? montos.reduce((a, b) => a + b, 0) / montos.length
-    : 0;
-  const ticket_std = stdDev(montos);
+  const ticket_promedio = mediana(montos) ?? 0;
+  const ticket_std = iqr(montos);
 
   const conMetodo = transacciones.filter(t => t.metodo_pago);
   const ratio_efectivo = conMetodo.length > 0
@@ -38,7 +44,7 @@ function calcularMetricasNegocio(transacciones) {
   const ratiosPorTurno = Object.values(porTurnoRatio)
     .filter(r => r.total >= 3)
     .map(r => r.ef / r.total);
-  const ratio_std = stdDev(ratiosPorTurno);
+  const ratio_std = iqr(ratiosPorTurno);
 
   const porTurno = {};
   transacciones.forEach(t => {
@@ -47,10 +53,8 @@ function calcularMetricasNegocio(transacciones) {
     porTurno[clave] = (porTurno[clave] || 0) + Number(t.monto);
   });
   const totalesTurno = Object.values(porTurno);
-  const ventas_por_turno = totalesTurno.length > 0
-    ? totalesTurno.reduce((a, b) => a + b, 0) / totalesTurno.length
-    : 0;
-  const ventas_std = stdDev(totalesTurno);
+  const ventas_por_turno = mediana(totalesTurno) ?? 0;
+  const ventas_std = iqr(totalesTurno);
 
   return {
     ticket_promedio,  ticket_std,
