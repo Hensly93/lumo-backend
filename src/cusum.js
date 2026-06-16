@@ -181,7 +181,7 @@ async function resetBaselinePorCambioConfirmado(usuarioId) {
        VALUES($1,$2,$3,$4,7,NOW())
        ON CONFLICT (usuario_id, metrica, dia_semana) DO UPDATE
        SET valor=EXCLUDED.valor, total_transacciones=EXCLUDED.total_transacciones, updated_at=NOW()`,
-      [usuarioId, Math.round(valor * 100) / 100, txRes.rows.length]
+      [usuarioId, metrica, Math.round(valor * 100) / 100, txRes.rows.length]
     );
   }
 

@@ -73,7 +73,7 @@ router.get('/data-quality-score', auth, async (req, res) => {
     // Obtener todas las transacciones del usuario
     const result = await pool.query(
       `SELECT fecha, monto, metodo_pago, turno
-       FROM caja_movimientos
+       FROM transacciones
        WHERE usuario_id = $1
        ORDER BY fecha DESC`,
       [usuarioId]
