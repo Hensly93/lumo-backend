@@ -39,7 +39,8 @@ router.post('/transacciones', auth, async (req, res) => {
       'SELECT * FROM transacciones WHERE usuario_id = $1 ORDER BY fecha ASC',
       [req.user.id]
     );
-    await actualizarBaselineNegocio(req.user.id, todas.rows);
+    // Actualizar baseline de la sucursal específica (o global si sucursal_id es null)
+    await actualizarBaselineNegocio(req.user.negocio_id, sucursal_id || null, todas.rows);
 
     res.json(result.rows[0]);
   } catch(e) {
@@ -58,7 +59,7 @@ router.get('/perfil', auth, async (req, res) => {
 
     const [benchmarks, baseline, txCount] = await Promise.all([
       tipoNegocio ? getBenchmarkSector(tipoNegocio) : Promise.resolve({}),
-      getBaselineNegocio(req.user.id),
+      getBaselineNegocio(req.user.negocio_id, null),
       pool.query('SELECT COUNT(*) FROM transacciones WHERE usuario_id = $1', [req.user.id]),
     ]);
 
@@ -112,7 +113,7 @@ router.get('/negocio/perfil', auth, async (req, res) => {
 
     const [benchmarks, baseline] = await Promise.all([
       tipoNegocio ? getBenchmarkSector(tipoNegocio) : Promise.resolve({}),
-      getBaselineNegocio(req.user.id),
+      getBaselineNegocio(req.user.negocio_id, null),
     ]);
 
     const pesos = calcularPesos(totalTx);
@@ -257,7 +258,7 @@ router.post('/alertas/feedback', auth, async (req, res) => {
     // 1. Registrar feedback
     await registrarFeedback(alerta_id, { confirmada: !!confirmada, notas });
     // 2. Adaptar umbral EWTA
-    const ewta = await adaptarUmbralPorFeedback(req.user.id, alerta_id).catch(() => null);
+    const ewta = await adaptarUmbralPorFeedback(req.user.negocio_id, alerta_id).catch(() => null);
     // 3. Si es TP confirmado → Baseline Reset Protocol (P8)
     let reset = null;
     if (confirmada) {
@@ -272,7 +273,7 @@ router.post('/alertas/feedback', auth, async (req, res) => {
 // GET /api/umbrales — P6+P7: ver umbrales dinámicos actuales
 router.get('/umbrales', auth, async (req, res) => {
   try {
-    const umbrales = await getUmbralesUsuario(req.user.id);
+    const umbrales = await getUmbralesUsuario(req.user.negocio_id);
     res.json({ umbrales, default: 2.5 });
   } catch(e) {
     res.status(500).json({ error: e.message });

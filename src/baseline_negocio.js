@@ -80,7 +80,7 @@ function calcularMetricasPorDia(transacciones) {
   return resultado;
 }
 
-async function upsertBaseline(client, usuarioId, diaSemana, metricas) {
+async function upsertBaseline(client, negocioId, sucursalId, diaSemana, metricas) {
   const campos = [
     ['ticket_promedio',  metricas.ticket_promedio,  metricas.ticket_std],
     ['ventas_por_turno', metricas.ventas_por_turno, metricas.ventas_std],
@@ -90,31 +90,31 @@ async function upsertBaseline(client, usuarioId, diaSemana, metricas) {
   }
   for (const [metrica, valor, std] of campos) {
     await client.query(
-      `INSERT INTO baseline_negocio(usuario_id, metrica, valor, std_dev, total_transacciones, dia_semana, updated_at)
-       VALUES($1,$2,$3,$4,$5,$6,NOW())
-       ON CONFLICT (usuario_id, metrica, dia_semana) DO UPDATE SET
+      `INSERT INTO baseline_negocio(negocio_id, sucursal_id, metrica, valor, std_dev, total_transacciones, dia_semana, updated_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,NOW())
+       ON CONFLICT (negocio_id, COALESCE(sucursal_id, 0), metrica, dia_semana) DO UPDATE SET
          valor               = EXCLUDED.valor,
          std_dev             = EXCLUDED.std_dev,
          total_transacciones = EXCLUDED.total_transacciones,
          updated_at          = NOW()`,
-      [usuarioId, metrica, valor, std ?? null, metricas.total, diaSemana]
+      [negocioId, sucursalId, metrica, valor, std ?? null, metricas.total, diaSemana]
     );
   }
 }
 
-async function actualizarBaselineNegocio(usuarioId, transacciones) {
+async function actualizarBaselineNegocio(negocioId, sucursalId, transacciones) {
   const global = calcularMetricasNegocio(transacciones);
   if (!global) return;
 
   const client = await pool.connect();
   try {
     // Global (dia_semana=7)
-    await upsertBaseline(client, usuarioId, DIA_GLOBAL, global);
+    await upsertBaseline(client, negocioId, sucursalId, DIA_GLOBAL, global);
 
     // Por día de semana (dias con suficientes datos)
     const porDia = calcularMetricasPorDia(transacciones);
     for (const [dia, metricas] of Object.entries(porDia)) {
-      await upsertBaseline(client, usuarioId, parseInt(dia), metricas);
+      await upsertBaseline(client, negocioId, sucursalId, parseInt(dia), metricas);
     }
   } finally {
     client.release();
@@ -122,13 +122,30 @@ async function actualizarBaselineNegocio(usuarioId, transacciones) {
 }
 
 // Devuelve el baseline del día solicitado (o el del día actual).
+// Si sucursalId tiene valor pero no hay baseline específico → fallback al global del negocio (sucursal_id IS NULL)
 // El baseline diario tiene prioridad sobre el global cuando tiene ≥ MIN_TX_USAR transacciones.
-async function getBaselineNegocio(usuarioId, diaSemana = null) {
+async function getBaselineNegocio(negocioId, sucursalId, diaSemana = null) {
   const dia = diaSemana ?? new Date().getDay();
-  const result = await pool.query(
-    `SELECT * FROM baseline_negocio WHERE usuario_id=$1 AND dia_semana IN ($2, $3)`,
-    [usuarioId, dia, DIA_GLOBAL]
+
+  // Intentar obtener baseline de la sucursal específica (si sucursalId tiene valor)
+  let result = await pool.query(
+    `SELECT * FROM baseline_negocio
+     WHERE negocio_id=$1
+       AND sucursal_id IS NOT DISTINCT FROM $2
+       AND dia_semana IN ($3, $4)`,
+    [negocioId, sucursalId, dia, DIA_GLOBAL]
   );
+
+  // Si no hay datos para la sucursal específica, fallback al baseline global del negocio
+  if (result.rows.length === 0 && sucursalId !== null) {
+    result = await pool.query(
+      `SELECT * FROM baseline_negocio
+       WHERE negocio_id=$1
+         AND sucursal_id IS NULL
+         AND dia_semana IN ($2, $3)`,
+      [negocioId, dia, DIA_GLOBAL]
+    );
+  }
 
   const global = {};
   const diario = {};

@@ -38,12 +38,12 @@ function condicionDesdeContexto(ctx) {
 // Usa las brechas históricas de esa celda para calibrar el umbral.
 // Si hay pocos datos (<5 turnos en la celda), hereda el umbral global.
 
-async function calcularUmbralCelda(usuarioId, tipoTurno, diaSemana, condicion = 'normal') {
+async function calcularUmbralCelda(negocioId, tipoTurno, diaSemana, condicion = 'normal') {
   // Primero: ver si hay umbral P7 guardado para esta celda
   const umbrales = await pool.query(
     `SELECT umbral_actual FROM umbrales_celda
-     WHERE usuario_id=$1 AND tipo_turno=$2 AND dia_semana=$3 AND condicion=$4`,
-    [usuarioId, tipoTurno, diaSemana, condicion]
+     WHERE negocio_id=$1 AND tipo_turno=$2 AND dia_semana=$3 AND condicion=$4`,
+    [negocioId, tipoTurno, diaSemana, condicion]
   );
   if (umbrales.rows.length > 0) {
     return parseFloat(umbrales.rows[0].umbral_actual);
@@ -53,11 +53,11 @@ async function calcularUmbralCelda(usuarioId, tipoTurno, diaSemana, condicion = 
   const hist = await pool.query(
     `SELECT ABS(brecha) as brecha_abs
      FROM turnos_caja
-     WHERE usuario_id=$1 AND tipo_turno=$2
+     WHERE negocio_id=$1 AND tipo_turno=$2
        AND EXTRACT(DOW FROM hora_apertura) = $3
        AND estado='cerrado' AND brecha IS NOT NULL
        AND hora_apertura >= NOW() - INTERVAL '90 days'`,
-    [usuarioId, tipoTurno, diaSemana]
+    [negocioId, tipoTurno, diaSemana]
   );
 
   if (hist.rows.length < 5) {
@@ -79,13 +79,13 @@ async function calcularUmbralCelda(usuarioId, tipoTurno, diaSemana, condicion = 
 
 // ─── P7: Registrar feedback y adaptar umbral ─────────────────────────────────
 
-async function adaptarUmbralPorFeedback(usuarioId, alertaId) {
+async function adaptarUmbralPorFeedback(negocioId, alertaId) {
   // Leer la alerta y su feedback
   const alerta = await pool.query(
     `SELECT tipo_alerta, contexto, prioridad, feedback_confirmada
      FROM alertas_gestionadas
-     WHERE id=$1 AND usuario_id=$2 AND feedback_confirmada IS NOT NULL`,
-    [alertaId, usuarioId]
+     WHERE id=$1 AND negocio_id=$2 AND feedback_confirmada IS NOT NULL`,
+    [alertaId, negocioId]
   );
   if (alerta.rows.length === 0) return { ok: false, motivo: 'alerta_sin_feedback' };
 
@@ -104,10 +104,10 @@ async function adaptarUmbralPorFeedback(usuarioId, alertaId) {
        COUNT(*) FILTER (WHERE feedback_confirmada = true)  as verdaderos_positivos,
        COUNT(*) as total
      FROM alertas_gestionadas
-     WHERE usuario_id=$1 AND tipo_alerta=$2
+     WHERE negocio_id=$1 AND tipo_alerta=$2
        AND contexto LIKE $3
        AND feedback_confirmada IS NOT NULL`,
-    [usuarioId, tipo_alerta, `${tipoTurno}%`]
+    [negocioId, tipo_alerta, `${tipoTurno}%`]
   );
 
   const { falsos_positivos, verdaderos_positivos, total } = stats.rows[0];
@@ -118,7 +118,7 @@ async function adaptarUmbralPorFeedback(usuarioId, alertaId) {
   }
 
   // Calcular umbral actual
-  const umbralActual = await calcularUmbralCelda(usuarioId, tipoTurno, diaSemana, condicion);
+  const umbralActual = await calcularUmbralCelda(negocioId, tipoTurno, diaSemana, condicion);
 
   const fpRate = parseInt(falsos_positivos) / totalN;
   const confRate = parseInt(verdaderos_positivos) / totalN;
@@ -138,11 +138,11 @@ async function adaptarUmbralPorFeedback(usuarioId, alertaId) {
 
   // Persistir
   await pool.query(
-    `INSERT INTO umbrales_celda(usuario_id, tipo_turno, dia_semana, condicion, umbral_actual, n_feedbacks, updated_at)
+    `INSERT INTO umbrales_celda(negocio_id, tipo_turno, dia_semana, condicion, umbral_actual, n_feedbacks, updated_at)
      VALUES($1,$2,$3,$4,$5,$6,NOW())
-     ON CONFLICT (usuario_id, tipo_turno, dia_semana, condicion)
+     ON CONFLICT (negocio_id, tipo_turno, dia_semana, condicion)
      DO UPDATE SET umbral_actual=$5, n_feedbacks=$6, updated_at=NOW()`,
-    [usuarioId, tipoTurno, diaSemana, condicion, nuevoUmbral, totalN]
+    [negocioId, tipoTurno, diaSemana, condicion, nuevoUmbral, totalN]
   );
 
   return {
@@ -159,13 +159,13 @@ async function adaptarUmbralPorFeedback(usuarioId, alertaId) {
 
 // ─── GET umbrales actuales del usuario ───────────────────────────────────────
 
-async function getUmbralesUsuario(usuarioId) {
+async function getUmbralesUsuario(negocioId) {
   const res = await pool.query(
     `SELECT tipo_turno, dia_semana, condicion, umbral_actual, n_feedbacks, updated_at
      FROM umbrales_celda
-     WHERE usuario_id=$1
+     WHERE negocio_id=$1
      ORDER BY tipo_turno, dia_semana`,
-    [usuarioId]
+    [negocioId]
   );
   return res.rows.map(r => ({
     celda: celdaKey(r.tipo_turno, r.dia_semana, r.condicion),
@@ -181,10 +181,10 @@ async function getUmbralesUsuario(usuarioId) {
 // ─── Evaluar z-score con umbral dinámico ─────────────────────────────────────
 // Reemplaza el z-score fijo del motor. Recibe valor observado + contexto.
 
-async function evaluarConUmbralDinamico(usuarioId, valor, baseline, tipoTurno, ctx) {
+async function evaluarConUmbralDinamico(negocioId, valor, baseline, tipoTurno, ctx) {
   const diaSemana = ctx?.diaSemana ?? new Date().getDay();
   const condicion = condicionDesdeContexto(ctx);
-  const umbral = await calcularUmbralCelda(usuarioId, tipoTurno, diaSemana, condicion);
+  const umbral = await calcularUmbralCelda(negocioId, tipoTurno, diaSemana, condicion);
 
   if (!baseline || !baseline.valor || baseline.total_transacciones < 10) {
     return { zscore: null, supera_umbral: false, umbral, confianza: 0 };

@@ -190,10 +190,17 @@ function construirAlertasSegmento(anomalias, señalesSectorPorTurno, señalesMet
 
 async function analizarNegocio(usuarioId, sucursalId = null) {
   try {
-    const userResult = await pool.query('SELECT negocio, tipo_negocio FROM usuarios WHERE id = $1', [usuarioId]);
-    const { negocio = '', tipo_negocio } = userResult.rows[0] || {};
-    // tipo_negocio (columna estructurada) tiene prioridad; fallback al campo libre negocio
-    const tipoNegocio = normalizarTipoNegocio(tipo_negocio || negocio);
+    // Obtener negocio_id y tipo_negocio desde tabla negocios
+    const negocioResult = await pool.query(
+      `SELECT n.id, n.tipo_negocio
+       FROM negocios n
+       JOIN negocio_usuarios nu ON nu.negocio_id = n.id
+       WHERE nu.usuario_id = $1 AND nu.activo = true
+       LIMIT 1`,
+      [usuarioId]
+    );
+    const { id: negocioId, tipo_negocio } = negocioResult.rows[0] || {};
+    const tipoNegocio = normalizarTipoNegocio(tipo_negocio);
 
     const result = await pool.query(
       `SELECT * FROM transacciones WHERE usuario_id = $1
@@ -239,7 +246,7 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
     const pesos = calcularPesos(transacciones.length);
     const benchmarkSector = tipoNegocio ? await getBenchmarkSector(tipoNegocio) : {};
     const diaSemana = new Date().getDay(); // 0=domingo, 6=sábado
-    const baselineNegocio = await getBaselineNegocio(usuarioId, diaSemana);
+    const baselineNegocio = await getBaselineNegocio(negocioId, sucursalId, diaSemana);
 
     // Contexto temporal actual + clima
     const ctx = getContextoTemporal(new Date());
@@ -268,7 +275,7 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
     // P6: umbral dinámico para la celda del contexto actual
     const turnoActual = ctx.hora < 14 ? 'MANANA' : ctx.hora < 20 ? 'TARDE' : 'NOCHE';
     const umbralDinamico = await calcularUmbralCelda(
-      usuarioId, turnoActual, ctx.diaSemana, condicionDesdeContexto({ ...ctx, clima })
+      negocioId, turnoActual, ctx.diaSemana, condicionDesdeContexto({ ...ctx, clima })
     ).catch(() => UMBRAL_SEÑAL);
 
     // Detección de segmento (Capa 2 - z-score robusto por turno+franja+quincena)

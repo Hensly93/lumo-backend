@@ -223,7 +223,7 @@ router.get('/importar', authWithQuery, async (req, res) => {
         'SELECT * FROM transacciones WHERE usuario_id=$1 ORDER BY fecha ASC',
         [req.user.id]
       );
-      await actualizarBaselineNegocio(req.user.id, todas.rows);
+      await actualizarBaselineNegocio(req.user.negocio_id, null, todas.rows);
     }
 
     res.json({

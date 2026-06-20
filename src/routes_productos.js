@@ -280,7 +280,7 @@ router.patch('/:id', auth, async (req, res) => {
             'SELECT * FROM transacciones WHERE usuario_id=$1 ORDER BY fecha ASC',
             [req.user.id]
           );
-          if (todas.rows.length >= 5) await actualizarBaselineNegocio(req.user.id, todas.rows);
+          if (todas.rows.length >= 5) await actualizarBaselineNegocio(req.user.negocio_id, null, todas.rows);
         } catch (e) {
           console.error('[RECALIBRACION PRECIO]', e.message);
         }

@@ -194,6 +194,9 @@ router.post('/upload-historial', auth, upload.single('archivo'), async (req, res
   try {
     if (!req.file) return res.status(400).json({ error: 'Archivo requerido' });
 
+    // Capturar sucursal_id si el frontend lo envía
+    const sucursal_id = req.body.sucursal_id ? parseInt(req.body.sucursal_id) : null;
+
     const { mimetype, buffer, originalname } = req.file;
     const ext = (originalname.split('.').pop() || '').toLowerCase();
 
@@ -307,7 +310,7 @@ router.post('/upload-historial', auth, upload.single('archivo'), async (req, res
           [req.user.id]
         );
 
-        await actualizarBaselineNegocio(req.user.id, allTransacciones.rows);
+        await actualizarBaselineNegocio(req.user.negocio_id, sucursal_id, allTransacciones.rows);
         console.log('✅ Baseline calculado inmediatamente post-importación');
 
         // Verificar confianza temporal
