@@ -6,6 +6,7 @@ const { analizarCruceTurno, detectarGoteo, resumenPatronesNegocio } = require('.
 const { analizarTurnoConContexto, rankingEmpleadosTurno, contextTurnoActivo, detectarCambioComportamiento } = require('./zscore_contextual');
 const { calcularRiesgoEmpleado } = require('./erm');
 const { notificarUsuario } = require('./push');
+const { auth } = require('./authMiddleware');
 
 // Calcula hora aleatoria para conteo: entre 40 y 180 min despues de la apertura
 function calcularHoraConteo(desde) {

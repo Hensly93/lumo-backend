@@ -2,22 +2,12 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const pool = require('./db');
+const { auth } = require('./authMiddleware');
 
 const TZ = 'America/Argentina/Buenos_Aires';
 
 const DIAS_ES = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 const TURNOS_LABEL = { MANANA: 'Mañana', TARDE: 'Tarde', NOCHE: 'Noche', SIN_TURNO: 'Sin turno' };
-
-function auth(req, res, next) {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Token requerido' });
-  try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
-  } catch {
-    res.status(401).json({ error: 'Token inválido' });
-  }
-}
 
 function calcTendencia(actual, anterior) {
   if (!anterior || anterior === 0) return 'estable';

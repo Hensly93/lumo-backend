@@ -7,21 +7,11 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const pool = require('./db');
-
-function authMiddleware(req, res, next) {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Token requerido' });
-  try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
-  } catch(e) {
-    res.status(401).json({ error: 'Token invalido' });
-  }
-}
+const { auth } = require('./authMiddleware');
 
 // ─── POST /api/multilocal/sucursal ───────────────────────────────────────────
 // Agregar un local propio (nombre + dirección)
-router.post('/sucursal', authMiddleware, async (req, res) => {
+router.post('/sucursal', auth, async (req, res) => {
   try {
     const { nombre, direccion } = req.body;
     if (!nombre) return res.status(400).json({ error: 'nombre requerido' });
@@ -38,7 +28,7 @@ router.post('/sucursal', authMiddleware, async (req, res) => {
 
 // ─── GET /api/multilocal/red ─────────────────────────────────────────────────
 // Dashboard: lista de locales propios con KPIs
-router.get('/red', authMiddleware, async (req, res) => {
+router.get('/red', auth, async (req, res) => {
   try {
     const sucursales = await pool.query(
       `SELECT id, nombre, direccion, activo, created_at
@@ -117,7 +107,7 @@ router.get('/red', authMiddleware, async (req, res) => {
 
 // ─── PATCH /api/multilocal/sucursal/:id ──────────────────────────────────────
 // Editar nombre o dirección de un local
-router.patch('/sucursal/:id', authMiddleware, async (req, res) => {
+router.patch('/sucursal/:id', auth, async (req, res) => {
   try {
     const { nombre, direccion } = req.body;
     if (!nombre) return res.status(400).json({ error: 'nombre requerido' });
@@ -135,7 +125,7 @@ router.patch('/sucursal/:id', authMiddleware, async (req, res) => {
 
 // ─── DELETE /api/multilocal/sucursal/:id ─────────────────────────────────────
 // Desactivar (no borrar) un local
-router.delete('/sucursal/:id', authMiddleware, async (req, res) => {
+router.delete('/sucursal/:id', auth, async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE mis_sucursales SET activo=false

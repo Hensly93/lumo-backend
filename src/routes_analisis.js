@@ -14,19 +14,9 @@ const { calcularCUSUMCompleto, resetBaselinePorCambioConfirmado } = require('./c
 const { calcularERMNegocio, calcularRiesgoEmpleado } = require('./erm');
 const { notificarUsuario } = require('./push');
 const pool = require('./db');
+const { auth } = require('./authMiddleware');
 
-function authMiddleware(req, res, next) {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Token requerido' });
-  try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
-  } catch(e) {
-    res.status(401).json({ error: 'Token invalido' });
-  }
-}
-
-router.get('/analisis', authMiddleware, async (req, res) => {
+router.get('/analisis', auth, async (req, res) => {
   try {
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
     const resultado = await analizarNegocio(req.user.id, sucursalId);
@@ -36,7 +26,7 @@ router.get('/analisis', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/transacciones', authMiddleware, async (req, res) => {
+router.post('/transacciones', auth, async (req, res) => {
   try {
     const { monto, tipo, empleado, turno, fecha, metodo_pago, sucursal_id } = req.body;
     const result = await pool.query(
@@ -57,7 +47,7 @@ router.post('/transacciones', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/perfil', authMiddleware, async (req, res) => {
+router.get('/perfil', auth, async (req, res) => {
   try {
     const uResult = await pool.query(
       'SELECT id, nombre, email, negocio, tipo_negocio, created_at FROM usuarios WHERE id = $1',
@@ -109,7 +99,7 @@ router.get('/perfil', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/negocio/perfil', authMiddleware, async (req, res) => {
+router.get('/negocio/perfil', auth, async (req, res) => {
   try {
     const [uResult, txResult] = await Promise.all([
       pool.query('SELECT negocio, tipo_negocio FROM usuarios WHERE id = $1', [req.user.id]),
@@ -164,7 +154,7 @@ router.get('/negocio/perfil', authMiddleware, async (req, res) => {
 });
 
 // PATCH /api/perfil — actualizar tipo_negocio y/o onboarding_done
-router.patch('/perfil', authMiddleware, async (req, res) => {
+router.patch('/perfil', auth, async (req, res) => {
   try {
     const { tipo_negocio, onboarding_done, provincia, ciudad, zona } = req.body;
     if (tipo_negocio === undefined && onboarding_done === undefined && provincia === undefined && ciudad === undefined && zona === undefined) {
@@ -195,7 +185,7 @@ router.patch('/perfil', authMiddleware, async (req, res) => {
 });
 
 // GET /api/predicciones — S9: motor adaptativo W1/W2/W3 + mensaje NICOLE
-router.get('/predicciones', authMiddleware, async (req, res) => {
+router.get('/predicciones', auth, async (req, res) => {
   try {
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
 
@@ -250,7 +240,7 @@ router.get('/predicciones', authMiddleware, async (req, res) => {
 });
 
 // GET /api/recomendaciones — Obj 6: motor de recomendaciones
-router.get('/recomendaciones', authMiddleware, async (req, res) => {
+router.get('/recomendaciones', auth, async (req, res) => {
   try {
     const resultado = await generarRecomendaciones(req.user.id);
     res.json(resultado);
@@ -260,7 +250,7 @@ router.get('/recomendaciones', authMiddleware, async (req, res) => {
 });
 
 // POST /api/alertas/feedback — Obj 7 + P7: feedback loop + EWTA
-router.post('/alertas/feedback', authMiddleware, async (req, res) => {
+router.post('/alertas/feedback', auth, async (req, res) => {
   try {
     const { alerta_id, confirmada, notas } = req.body;
     if (alerta_id == null) return res.status(400).json({ error: 'alerta_id requerido' });
@@ -280,7 +270,7 @@ router.post('/alertas/feedback', authMiddleware, async (req, res) => {
 });
 
 // GET /api/umbrales — P6+P7: ver umbrales dinámicos actuales
-router.get('/umbrales', authMiddleware, async (req, res) => {
+router.get('/umbrales', auth, async (req, res) => {
   try {
     const umbrales = await getUmbralesUsuario(req.user.id);
     res.json({ umbrales, default: 2.5 });
@@ -290,7 +280,7 @@ router.get('/umbrales', authMiddleware, async (req, res) => {
 });
 
 // GET /api/ventas-diarias?dias=30 — ventas reales por día para el gráfico
-router.get('/ventas-diarias', authMiddleware, async (req, res) => {
+router.get('/ventas-diarias', auth, async (req, res) => {
   try {
     const dias = Math.min(parseInt(req.query.dias) || 30, 90);
     const result = await pool.query(
@@ -316,7 +306,7 @@ router.get('/ventas-diarias', authMiddleware, async (req, res) => {
 });
 
 // GET /api/alertas — motor unificado: métricas + CUSUM + deduplicación
-router.get('/alertas', authMiddleware, async (req, res) => {
+router.get('/alertas', auth, async (req, res) => {
   try {
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
     const analisis = await analizarNegocio(req.user.id, sucursalId);
@@ -328,7 +318,7 @@ router.get('/alertas', authMiddleware, async (req, res) => {
 });
 
 // POST /api/nicole/chat — chat conversacional con NICOLE
-router.post('/nicole/chat', authMiddleware, async (req, res) => {
+router.post('/nicole/chat', auth, async (req, res) => {
   try {
     const { mensaje, historial = [] } = req.body;
     if (!mensaje?.trim()) return res.status(400).json({ error: 'mensaje requerido' });
@@ -482,7 +472,7 @@ Predicción: ${predStr}`;
 });
 
 // POST /api/push/subscribe — guardar suscripción push del navegador
-router.post('/push/subscribe', authMiddleware, async (req, res) => {
+router.post('/push/subscribe', auth, async (req, res) => {
   try {
     const { endpoint, keys } = req.body;
     if (!endpoint || !keys?.p256dh || !keys?.auth) {
@@ -501,7 +491,7 @@ router.post('/push/subscribe', authMiddleware, async (req, res) => {
 });
 
 // DELETE /api/push/subscribe — cancelar suscripción
-router.delete('/push/subscribe', authMiddleware, async (req, res) => {
+router.delete('/push/subscribe', auth, async (req, res) => {
   try {
     const { endpoint } = req.body;
     await pool.query(
@@ -515,7 +505,7 @@ router.delete('/push/subscribe', authMiddleware, async (req, res) => {
 });
 
 // GET /api/erm — ERM completo del negocio (todos los empleados)
-router.get('/erm', authMiddleware, async (req, res) => {
+router.get('/erm', auth, async (req, res) => {
   try {
     const resultado = await calcularERMNegocio(req.user.id);
     res.json(resultado);
@@ -525,7 +515,7 @@ router.get('/erm', authMiddleware, async (req, res) => {
 });
 
 // GET /api/erm/:empleado — ERM de un empleado específico
-router.get('/erm/:empleado', authMiddleware, async (req, res) => {
+router.get('/erm/:empleado', auth, async (req, res) => {
   try {
     const resultado = await calcularRiesgoEmpleado(req.user.id, req.params.empleado);
     res.json(resultado);

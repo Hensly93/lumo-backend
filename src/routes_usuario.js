@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('./db');
 const multer = require('multer');
+const { auth } = require('./authMiddleware');
 
 // Helper: Log acción a audit_logs
 async function logAudit(usuarioId, accion, detalles = null, req = null) {
@@ -59,17 +60,6 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 2 * 1024 * 1024 }, // 2MB máx
 });
-
-function auth(req, res, next) {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Token requerido' });
-  try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
-  } catch {
-    res.status(401).json({ error: 'Token inválido' });
-  }
-}
 
 // ─── GET /api/usuario/perfil ──────────────────────────────────────────────────
 router.get('/perfil', auth, async (req, res) => {

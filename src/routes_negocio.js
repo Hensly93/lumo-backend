@@ -7,6 +7,7 @@ const XLSX = require('xlsx');
 const Anthropic = require('@anthropic-ai/sdk');
 const { actualizarBaselineNegocio, getBaselineNegocio } = require('./baseline_negocio');
 const { calculateWowMoment } = require('./wow_moment');
+const { auth } = require('./authMiddleware');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -14,17 +15,6 @@ const upload = multer({
 });
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-function auth(req, res, next) {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Token requerido' });
-  try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
-  } catch {
-    res.status(401).json({ error: 'Token inválido' });
-  }
-}
 
 // Validar que metodo_pago sea solo efectivo o mercado_pago
 function esMetodoPagoValido(metodo) {

@@ -3,24 +3,12 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const pool = require('./db');
 const { actualizarBaselineNegocio } = require('./baseline_negocio');
+const { authWithQuery } = require('./authMiddleware');
 
 const MP_AUTH_URL   = 'https://auth.mercadopago.com.ar/authorization';
 const MP_TOKEN_URL  = 'https://api.mercadopago.com/oauth/token';
 const MP_PAY_URL    = 'https://api.mercadopago.com/v1/payments/search';
 const MP_USERS_URL  = 'https://api.mercadopago.com/v1/users';
-
-// ─── Auth middleware ──────────────────────────────────────────────────────────
-// Acepta JWT en header Authorization O en query ?token= (necesario para redirect del browser)
-function authMiddleware(req, res, next) {
-  const token = req.headers.authorization?.split(' ')[1] || req.query.token;
-  if (!token) return res.status(401).json({ error: 'Token requerido' });
-  try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
-  } catch(e) {
-    res.status(401).json({ error: 'Token invalido' });
-  }
-}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -80,7 +68,7 @@ async function getAccessToken(usuarioId) {
 // ─── GET /api/mp/conectar ─────────────────────────────────────────────────────
 // El browser navega a esta URL con el JWT en ?token=
 // Genera state firmado (contiene userId) y redirige a MP.
-router.get('/conectar', authMiddleware, (req, res) => {
+router.get('/conectar', authWithQuery, (req, res) => {
   if (!process.env.MP_CLIENT_ID || !process.env.MP_REDIRECT_URI) {
     return res.status(500).json({ error: 'MP_CLIENT_ID y MP_REDIRECT_URI no configurados' });
   }
@@ -154,7 +142,7 @@ router.get('/callback', async (req, res) => {
 });
 
 // ─── GET /api/mp/estado ───────────────────────────────────────────────────────
-router.get('/estado', authMiddleware, async (req, res) => {
+router.get('/estado', authWithQuery, async (req, res) => {
   try {
     const result = await pool.query(
       'SELECT mp_email, mp_user_id, fecha_expiracion FROM integraciones_mp WHERE usuario_id=$1',
@@ -171,7 +159,7 @@ router.get('/estado', authMiddleware, async (req, res) => {
 
 // ─── GET /api/mp/importar ─────────────────────────────────────────────────────
 // Importa pagos aprobados de los últimos 18 meses con paginación automática.
-router.get('/importar', authMiddleware, async (req, res) => {
+router.get('/importar', authWithQuery, async (req, res) => {
   try {
     const accessToken = await getAccessToken(req.user.id);
     if (!accessToken) {
