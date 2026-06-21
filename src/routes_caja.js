@@ -244,7 +244,7 @@ router.get('/conteo-pendiente/:turno_id', async (req, res) => {
           title: 'Conteo de caja no respondido',
           body: `${t.nombre_empleado} no respondió el conteo aleatorio a tiempo`,
           url: '/dashboard',
-        }, pool).catch(() => {});
+        }, pool, 'conteos_perdidos').catch(() => {});
       }
     }
 
@@ -259,7 +259,7 @@ router.get('/conteo-pendiente/:turno_id', async (req, res) => {
           title: 'Conteo de caja no respondido',
           body: `${t.nombre_empleado} no respondió el segundo conteo aleatorio a tiempo`,
           url: '/dashboard',
-        }, pool).catch(() => {});
+        }, pool, 'conteos_perdidos').catch(() => {});
       }
     }
 
@@ -386,11 +386,14 @@ router.post('/cierre', async (req, res) => {
 
         if (hayBrecha) {
           // Fix 2+3: brecha detectada → push preguntando si fue gasto inesperado
+          // Determinar tipo de alerta según severidad
+          const tipoAlerta = estado === 'critico' ? 'alertas_criticas' : 'alertas_medias';
+
           await notificarUsuario(t.usuario_id, {
             title: `Brecha de $${Math.round(brechaAbs).toLocaleString('es-AR')} en el cierre`,
             body: `${t.nombre_empleado} · ${t.tipo_turno} · ERM: ${ermNivel} — ¿Fue un gasto inesperado?`,
             url: `/dashboard?turno_id=${turno_id}&accion=gasto`,
-          }, pool);
+          }, pool, tipoAlerta);
         } else {
           // Fix 2: turno limpio → push positivo
           await notificarUsuario(t.usuario_id, {

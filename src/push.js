@@ -16,8 +16,33 @@ function ensureVapid() {
   vapidConfigured = true;
 }
 
-async function notificarUsuario(usuarioId, payload, db) {
+async function notificarUsuario(usuarioId, payload, db, tipo = null) {
+  // Si tipo especificado, verificar preferencias ANTES de buscar suscripciones
+  if (tipo) {
+    const prefRes = await db.query(
+      'SELECT notificaciones_config FROM usuarios WHERE id = $1',
+      [usuarioId]
+    );
+    const config = prefRes.rows[0]?.notificaciones_config || {};
+
+    // Defaults si no existe la key (mismo que frontend)
+    const defaults = {
+      alertas_criticas: true,
+      alertas_medias: true,
+      conteos_perdidos: true,
+      resumen_diario: false,
+    };
+
+    const enabled = config[tipo] ?? defaults[tipo];
+
+    // Si está desactivado, salir sin enviar
+    if (!enabled) {
+      return;
+    }
+  }
+
   ensureVapid();
+
   const subsRes = await db.query(
     'SELECT * FROM push_subscriptions WHERE usuario_id = $1',
     [usuarioId]
