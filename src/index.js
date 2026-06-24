@@ -92,6 +92,14 @@ try {
 }
 
 try {
+  const sociosRoutes = require("./routes_socios");
+  app.use("/api/socios", sociosRoutes);
+  console.log("Socios OK");
+} catch(e) {
+  console.error("Socios ERROR:", e.message);
+}
+
+try {
   const { triggerManual } = require("./job_nocturno");
   app.post("/api/job/trigger", async (req, res) => {
     if (req.headers['x-internal-key'] !== process.env.INTERNAL_KEY) {
