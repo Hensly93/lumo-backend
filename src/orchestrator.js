@@ -67,7 +67,7 @@ function calcularContextoScore(erm, cusum) {
 // ─── Orquestador ─────────────────────────────────────────────────────────────
 //
 // Parámetros:
-//   negocio_id   — usuario_id del dueño del negocio
+//   negocio_id   — id del negocio
 //   uid          — nombre del empleado activo (string). null → ERM omitido.
 //   turno_actual — turno_id del turno cerrado. null → cruce_variables omitido.
 //
@@ -85,7 +85,7 @@ async function orchestrate({ negocio_id, uid = null, turno_actual = null }) {
   let agregados = [];
   try {
     const txRes = await pool.query(
-      'SELECT * FROM transacciones WHERE usuario_id = $1 ORDER BY fecha ASC',
+      'SELECT * FROM transacciones WHERE negocio_id = $1 ORDER BY fecha ASC',
       [negocio_id]
     );
     agregados = agregarPorTurno(txRes.rows);
