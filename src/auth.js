@@ -27,8 +27,8 @@ router.post("/register", async (req, res) => {
     // 1. Crear usuario
     const hash = await bcrypt.hash(password, 10);
     const userResult = await client.query(
-      "INSERT INTO usuarios(nombre,email,password) VALUES($1,$2,$3) RETURNING id,nombre,email,onboarding_done",
-      [nombre, email, hash]
+      "INSERT INTO usuarios(nombre,email,password,negocio) VALUES($1,$2,$3,$4) RETURNING id,nombre,email,onboarding_done",
+      [nombre, email, hash, negocio]
     );
     const usuario = userResult.rows[0];
 
