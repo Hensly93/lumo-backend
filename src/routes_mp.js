@@ -136,7 +136,9 @@ router.get('/callback', async (req, res) => {
       [negocioId, tokens.access_token, tokens.refresh_token || null, tokens.user_id, mpUser.email || null, expira]
     );
 
-    res.redirect(`${FRONTEND}?mp_conectado=true`);
+    await pool.query('UPDATE usuarios SET onboarding_done=true WHERE id=$1', [userId]);
+
+    res.redirect(`${FRONTEND}/onboarding?mp_conectado=true`);
   } catch(e) {
     console.error('MP callback error:', e.message);
     res.redirect(`${FRONTEND}?mp_error=server_error`);
