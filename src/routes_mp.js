@@ -8,7 +8,7 @@ const { authWithQuery } = require('./authMiddleware');
 const MP_AUTH_URL   = 'https://auth.mercadopago.com.ar/authorization';
 const MP_TOKEN_URL  = 'https://api.mercadopago.com/oauth/token';
 const MP_PAY_URL    = 'https://api.mercadopago.com/v1/payments/search';
-const MP_USERS_URL  = 'https://api.mercadopago.com/v1/users';
+const MP_USERS_URL  = 'https://api.mercadopago.com/users';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -121,7 +121,7 @@ router.get('/callback', async (req, res) => {
     }
 
     // Obtener email del usuario de MP
-    const userResp = await fetch(`${MP_USERS_URL}/me`, {
+    const userResp = await fetch(`${MP_USERS_URL}/${tokens.user_id}`, {
       headers: { Authorization: `Bearer ${tokens.access_token}` },
     });
     const mpUser = await userResp.json();
