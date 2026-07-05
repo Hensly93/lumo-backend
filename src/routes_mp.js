@@ -121,7 +121,7 @@ router.get('/callback', async (req, res) => {
     }
 
     // Obtener email del usuario de MP
-    const userResp = await fetch(`${MP_USERS_URL}/${tokens.user_id}`, {
+    const userResp = await fetch(`${MP_USERS_URL}/me`, {
       headers: { Authorization: `Bearer ${tokens.access_token}` },
     });
     const mpUser = await userResp.json();
