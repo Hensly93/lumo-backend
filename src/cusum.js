@@ -29,7 +29,7 @@ async function calcularCUSUM(usuarioId, tipoTurno, metrica = 'brecha', sucursalI
        brecha as valor,
        hora_apertura
      FROM turnos_caja
-     WHERE usuario_id=$1 AND tipo_turno=$2
+     WHERE negocio_id=$1 AND tipo_turno=$2
        AND estado='cerrado' AND brecha IS NOT NULL
        AND hora_apertura >= NOW() - INTERVAL '${VENTANA_DIAS} days'
        AND ($3::integer IS NULL OR sucursal_id = $3)
@@ -103,10 +103,10 @@ async function calcularCUSUM(usuarioId, tipoTurno, metrica = 'brecha', sucursalI
 
 // ─── CUSUM para todos los turnos del usuario ──────────────────────────────────
 
-async function calcularCUSUMCompleto(usuarioId, sucursalId = null) {
+async function calcularCUSUMCompleto(negocioId, sucursalId = null) {
   const TURNOS = ['MANANA', 'TARDE', 'NOCHE'];
   const resultados = await Promise.all(
-    TURNOS.map(t => calcularCUSUM(usuarioId, t, 'brecha', sucursalId).catch(() => ({ disponible: false, turno: t })))
+    TURNOS.map(t => calcularCUSUM(negocioId, t, 'brecha', sucursalId).catch(() => ({ disponible: false, turno: t })))
   );
 
   const alertas = resultados
@@ -124,10 +124,10 @@ async function calcularCUSUMCompleto(usuarioId, sucursalId = null) {
 // Cuando un cambio es confirmado como real (feedback TP),
 // recalcula el baseline con alpha-blending para incorporar el nuevo nivel.
 
-async function resetBaselinePorCambioConfirmado(usuarioId) {
+async function resetBaselinePorCambioConfirmado(negocioId) {
   const txRes = await pool.query(
-    'SELECT * FROM transacciones WHERE usuario_id=$1 ORDER BY fecha ASC',
-    [usuarioId]
+    'SELECT * FROM transacciones WHERE negocio_id=$1 ORDER BY fecha ASC',
+    [negocioId]
   );
 
   if (txRes.rows.length < 10) return { ok: false, motivo: 'insuficientes_transacciones' };
@@ -177,11 +177,11 @@ async function resetBaselinePorCambioConfirmado(usuarioId) {
 
   for (const [metrica, valor] of actualizaciones) {
     await pool.query(
-      `INSERT INTO baseline_negocio(usuario_id, metrica, valor, total_transacciones, dia_semana, updated_at)
-       VALUES($1,$2,$3,$4,7,NOW())
-       ON CONFLICT (usuario_id, metrica, dia_semana) DO UPDATE
+      `INSERT INTO baseline_negocio(negocio_id, sucursal_id, metrica, valor, total_transacciones, dia_semana, updated_at)
+       VALUES($1,NULL,$2,$3,$4,7,NOW())
+       ON CONFLICT (negocio_id, COALESCE(sucursal_id, 0), metrica, dia_semana) DO UPDATE
        SET valor=EXCLUDED.valor, total_transacciones=EXCLUDED.total_transacciones, updated_at=NOW()`,
-      [usuarioId, metrica, Math.round(valor * 100) / 100, txRes.rows.length]
+      [negocioId, metrica, Math.round(valor * 100) / 100, txRes.rows.length]
     );
   }
 

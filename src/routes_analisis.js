@@ -262,7 +262,7 @@ router.post('/alertas/feedback', auth, async (req, res) => {
     // 3. Si es TP confirmado → Baseline Reset Protocol (P8)
     let reset = null;
     if (confirmada) {
-      reset = await resetBaselinePorCambioConfirmado(req.user.id).catch(() => null);
+      reset = await resetBaselinePorCambioConfirmado(req.user.negocio_id).catch(() => null);
     }
     res.json({ ok: true, ewta, reset });
   } catch(e) {
