@@ -27,24 +27,24 @@ const PESO = {
 // Clave única: usuario + tipo_alerta + contexto
 // Si la misma alerta ya se emitió en las últimas 24h → suprimir
 
-async function yaEmitidaHoy(usuarioId, tipoAlerta, contexto = '') {
+async function yaEmitidaHoy(negocioId, tipoAlerta, contexto = '') {
   const res = await pool.query(
     `SELECT id FROM alertas_gestionadas
-     WHERE usuario_id=$1 AND tipo_alerta=$2 AND contexto=$3
+     WHERE negocio_id=$1 AND tipo_alerta=$2 AND contexto=$3
        AND created_at >= NOW() - INTERVAL '24 hours'
      LIMIT 1`,
-    [usuarioId, tipoAlerta, contexto]
+    [negocioId, tipoAlerta, contexto]
   );
   return res.rows.length > 0;
 }
 
-async function registrarAlerta(usuarioId, alerta) {
+async function registrarAlerta(negocioId, alerta) {
   await pool.query(
-    `INSERT INTO alertas_gestionadas(usuario_id, tipo_alerta, contexto, prioridad, mensaje, accion, datos)
+    `INSERT INTO alertas_gestionadas(negocio_id, tipo_alerta, contexto, prioridad, mensaje, accion, datos)
      VALUES($1,$2,$3,$4,$5,$6,$7)
      ON CONFLICT DO NOTHING`,
     [
-      usuarioId,
+      negocioId,
       alerta.tipo,
       alerta.contexto || '',
       alerta.prioridad,
@@ -57,14 +57,14 @@ async function registrarAlerta(usuarioId, alerta) {
 
 // ─── Cap diario ───────────────────────────────────────────────────────────────
 
-async function cantidadAlertasHoy(usuarioId) {
+async function cantidadAlertasHoy(negocioId) {
   const res = await pool.query(
     `SELECT
        COUNT(*) as total,
        COUNT(*) FILTER (WHERE prioridad IN ('critico','inconsistencia')) as fuertes
      FROM alertas_gestionadas
-     WHERE usuario_id=$1 AND created_at >= NOW() - INTERVAL '24 hours'`,
-    [usuarioId]
+     WHERE negocio_id=$1 AND created_at >= NOW() - INTERVAL '24 hours'`,
+    [negocioId]
   );
   return {
     total: parseInt(res.rows[0].total),
@@ -76,10 +76,10 @@ async function cantidadAlertasHoy(usuarioId) {
 // Toma todas las alertas candidatas de todos los motores,
 // aplica filtros y devuelve las que deben mostrarse.
 
-async function gestionarAlertas(usuarioId, alertasCandidatas) {
+async function gestionarAlertas(negocioId, alertasCandidatas) {
   if (!alertasCandidatas || alertasCandidatas.length === 0) return { alertas: [], suprimidas: 0 };
 
-  const caps = await cantidadAlertasHoy(usuarioId);
+  const caps = await cantidadAlertasHoy(negocioId);
   const CAP_FUERTES = 2;
   const CAP_TOTAL   = 5;
 
@@ -111,7 +111,7 @@ async function gestionarAlertas(usuarioId, alertasCandidatas) {
     }
 
     // Deduplicación
-    const duplicada = await yaEmitidaHoy(usuarioId, alerta.tipo, contexto).catch(() => false);
+    const duplicada = await yaEmitidaHoy(negocioId, alerta.tipo, contexto).catch(() => false);
     if (duplicada && !esExcepcion) {
       suprimidas.push({ ...alerta, motivo_supresion: 'duplicada_24h' });
       continue;
@@ -126,7 +126,7 @@ async function gestionarAlertas(usuarioId, alertasCandidatas) {
     });
 
     // Registrar en DB para control de caps
-    await registrarAlerta(usuarioId, { ...alerta, contexto }).catch(() => {});
+    await registrarAlerta(negocioId, { ...alerta, contexto }).catch(() => {});
 
     if (esFuerte) fuertesEmitidas++;
     totalEmitidas++;

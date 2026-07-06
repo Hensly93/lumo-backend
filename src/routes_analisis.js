@@ -19,7 +19,7 @@ const { auth } = require('./authMiddleware');
 router.get('/analisis', auth, async (req, res) => {
   try {
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
-    const resultado = await analizarNegocio(req.user.id, sucursalId);
+    const resultado = await analizarNegocio(req.user.negocio_id, sucursalId);
     res.json(resultado);
   } catch(e) {
     res.status(500).json({ error: e.message });
@@ -310,8 +310,8 @@ router.get('/ventas-diarias', auth, async (req, res) => {
 router.get('/alertas', auth, async (req, res) => {
   try {
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
-    const analisis = await analizarNegocio(req.user.id, sucursalId);
-    const resultado = await gestionarAlertas(req.user.id, analisis.señales || []);
+    const analisis = await analizarNegocio(req.user.negocio_id, sucursalId);
+    const resultado = await gestionarAlertas(req.user.negocio_id, analisis.señales || []);
     res.json({ ...resultado, cusum: analisis.cusum });
   } catch(e) {
     res.status(500).json({ error: e.message });
