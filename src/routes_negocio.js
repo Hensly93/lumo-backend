@@ -96,6 +96,12 @@ MUY IMPORTANTE:
 - Si no encuentras transacciones claras, devolvé []`;
 
 async function parsearConClaude(content) {
+  // Debug: verificar que ANTHROPIC_API_KEY existe en runtime
+  console.log('[parsearConClaude] ANTHROPIC_API_KEY en runtime:',
+    process.env.ANTHROPIC_API_KEY ?
+    'existe, longitud: ' + process.env.ANTHROPIC_API_KEY.length :
+    'undefined');
+
   // Crear cliente Anthropic en runtime para capturar API key correctamente
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -472,6 +478,12 @@ Devolvé SOLO un JSON con este formato exacto:
 }
 
 IMPORTANTE: Devolvé SOLO el JSON, sin markdown ni texto adicional.`;
+
+    // Debug: verificar que ANTHROPIC_API_KEY existe en runtime
+    console.log('[wow-moment-ai] ANTHROPIC_API_KEY en runtime:',
+      process.env.ANTHROPIC_API_KEY ?
+      'existe, longitud: ' + process.env.ANTHROPIC_API_KEY.length :
+      'undefined');
 
     // Crear cliente Anthropic en runtime para capturar API key correctamente
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
