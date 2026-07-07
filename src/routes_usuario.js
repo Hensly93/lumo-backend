@@ -343,7 +343,7 @@ router.delete('/me', auth, async (req, res) => {
   const client = await pool.connect();
   try {
     const usuarioId = req.user.id;
-    const { password } = req.body;
+    const { password } = req.body || {};
 
     if (!password) {
       return res.status(400).json({
@@ -438,29 +438,29 @@ router.delete('/me', auth, async (req, res) => {
     restorationDate.setDate(restorationDate.getDate() + 30);
 
     await client.query(
-      `INSERT INTO deleted_accounts(usuario_id, email, deletion_scheduled_at, restoration_available_until, reason)
-       VALUES($1, $2, NOW(), $3, $4)`,
+      `INSERT INTO deleted_accounts(usuario_id, email, restoration_available_until, reason)
+       VALUES($1, $2, $3, $4)`,
       [usuarioId, userData.email, restorationDate, 'user_requested']
     );
 
-    // PASO 4: Eliminar datos en cascada (respeta ON DELETE CASCADE pero también limpia algunas tablas)
-    // Tablas con FK a usuarios y ON DELETE CASCADE se eliminarán automáticamente
+    // PASO 4: Borrar todos los negocios donde el usuario es owner
+    // (CASCADE borrará automáticamente todo lo asociado a esos negocios)
+    const rolesResult = await client.query(
+      `SELECT rol, negocio_id FROM negocio_usuarios WHERE usuario_id=$1 AND activo=true`,
+      [usuarioId]
+    );
 
-    // Tablas que podría haber sin ON DELETE CASCADE (las borramos explícitamente):
-    await client.query(`DELETE FROM transacciones WHERE usuario_id=$1`, [usuarioId]);
-    await client.query(`DELETE FROM empleados_negocio WHERE usuario_id=$1`, [usuarioId]);
-    await client.query(`DELETE FROM baseline_negocio WHERE usuario_id=$1`, [usuarioId]);
-    await client.query(`DELETE FROM productos WHERE usuario_id=$1`, [usuarioId]);
-    await client.query(`DELETE FROM integraciones_mp WHERE usuario_id=$1`, [usuarioId]);
-    await client.query(`DELETE FROM mis_sucursales WHERE usuario_id=$1`, [usuarioId]);
-    await client.query(`DELETE FROM turnos_caja WHERE usuario_id=$1`, [usuarioId]);
-    await client.query(`DELETE FROM conteos_caja WHERE usuario_id IN (SELECT id FROM turnos_caja WHERE usuario_id=$1)`, [usuarioId]);
-    await client.query(`DELETE FROM egresos_caja WHERE usuario_id=$1`, [usuarioId]);
-    await client.query(`DELETE FROM alertas WHERE usuario_id=$1`, [usuarioId]);
-    await client.query(`DELETE FROM predicciones_negocio WHERE usuario_id=$1`, [usuarioId]);
-    await client.query(`DELETE FROM historial_predicciones WHERE prediccion_id IN (SELECT id FROM predicciones_negocio WHERE usuario_id=$1)`, [usuarioId]);
+    for (const row of rolesResult.rows) {
+      const { rol, negocio_id: negocioId } = row;
 
-    // PASO 5: FINALMENTE, borrar el usuario
+      if (rol === 'owner') {
+        await client.query(`DELETE FROM negocios WHERE id=$1`, [negocioId]);
+      }
+    }
+
+    // PASO 5: Borrar el usuario
+    // Las FK con ON DELETE SET NULL (transacciones, baseline_negocio, turnos_caja, etc.)
+    // automáticamente pondrán usuario_id=NULL en negocios compartidos donde era socio
     await client.query(`DELETE FROM usuarios WHERE id=$1`, [usuarioId]);
 
     await client.query('COMMIT');
