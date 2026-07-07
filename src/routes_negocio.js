@@ -379,6 +379,9 @@ router.get('/wow-moment', auth, async (req, res) => {
 // WOW MOMENT con Claude: análisis narrativo de inconsistencias
 router.get('/wow-moment-ai', auth, async (req, res) => {
   try {
+    // Debug: verificar API key en el momento de la llamada
+    console.log('[wow-moment-ai] API Key status:', process.env.ANTHROPIC_API_KEY ? 'PRESENT' : 'MISSING');
+
     const { negocio_id, id: usuario_id } = req.user;
 
     // Obtener datos últimos 14 días
