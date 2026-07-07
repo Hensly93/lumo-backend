@@ -1,4 +1,15 @@
 require("dotenv").config();
+
+// Debug: listar TODAS las variables de entorno que contengan "ANTHROPIC"
+console.log('=== DEBUG: Variables de entorno con ANTHROPIC al arrancar el servidor ===');
+const anthropicVars = Object.keys(process.env).filter(k => k.toUpperCase().includes('ANTHROPIC'));
+if (anthropicVars.length === 0) {
+  console.log('❌ NO se encontró ninguna variable que contenga "ANTHROPIC"');
+} else {
+  anthropicVars.forEach(k => console.log('Variable encontrada:', JSON.stringify(k)));
+}
+console.log('=== FIN DEBUG ===');
+
 const express = require("express");
 const cors = require("cors");
 const app = express();
