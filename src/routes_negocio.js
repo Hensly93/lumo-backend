@@ -14,6 +14,14 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 }, // 20MB máx
 });
 
+// Debug: log API key status at module load
+if (!process.env.ANTHROPIC_API_KEY) {
+  console.warn('⚠️  ANTHROPIC_API_KEY no está definida al cargar routes_negocio.js');
+} else {
+  const keyPreview = process.env.ANTHROPIC_API_KEY.substring(0, 25) + '...';
+  console.log('✓ ANTHROPIC_API_KEY cargada:', keyPreview);
+}
+
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 // Validar que metodo_pago sea solo efectivo o mercado_pago
@@ -364,6 +372,133 @@ router.get('/wow-moment', auth, async (req, res) => {
   } catch (e) {
     console.error('wow-moment error:', e.message);
     res.status(500).json({ error: 'Error calculando patrones: ' + e.message });
+  }
+});
+
+// ─── GET /api/negocio/wow-moment-ai ───────────────────────────────────────────
+// WOW MOMENT con Claude: análisis narrativo de inconsistencias
+router.get('/wow-moment-ai', auth, async (req, res) => {
+  try {
+    const { negocio_id, id: usuario_id } = req.user;
+
+    // Obtener datos últimos 14 días
+    const txRes = await pool.query(
+      `SELECT fecha, monto, metodo_pago, empleado, turno
+       FROM transacciones
+       WHERE negocio_id=$1 AND fecha >= NOW() - INTERVAL '14 days'
+       ORDER BY fecha ASC`,
+      [negocio_id]
+    );
+
+    if (txRes.rows.length < 10) {
+      return res.json({
+        error: 'Necesitas al menos 10 transacciones en los últimos 14 días'
+      });
+    }
+
+    // Preparar resumen por día
+    const porDia = {};
+    txRes.rows.forEach(tx => {
+      const fecha = tx.fecha.toISOString().split('T')[0];
+      if (!porDia[fecha]) {
+        porDia[fecha] = {
+          total: 0,
+          efectivo: 0,
+          mp: 0,
+          num_tx: 0,
+          empleados: new Set(),
+          turnos: new Set()
+        };
+      }
+      porDia[fecha].total += parseFloat(tx.monto);
+      porDia[fecha].num_tx++;
+      if (tx.metodo_pago === 'efectivo') porDia[fecha].efectivo += parseFloat(tx.monto);
+      if (tx.metodo_pago === 'mercado_pago') porDia[fecha].mp += parseFloat(tx.monto);
+      if (tx.empleado) porDia[fecha].empleados.add(tx.empleado);
+      if (tx.turno) porDia[fecha].turnos.add(tx.turno);
+    });
+
+    // Convertir a array y calcular promedios
+    const dias = Object.entries(porDia).map(([fecha, d]) => ({
+      fecha,
+      total: Math.round(d.total),
+      efectivo: Math.round(d.efectivo),
+      mp: Math.round(d.mp),
+      ratio_efectivo: d.total > 0 ? Math.round((d.efectivo / d.total) * 100) : 0,
+      num_tx: d.num_tx,
+      empleados: Array.from(d.empleados),
+      turnos: Array.from(d.turnos)
+    }));
+
+    const promedio = Math.round(dias.reduce((sum, d) => sum + d.total, 0) / dias.length);
+    const promedioRatio = Math.round(dias.reduce((sum, d) => sum + d.ratio_efectivo, 0) / dias.length);
+
+    // Llamada a Claude
+    const prompt = `Sos un analista de negocios experto en detectar inconsistencias operativas en comercios.
+
+Tenés los datos de ventas de un negocio de los últimos ${dias.length} días:
+
+DATOS DIARIOS:
+${dias.map(d => `${d.fecha}: $${d.total} (${d.num_tx} tx, ${d.ratio_efectivo}% efectivo, empleados: ${d.empleados.join(', ')})`).join('\n')}
+
+PROMEDIOS:
+- Venta diaria promedio: $${promedio}
+- Ratio efectivo promedio: ${promedioRatio}%
+
+Tu tarea: detectar el día o patrón MÁS SOSPECHOSO y generar un análisis conciso.
+
+Devolvé SOLO un JSON con este formato exacto:
+{
+  "headline": "Una frase impactante que resuma la inconsistencia más grave (ej: Pedro vendió 60% menos el martes y solo cobró efectivo)",
+  "mejor_dia": { "fecha": "YYYY-MM-DD", "motivo": "Por qué fue el mejor" },
+  "peor_dia": { "fecha": "YYYY-MM-DD", "motivo": "Por qué fue el peor o más sospechoso" },
+  "inconsistencias": [
+    {
+      "tipo": "ventas_bajas | ratio_efectivo | empleado_nuevo | etc",
+      "descripcion": "Descripción clara y concisa de la anomalía",
+      "fecha": "YYYY-MM-DD o rango",
+      "empleado": "nombre si es relevante"
+    }
+  ],
+  "impacto_economico": "Frase que cuantifique la pérdida estimada en pesos (ej: Perdiste aproximadamente $15,000 en ese turno anómalo)",
+  "recomendacion": "Una acción concreta que el dueño debería tomar YA"
+}
+
+IMPORTANTE: Devolvé SOLO el JSON, sin markdown ni texto adicional.`;
+
+    const msg = await anthropic.messages.create({
+      model: 'claude-sonnet-4-5',
+      max_tokens: 2048,
+      messages: [{ role: 'user', content: prompt }],
+    });
+
+    const text = msg.content[0].type === 'text' ? msg.content[0].text : '';
+    const match = text.match(/\{[\s\S]*\}/);
+
+    if (!match) {
+      throw new Error('Claude no devolvió JSON válido');
+    }
+
+    const analisis = JSON.parse(match[0]);
+
+    res.json({
+      success: true,
+      analisis,
+      datos_base: {
+        dias_analizados: dias.length,
+        promedio_diario: promedio,
+        ratio_efectivo_promedio: promedioRatio
+      },
+      costo_api: {
+        modelo: 'claude-sonnet-4-5',
+        tokens_input: msg.usage.input_tokens,
+        tokens_output: msg.usage.output_tokens
+      }
+    });
+
+  } catch (e) {
+    console.error('wow-moment-ai error:', e.message);
+    res.status(500).json({ error: 'Error generando análisis: ' + e.message });
   }
 });
 
