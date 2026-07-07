@@ -22,7 +22,8 @@ if (!process.env.ANTHROPIC_API_KEY) {
   console.log('✓ ANTHROPIC_API_KEY cargada:', keyPreview);
 }
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// NOTA: No crear cliente Anthropic aquí a nivel módulo
+// Se crea dentro de cada función que lo necesita para capturar la key en runtime
 
 // Validar que metodo_pago sea solo efectivo o mercado_pago
 function esMetodoPagoValido(metodo) {
@@ -95,6 +96,9 @@ MUY IMPORTANTE:
 - Si no encuentras transacciones claras, devolvé []`;
 
 async function parsearConClaude(content) {
+  // Crear cliente Anthropic en runtime para capturar API key correctamente
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
   const msg = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 8192,
@@ -468,6 +472,9 @@ Devolvé SOLO un JSON con este formato exacto:
 }
 
 IMPORTANTE: Devolvé SOLO el JSON, sin markdown ni texto adicional.`;
+
+    // Crear cliente Anthropic en runtime para capturar API key correctamente
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
     const msg = await anthropic.messages.create({
       model: 'claude-sonnet-4-5',
