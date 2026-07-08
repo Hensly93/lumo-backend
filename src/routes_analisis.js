@@ -464,6 +464,7 @@ Predicción: ${predStr}`;
     }
 
     const data = await response.json();
+    console.log('DEBUG_NICOLE_CONTENT:', JSON.stringify(data.content));
     const respuesta = data.content?.[0]?.text?.trim() ?? 'No pude generar una respuesta. Intentá de nuevo.';
     res.json({ respuesta });
   } catch(e) {
