@@ -68,7 +68,6 @@ async function llamarClaude(userPrompt) {
     body: JSON.stringify({
       model: 'claude-sonnet-5',
       max_tokens: 300,
-      temperature: 0.7,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userPrompt }],
     }),

@@ -453,7 +453,6 @@ Predicción: ${predStr}`;
       body: JSON.stringify({
         model: 'claude-sonnet-5',
         max_tokens: 400,
-        temperature: 0.7,
         system: systemPrompt,
         messages,
       }),
