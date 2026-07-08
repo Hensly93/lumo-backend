@@ -525,3 +525,12 @@ router.get('/erm/:empleado', auth, async (req, res) => {
 });
 
 module.exports = router;
+
+router.get('/debug/schema/:tabla', auth, async (req, res) => {
+  const result = await pool.query(
+    `SELECT column_name, data_type FROM information_schema.columns
+     WHERE table_name=$1 ORDER BY ordinal_position`,
+    [req.params.tabla]
+  );
+  res.json(result.rows);
+});
