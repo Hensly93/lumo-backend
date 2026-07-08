@@ -464,8 +464,7 @@ Predicción: ${predStr}`;
     }
 
     const data = await response.json();
-    console.log('DEBUG_NICOLE_CONTENT:', JSON.stringify(data.content));
-    const respuesta = data.content?.[0]?.text?.trim() ?? 'No pude generar una respuesta. Intentá de nuevo.';
+    const respuesta = data.content?.find(b => b.type === 'text')?.text?.trim() ?? 'No pude generar una respuesta. Intentá de nuevo.';
     res.json({ respuesta });
   } catch(e) {
     res.status(500).json({ error: e.message });

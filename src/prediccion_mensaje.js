@@ -79,7 +79,7 @@ async function llamarClaude(userPrompt) {
   }
 
   const data = await response.json();
-  return data.content?.[0]?.text?.trim() ?? null;
+  return data.content?.find(b => b.type === 'text')?.text?.trim() ?? null;
 }
 
 // ─── Función principal ────────────────────────────────────────────────────────
