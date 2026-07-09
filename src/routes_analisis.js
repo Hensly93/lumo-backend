@@ -534,3 +534,14 @@ router.get('/debug/schema/:tabla', auth, async (req, res) => {
   );
   res.json(result.rows);
 });
+
+router.get('/debug/datos-alertas', auth, async (req, res) => {
+  const result = await pool.query(
+    `SELECT id, tipo_alerta, contexto, datos, feedback_confirmada
+     FROM alertas_gestionadas
+     WHERE negocio_id=$1
+     ORDER BY created_at DESC LIMIT 10`,
+    [req.user.negocio_id]
+  );
+  res.json(result.rows);
+});
