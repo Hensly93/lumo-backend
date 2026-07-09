@@ -11,6 +11,7 @@
 const pool = require('./db');
 const { calcularPrediccion } = require('./prediccion_adaptativa');
 const { notificarUsuario } = require('./push');
+const { calcularRiesgoAjustado } = require('./erm');
 
 // ─── Paso 1: Agregar datos del día a agregados_zona ───────────────────────────
 
@@ -218,6 +219,102 @@ async function recordatorioPreciosCatalogo(db) {
   return { paso: 'recordatorio_precios_catalogo', enviados };
 }
 
+// ─── Paso 5: Snapshots ERM diarios + notificaciones de riesgo ─────────────────
+
+async function snapshotsERM(db) {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const ayer = new Date();
+  ayer.setDate(ayer.getDate() - 1);
+  const ayerStr = ayer.toISOString().slice(0, 10);
+
+  // Todos los negocios activos
+  const negociosRes = await db.query(`
+    SELECT id FROM negocios WHERE deletion_scheduled_at IS NULL
+  `);
+
+  let snapshotsCreados = 0;
+  let notificacionesEnviadas = 0;
+
+  for (const { id: negocio_id } of negociosRes.rows) {
+    // Empleados distintos con turnos en los últimos 30 días para este negocio
+    const empleadosRes = await db.query(`
+      SELECT DISTINCT nombre_empleado
+      FROM turnos_caja
+      WHERE negocio_id=$1 AND estado='cerrado'
+        AND hora_apertura >= NOW() - INTERVAL '30 days'
+    `, [negocio_id]);
+
+    for (const { nombre_empleado } of empleadosRes.rows) {
+      try {
+        const resultado = await calcularRiesgoAjustado(negocio_id, nombre_empleado);
+
+        if (resultado.ajustado === null) continue;
+
+        // Buscar snapshot de ayer
+        const ayerRes = await db.query(`
+          SELECT nivel FROM erm_historico
+          WHERE negocio_id=$1 AND empleado=$2 AND fecha=$3
+        `, [negocio_id, nombre_empleado, ayerStr]);
+
+        const nivelAyer = ayerRes.rows.length > 0 ? ayerRes.rows[0].nivel : null;
+
+        // Insertar/actualizar snapshot de hoy
+        await db.query(`
+          INSERT INTO erm_historico(
+            negocio_id, sucursal_id, empleado, fecha,
+            risk_score_bruto, factor_aplicado, risk_score_ajustado,
+            nivel, senales, turnos_analizados
+          ) VALUES($1,NULL,$2,$3,$4,$5,$6,$7,$8,$9)
+          ON CONFLICT (negocio_id, empleado, fecha)
+          DO UPDATE SET
+            risk_score_bruto=$4, factor_aplicado=$5, risk_score_ajustado=$6,
+            nivel=$7, senales=$8, turnos_analizados=$9
+        `, [
+          negocio_id,
+          nombre_empleado,
+          hoy,
+          resultado.bruto.score,
+          resultado.factor,
+          resultado.ajustado,
+          resultado.nivel,
+          JSON.stringify(resultado.señales),
+          resultado.bruto.detalle?.n_turnos || 0
+        ]);
+
+        snapshotsCreados++;
+
+        // Notificación: si ayer NO era rojo y hoy SÍ es rojo
+        if (nivelAyer !== 'rojo' && resultado.nivel === 'rojo') {
+          // Buscar usuario_id del negocio (owner o primer socio activo)
+          const usuarioRes = await db.query(`
+            SELECT usuario_id FROM negocio_usuarios
+            WHERE negocio_id=$1 AND activo=true
+            ORDER BY created_at ASC LIMIT 1
+          `, [negocio_id]);
+
+          if (usuarioRes.rows.length > 0) {
+            const usuario_id = usuarioRes.rows[0].usuario_id;
+            await notificarUsuario(usuario_id, {
+              title: 'Alerta ERM',
+              body: 'Un empleado mostró un patrón de riesgo elevado. Tocá para ver el detalle.',
+              url: '/erm',
+            }, db).catch(() => {});
+            notificacionesEnviadas++;
+          }
+        }
+      } catch (e) {
+        console.error(`[SNAPSHOT ERM] Error con ${nombre_empleado} (negocio ${negocio_id}):`, e.message);
+      }
+    }
+  }
+
+  return {
+    paso: 'snapshots_erm',
+    snapshots_creados: snapshotsCreados,
+    notificaciones_enviadas: notificacionesEnviadas,
+  };
+}
+
 // ─── Flujo principal ──────────────────────────────────────────────────────────
 
 async function runJobNocturno(db = pool) {
@@ -230,6 +327,7 @@ async function runJobNocturno(db = pool) {
     pasos.push(await calcularPredicciones(db));
     pasos.push(await compararConRealidad(db));
     pasos.push(await recordatorioPreciosCatalogo(db));
+    pasos.push(await snapshotsERM(db));
   } catch (e) {
     console.error('[JOB NOCTURNO] Error fatal:', e.message);
     return { ok: false, error: e.message, pasos };

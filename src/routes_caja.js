@@ -381,7 +381,7 @@ router.post('/cierre', async (req, res) => {
     // Fix 1+2+3: ERM + push al dueño (fire-and-forget, no bloquea la respuesta)
     setImmediate(async () => {
       try {
-        const erm = await calcularRiesgoEmpleado(t.usuario_id, t.nombre_empleado).catch(() => null);
+        const erm = await calcularRiesgoEmpleado(t.negocio_id, t.nombre_empleado).catch(() => null);
         const ermNivel = erm?.nivel ?? 'sin_datos';
 
         if (hayBrecha) {
@@ -463,12 +463,13 @@ router.get('/contexto-turno/:turno_id', async (req, res) => {
   }
 });
 
-// GET /api/caja/ranking/:usuario_id/:tipo_turno — ranking empleados dentro del mismo turno
-router.get('/ranking/:usuario_id/:tipo_turno', async (req, res) => {
+// GET /api/caja/ranking/:tipo_turno — ranking empleados dentro del mismo turno
+router.get('/ranking/:tipo_turno', auth, async (req, res) => {
   try {
-    const { usuario_id, tipo_turno } = req.params;
+    const { tipo_turno } = req.params;
     const dias = parseInt(req.query.dias) || 30;
-    const resultado = await rankingEmpleadosTurno(parseInt(usuario_id), tipo_turno, dias);
+    const negocio_id = req.user.negocio_id;
+    const resultado = await rankingEmpleadosTurno(negocio_id, tipo_turno, dias);
     if (!resultado) return res.json({ mensaje: 'Menos de 2 empleados con datos suficientes' });
     res.json(resultado);
   } catch (e) {
@@ -476,22 +477,24 @@ router.get('/ranking/:usuario_id/:tipo_turno', async (req, res) => {
   }
 });
 
-// GET /api/caja/contexto-activo/:usuario_id/:tipo_turno — contexto del turno en curso
-router.get('/contexto-activo/:usuario_id/:tipo_turno', async (req, res) => {
+// GET /api/caja/contexto-activo/:tipo_turno — contexto del turno en curso
+router.get('/contexto-activo/:tipo_turno', auth, async (req, res) => {
   try {
-    const { usuario_id, tipo_turno } = req.params;
-    const resultado = await contextTurnoActivo(parseInt(usuario_id), tipo_turno);
+    const { tipo_turno } = req.params;
+    const negocio_id = req.user.negocio_id;
+    const resultado = await contextTurnoActivo(negocio_id, tipo_turno);
     res.json(resultado);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// GET /api/caja/comportamiento/:usuario_id/:empleado/:tipo_turno — titular vs peers
-router.get('/comportamiento/:usuario_id/:empleado/:tipo_turno', async (req, res) => {
+// GET /api/caja/comportamiento/:empleado/:tipo_turno — titular vs peers
+router.get('/comportamiento/:empleado/:tipo_turno', auth, async (req, res) => {
   try {
-    const { usuario_id, empleado, tipo_turno } = req.params;
-    const resultado = await detectarCambioComportamiento(parseInt(usuario_id), empleado, tipo_turno);
+    const { empleado, tipo_turno } = req.params;
+    const negocio_id = req.user.negocio_id;
+    const resultado = await detectarCambioComportamiento(negocio_id, empleado, tipo_turno);
     res.json(resultado);
   } catch (e) {
     res.status(500).json({ error: e.message });

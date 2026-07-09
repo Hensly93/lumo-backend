@@ -159,13 +159,13 @@ async function fetchClima(fechaStr) {
 // Compara el empleado consigo mismo en el mismo tipo de turno.
 // Mínimo 10 turnos. Confianza dinámica por n.
 
-async function calcularZScoreEmpleado(usuarioId, nombreEmpleado, tipoTurno, brechaActual) {
+async function calcularZScoreEmpleado(negocioId, nombreEmpleado, tipoTurno, brechaActual) {
   const res = await pool.query(
     `SELECT brecha FROM turnos_caja
-     WHERE usuario_id=$1 AND nombre_empleado=$2 AND tipo_turno=$3
+     WHERE negocio_id=$1 AND nombre_empleado=$2 AND tipo_turno=$3
        AND estado='cerrado' AND brecha IS NOT NULL
      ORDER BY hora_apertura DESC LIMIT 60`,
-    [usuarioId, nombreEmpleado, tipoTurno]
+    [negocioId, nombreEmpleado, tipoTurno]
   );
 
   const n = res.rows.length;
@@ -189,7 +189,7 @@ async function calcularZScoreEmpleado(usuarioId, nombreEmpleado, tipoTurno, brec
 // No compara números crudos — normaliza por historial propio.
 // NUNCA nombra al empleado en alertas automáticas.
 
-async function rankingEmpleadosTurno(usuarioId, tipoTurno, ventanaDias = 30) {
+async function rankingEmpleadosTurno(negocioId, tipoTurno, ventanaDias = 30) {
   const res = await pool.query(
     `SELECT nombre_empleado,
             COUNT(*) as n_turnos,
@@ -198,12 +198,12 @@ async function rankingEmpleadosTurno(usuarioId, tipoTurno, ventanaDias = 30) {
             SUM(CASE WHEN ABS(COALESCE(brecha,0)) > 1000 THEN 1 ELSE 0 END) as turnos_con_brecha,
             SUM(CASE WHEN conteo_aleatorio_omitido = true THEN 1 ELSE 0 END) as conteos_omitidos
      FROM turnos_caja
-     WHERE usuario_id=$1 AND tipo_turno=$2 AND estado='cerrado'
+     WHERE negocio_id=$1 AND tipo_turno=$2 AND estado='cerrado'
        AND hora_apertura >= NOW() - ($3 || ' days')::INTERVAL
      GROUP BY nombre_empleado
      HAVING COUNT(*) >= 3
      ORDER BY brecha_promedio_abs ASC`,
-    [usuarioId, tipoTurno, ventanaDias]
+    [negocioId, tipoTurno, ventanaDias]
   );
 
   if (res.rows.length < 2) return null; // sin peers suficientes
@@ -267,11 +267,11 @@ async function analizarTurnoConContexto(turnoId) {
 
   // Z-score propio del empleado
   const zEmpleado = await calcularZScoreEmpleado(
-    t.usuario_id, t.nombre_empleado, t.tipo_turno, brecha
+    t.negocio_id, t.nombre_empleado, t.tipo_turno, brecha
   );
 
   // Ranking de peers (para la pantalla Equipo del dueño)
-  const ranking = await rankingEmpleadosTurno(t.usuario_id, t.tipo_turno, 30);
+  const ranking = await rankingEmpleadosTurno(t.negocio_id, t.tipo_turno, 30);
 
   // Posición en el ranking
   let posicionRanking = null;
@@ -284,9 +284,9 @@ async function analizarTurnoConContexto(turnoId) {
   const rachaRes = await pool.query(
     `SELECT id, ABS(COALESCE(brecha,0)) as brecha_abs
      FROM turnos_caja
-     WHERE usuario_id=$1 AND nombre_empleado=$2 AND tipo_turno=$3 AND estado='cerrado'
+     WHERE negocio_id=$1 AND nombre_empleado=$2 AND tipo_turno=$3 AND estado='cerrado'
      ORDER BY hora_apertura DESC LIMIT 15`,
-    [t.usuario_id, t.nombre_empleado, t.tipo_turno]
+    [t.negocio_id, t.nombre_empleado, t.tipo_turno]
   );
   let rachaLimpia = 0;
   for (const r of rachaRes.rows) {
@@ -347,7 +347,7 @@ function generarMensajePositivo(nombre, rachaLimpia) {
 // ─── Análisis de turno activo (sin cierre) ───────────────────────────────────
 // Para mostrar contexto en la pantalla del dueño mientras el turno corre.
 
-async function contextTurnoActivo(usuarioId, tipoTurno) {
+async function contextTurnoActivo(negocioId, tipoTurno) {
   const ahora = new Date();
   const ctx = getContextoTemporal(ahora);
   const clima = await fetchClima(ctx.fecha_str);
@@ -357,9 +357,9 @@ async function contextTurnoActivo(usuarioId, tipoTurno) {
   const baselineRes = await pool.query(
     `SELECT AVG(caja_esperada) as venta_media
      FROM turnos_caja
-     WHERE usuario_id=$1 AND tipo_turno=$2 AND estado='cerrado'
+     WHERE negocio_id=$1 AND tipo_turno=$2 AND estado='cerrado'
        AND hora_apertura >= NOW() - INTERVAL '60 days'`,
-    [usuarioId, tipoTurno]
+    [negocioId, tipoTurno]
   );
   const ventaMedia = parseFloat(baselineRes.rows[0]?.venta_media || 0);
   const ventaEsperadaHoy = Math.round(ventaMedia * factor);
@@ -376,22 +376,22 @@ async function contextTurnoActivo(usuarioId, tipoTurno) {
 
 // ─── Detección de cambio de comportamiento (titular vs reemplazo) ─────────────
 
-async function detectarCambioComportamiento(usuarioId, nombreEmpleado, tipoTurno) {
+async function detectarCambioComportamiento(negocioId, nombreEmpleado, tipoTurno) {
   // Turnos recientes del empleado vs turnos del mismo slot con otros empleados
   const [propios, otros] = await Promise.all([
     pool.query(
       `SELECT brecha FROM turnos_caja
-       WHERE usuario_id=$1 AND nombre_empleado=$2 AND tipo_turno=$3
+       WHERE negocio_id=$1 AND nombre_empleado=$2 AND tipo_turno=$3
          AND estado='cerrado' AND brecha IS NOT NULL
        ORDER BY hora_apertura DESC LIMIT 20`,
-      [usuarioId, nombreEmpleado, tipoTurno]
+      [negocioId, nombreEmpleado, tipoTurno]
     ),
     pool.query(
       `SELECT brecha FROM turnos_caja
-       WHERE usuario_id=$1 AND nombre_empleado!=$2 AND tipo_turno=$3
+       WHERE negocio_id=$1 AND nombre_empleado!=$2 AND tipo_turno=$3
          AND estado='cerrado' AND brecha IS NOT NULL
        ORDER BY hora_apertura DESC LIMIT 40`,
-      [usuarioId, nombreEmpleado, tipoTurno]
+      [negocioId, nombreEmpleado, tipoTurno]
     ),
   ]);
 

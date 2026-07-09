@@ -507,7 +507,7 @@ router.delete('/push/subscribe', auth, async (req, res) => {
 // GET /api/erm — ERM completo del negocio (todos los empleados)
 router.get('/erm', auth, async (req, res) => {
   try {
-    const resultado = await calcularERMNegocio(req.user.id);
+    const resultado = await calcularERMNegocio(req.user.negocio_id);
     res.json(resultado);
   } catch(e) {
     res.status(500).json({ error: e.message });
@@ -517,9 +517,117 @@ router.get('/erm', auth, async (req, res) => {
 // GET /api/erm/:empleado — ERM de un empleado específico
 router.get('/erm/:empleado', auth, async (req, res) => {
   try {
-    const resultado = await calcularRiesgoEmpleado(req.user.id, req.params.empleado);
+    const resultado = await calcularRiesgoEmpleado(req.user.negocio_id, req.params.empleado);
     res.json(resultado);
   } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/erm/:empleado/feedback — Registrar feedback sobre el ERM de un empleado
+router.post('/erm/:empleado/feedback', auth, async (req, res) => {
+  try {
+    const { tipo_feedback, comentario } = req.body;
+    const empleado = req.params.empleado;
+    const negocio_id = req.user.negocio_id;
+
+    // Validar tipo_feedback
+    const tiposValidos = ['confirma_riesgo_real', 'descarta_como_normal'];
+    if (!tiposValidos.includes(tipo_feedback)) {
+      return res.status(400).json({
+        error: `tipo_feedback debe ser uno de: ${tiposValidos.join(', ')}`
+      });
+    }
+
+    // Buscar último snapshot de erm_historico para este negocio+empleado
+    const snapshotRes = await pool.query(
+      `SELECT id, risk_score_ajustado FROM erm_historico
+       WHERE negocio_id=$1 AND empleado=$2
+       ORDER BY fecha DESC LIMIT 1`,
+      [negocio_id, empleado]
+    );
+
+    const erm_historico_id = snapshotRes.rows.length > 0 ? snapshotRes.rows[0].id : null;
+    const score_al_momento = snapshotRes.rows.length > 0
+      ? parseFloat(snapshotRes.rows[0].risk_score_ajustado)
+      : 0;
+
+    // Insertar feedback
+    const feedbackRes = await pool.query(
+      `INSERT INTO erm_feedback(negocio_id, empleado, erm_historico_id, tipo_feedback, comentario, score_al_momento)
+       VALUES($1,$2,$3,$4,$5,$6)
+       RETURNING id, fecha_feedback`,
+      [negocio_id, empleado, erm_historico_id, tipo_feedback, comentario || null, score_al_momento]
+    );
+
+    const feedback = feedbackRes.rows[0];
+
+    // Obtener últimos 5 feedbacks + conteo total
+    const ultimosRes = await pool.query(
+      `SELECT tipo_feedback FROM erm_feedback
+       WHERE negocio_id=$1 AND empleado=$2
+       ORDER BY fecha_feedback DESC LIMIT 5`,
+      [negocio_id, empleado]
+    );
+
+    const totalRes = await pool.query(
+      `SELECT COUNT(*) as total FROM erm_feedback WHERE negocio_id=$1 AND empleado=$2`,
+      [negocio_id, empleado]
+    );
+
+    const totalFeedbacks = parseInt(totalRes.rows[0].total);
+    let recalculo = null;
+
+    // Recalcular si hay >= 3 feedbacks históricos
+    if (totalFeedbacks >= 3) {
+      const ultimos = ultimosRes.rows;
+      const tasaDescarte = ultimos.filter(f => f.tipo_feedback === 'descarta_como_normal').length / ultimos.length;
+      const tasaConfirma = ultimos.filter(f => f.tipo_feedback === 'confirma_riesgo_real').length / ultimos.length;
+
+      // Buscar factor actual (default 1.0)
+      const factorActualRes = await pool.query(
+        `SELECT factor_ajuste FROM erm_ajustes WHERE negocio_id=$1 AND empleado=$2`,
+        [negocio_id, empleado]
+      );
+      const factorActual = factorActualRes.rows.length > 0
+        ? parseFloat(factorActualRes.rows[0].factor_ajuste)
+        : 1.0;
+
+      // Calcular nuevo factor
+      let factorNuevo = factorActual * (1 - 0.15 * tasaDescarte) * (1 + 0.08 * tasaConfirma);
+      factorNuevo = Math.min(Math.max(factorNuevo, 0.5), 3.0);
+      factorNuevo = Math.round(factorNuevo * 100) / 100;
+
+      // UPSERT en erm_ajustes
+      await pool.query(
+        `INSERT INTO erm_ajustes(negocio_id, empleado, factor_ajuste, n_feedbacks, ultimo_ajuste)
+         VALUES($1,$2,$3,$4,NOW())
+         ON CONFLICT (negocio_id, empleado)
+         DO UPDATE SET factor_ajuste=$3, n_feedbacks=$4, ultimo_ajuste=NOW()`,
+        [negocio_id, empleado, factorNuevo, totalFeedbacks]
+      );
+
+      recalculo = {
+        factor_anterior: factorActual,
+        factor_nuevo: factorNuevo,
+        tasa_descarte: Math.round(tasaDescarte * 100),
+        tasa_confirma: Math.round(tasaConfirma * 100),
+        n_feedbacks: totalFeedbacks,
+      };
+    }
+
+    res.json({
+      ok: true,
+      feedback: {
+        id: feedback.id,
+        tipo_feedback,
+        comentario,
+        score_al_momento,
+        fecha_feedback: feedback.fecha_feedback,
+      },
+      recalculo,
+    });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });

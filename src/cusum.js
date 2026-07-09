@@ -29,7 +29,7 @@ async function calcularCUSUM(usuarioId, tipoTurno, metrica = 'brecha', sucursalI
        brecha as valor,
        hora_apertura
      FROM turnos_caja
-     WHERE negocio_id=$1 AND tipo_turno=$2
+     WHERE negocio_id=$1 AND LOWER(tipo_turno)=LOWER($2)
        AND estado='cerrado' AND brecha IS NOT NULL
        AND hora_apertura >= NOW() - INTERVAL '${VENTANA_DIAS} days'
        AND ($3::integer IS NULL OR sucursal_id = $3)

@@ -83,7 +83,7 @@ function nivel(score) {
 
 // ─── ERM de un empleado ───────────────────────────────────────────────────────
 
-async function calcularRiesgoEmpleado(usuarioId, nombreEmpleado) {
+async function calcularRiesgoEmpleado(negocioId, nombreEmpleado) {
   // 1. Historial del empleado: brechas, omisiones, racha limpia
   const histRes = await pool.query(
     `SELECT
@@ -96,11 +96,11 @@ async function calcularRiesgoEmpleado(usuarioId, nombreEmpleado) {
        MAX(tipo_turno) as ultimo_turno_tipo,
        MAX(hora_apertura) as ultimo_turno_fecha
      FROM turnos_caja
-     WHERE usuario_id=$1 AND nombre_empleado=$2
+     WHERE negocio_id=$1 AND nombre_empleado=$2
        AND estado='cerrado'
        AND (gasto_inesperado IS NOT TRUE)
        AND hora_apertura >= NOW() - INTERVAL '30 days'`,
-    [usuarioId, nombreEmpleado]
+    [negocioId, nombreEmpleado]
   );
 
   const hist = histRes.rows[0];
@@ -125,37 +125,37 @@ async function calcularRiesgoEmpleado(usuarioId, nombreEmpleado) {
   // 2. CUSUM por todos los turnos donde este empleado trabajó
   const turnosRes = await pool.query(
     `SELECT DISTINCT tipo_turno FROM turnos_caja
-     WHERE usuario_id=$1 AND nombre_empleado=$2 AND estado='cerrado'
+     WHERE negocio_id=$1 AND nombre_empleado=$2 AND estado='cerrado'
        AND (gasto_inesperado IS NOT TRUE)
        AND hora_apertura >= NOW() - INTERVAL '30 days'`,
-    [usuarioId, nombreEmpleado]
+    [negocioId, nombreEmpleado]
   );
   const turnosEmpleado = turnosRes.rows.map(r => r.tipo_turno);
 
-  // CUSUM usa series del usuario completo por turno (no filtra por empleado)
+  // CUSUM usa series del negocio completo por turno (no filtra por empleado)
   // porque la brecha absoluta es lo que importa, no quién la generó
   const cusumTurnos = await Promise.all(
-    turnosEmpleado.map(t => calcularCUSUM(usuarioId, t).catch(() => ({ disponible: false, turno: t })))
+    turnosEmpleado.map(t => calcularCUSUM(negocioId, t).catch(() => ({ disponible: false, turno: t })))
   );
 
   // 3. Z-score propio del empleado (vs su propio historial en el último turno tipo)
   const zEmpleado = await calcularZScoreEmpleado(
-    usuarioId, nombreEmpleado, ultimoTurnoTipo, brechaPromAbs
+    negocioId, nombreEmpleado, ultimoTurnoTipo, brechaPromAbs
   ).catch(() => null);
 
   // 4. Comportamiento vs peers (en el turno más frecuente)
   const cambioComp = await detectarCambioComportamiento(
-    usuarioId, nombreEmpleado, ultimoTurnoTipo
+    negocioId, nombreEmpleado, ultimoTurnoTipo
   ).catch(() => null);
 
   // 5. Racha limpia actual
   const rachaRes = await pool.query(
     `SELECT ABS(COALESCE(brecha,0)) as brecha_abs
      FROM turnos_caja
-     WHERE usuario_id=$1 AND nombre_empleado=$2 AND estado='cerrado'
+     WHERE negocio_id=$1 AND nombre_empleado=$2 AND estado='cerrado'
        AND (gasto_inesperado IS NOT TRUE)
      ORDER BY hora_apertura DESC LIMIT 15`,
-    [usuarioId, nombreEmpleado]
+    [negocioId, nombreEmpleado]
   );
   let rachaLimpia = 0;
   for (const r of rachaRes.rows) {
@@ -252,15 +252,15 @@ async function calcularRiesgoEmpleado(usuarioId, nombreEmpleado) {
 
 // ─── ERM completo del negocio ─────────────────────────────────────────────────
 
-async function calcularERMNegocio(usuarioId) {
+async function calcularERMNegocio(negocioId) {
   // Todos los empleados activos con turnos en los últimos 30 días
   const empRes = await pool.query(
     `SELECT DISTINCT nombre_empleado
      FROM turnos_caja
-     WHERE usuario_id=$1 AND estado='cerrado'
+     WHERE negocio_id=$1 AND estado='cerrado'
        AND hora_apertura >= NOW() - INTERVAL '30 days'
      ORDER BY nombre_empleado`,
-    [usuarioId]
+    [negocioId]
   );
 
   if (empRes.rows.length === 0) {
@@ -271,7 +271,7 @@ async function calcularERMNegocio(usuarioId) {
   }
 
   const empleados = await Promise.all(
-    empRes.rows.map(r => calcularRiesgoEmpleado(usuarioId, r.nombre_empleado))
+    empRes.rows.map(r => calcularRiesgoEmpleado(negocioId, r.nombre_empleado))
   );
 
   // Ordenar: rojo primero, luego amarillo, luego verde
@@ -304,4 +304,42 @@ async function calcularERMNegocio(usuarioId) {
   };
 }
 
-module.exports = { calcularERMNegocio, calcularRiesgoEmpleado };
+// ─── ERM ajustado por feedback ────────────────────────────────────────────────
+
+async function calcularRiesgoAjustado(negocioId, nombreEmpleado) {
+  // 1. Calcular score bruto
+  const bruto = await calcularRiesgoEmpleado(negocioId, nombreEmpleado);
+
+  if (bruto.score === null) {
+    return {
+      empleado: nombreEmpleado,
+      bruto,
+      factor: 1.0,
+      ajustado: null,
+      nivel: 'sin_datos',
+      señales: [],
+    };
+  }
+
+  // 2. Buscar factor de ajuste (default 1.0 si no existe)
+  const ajusteRes = await pool.query(
+    `SELECT factor_ajuste FROM erm_ajustes WHERE negocio_id=$1 AND empleado=$2`,
+    [negocioId, nombreEmpleado]
+  );
+  const factor = ajusteRes.rows.length > 0 ? parseFloat(ajusteRes.rows[0].factor_ajuste) : 1.0;
+
+  // 3. Calcular score ajustado
+  const ajustado = Math.min(100, Math.max(0, bruto.score * factor));
+  const nivelAjustado = nivel(ajustado);
+
+  return {
+    empleado: nombreEmpleado,
+    bruto,
+    factor,
+    ajustado: Math.round(ajustado),
+    nivel: nivelAjustado,
+    señales: bruto.señales,
+  };
+}
+
+module.exports = { calcularERMNegocio, calcularRiesgoEmpleado, calcularRiesgoAjustado };
