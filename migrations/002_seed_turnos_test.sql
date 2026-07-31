@@ -5,6 +5,10 @@
 -- 3 empleados: Pedro (rojo - anomalía deliberada), Carlos y Marta (verdes)
 
 
+DELETE FROM conteos_caja WHERE turno_id IN (
+  SELECT id FROM turnos_caja WHERE negocio_id=13 AND nombre_empleado IN ('Pedro', 'Carlos', 'Marta')
+);
+
 DELETE FROM turnos_caja WHERE negocio_id=13 AND nombre_empleado IN ('Pedro', 'Carlos', 'Marta');
 -- ============================================================================
 
@@ -42,7 +46,10 @@ INSERT INTO turnos_caja (
   (13, 14, 'Carlos', 'manana', 5000, 11900, 11950, 50, NOW() - INTERVAL '10 days' + INTERVAL '8 hours', NOW() - INTERVAL '10 days' + INTERVAL '14 hours', 'cerrado', false, false, false),
   (13, 14, 'Carlos', 'tarde', 11900, 17850, 17900, 50, NOW() - INTERVAL '27 days' + INTERVAL '14 hours', NOW() - INTERVAL '27 days' + INTERVAL '20 hours', 'cerrado', false, false, false),
   (13, 14, 'Carlos', 'noche', 17850, 23000, 22950, -50, NOW() - INTERVAL '4 days' + INTERVAL '20 hours', NOW() - INTERVAL '3 days' + INTERVAL '2 hours', 'cerrado', false, false, false),
-  (13, 14, 'Carlos', 'manana', 5000, 12050, 12000, -50, NOW() - INTERVAL '1 days' + INTERVAL '8 hours', NOW() - INTERVAL '1 days' + INTERVAL '14 hours', 'cerrado', false, false, false);
+  (13, 14, 'Carlos', 'manana', 5000, 12050, 12000, -50, NOW() - INTERVAL '1 days' + INTERVAL '8 hours', NOW() - INTERVAL '1 days' + INTERVAL '14 hours', 'cerrado', false, false, false),
+  (13, 14, 'Carlos', 'tarde', 12000, 17950, 18000, 50, NOW() - INTERVAL '42 days' + INTERVAL '14 hours', NOW() - INTERVAL '42 days' + INTERVAL '20 hours', 'cerrado', false, false, false),
+  (13, 14, 'Carlos', 'tarde', 12050, 18000, 17950, -50, NOW() - INTERVAL '49 days' + INTERVAL '14 hours', NOW() - INTERVAL '49 days' + INTERVAL '20 hours', 'cerrado', false, false, false),
+  (13, 14, 'Carlos', 'tarde', 11950, 17900, 17950, 50, NOW() - INTERVAL '56 days' + INTERVAL '14 hours', NOW() - INTERVAL '56 days' + INTERVAL '20 hours', 'cerrado', false, false, false);
 
 -- EMPLEADO: Pedro (rojo - anomalía deliberada en turnos de tarde)
 -- NOTA: los 7 turnos tarde de Pedro (anomalía) se mantienen deliberadamente
@@ -71,6 +78,41 @@ INSERT INTO turnos_caja (
   (13, 14, 'Pedro', 'tarde', 12000, 17100, 18000, 900, NOW() - INTERVAL '1 days' + INTERVAL '14 hours', NOW() - INTERVAL '1 days' + INTERVAL '20 hours', 'cerrado', true, false, false),
   -- Turnos noche (normales)
   (13, 14, 'Pedro', 'noche', 17700, 22800, 22900, 100, NOW() - INTERVAL '24 days' + INTERVAL '20 hours', NOW() - INTERVAL '23 days' + INTERVAL '2 hours', 'cerrado', false, false, false);
+
+-- ============================================================================
+-- Conteos físicos (apertura, aleatorio, cierre) para el fixture de test
+-- NOTA: negocio_id en conteos_caja nunca se popula (ni en producción real,
+-- ver routes_caja.js) — la limpieza usa turno_id, no negocio_id.
+-- El conteo aleatorio se omite deliberadamente cuando conteo_aleatorio_omitido=true,
+-- igual que en el comportamiento real (nadie respondió = no hay fila).
+-- Se omite el segundo conteo (aleatorio2): los turnos duran exactamente 6h,
+-- caso límite del trigger real, no aporta señal útil al fixture.
+-- ============================================================================
+
+INSERT INTO conteos_caja(turno_id, tipo, monto_declarado, hora)
+SELECT id, 'apertura', caja_apertura, hora_apertura
+FROM turnos_caja
+WHERE negocio_id=13 AND nombre_empleado IN ('Pedro', 'Carlos', 'Marta');
+
+INSERT INTO conteos_caja(turno_id, tipo, monto_declarado, hora)
+SELECT id, 'cierre', caja_cierre, hora_cierre
+FROM turnos_caja
+WHERE negocio_id=13 AND nombre_empleado IN ('Pedro', 'Carlos', 'Marta');
+
+-- NOTA: la proporción del conteo aleatorio ya NO es el punto medio exacto.
+-- Se deriva de (caja_apertura + caja_cierre) módulo 7 → rango 30%-60% del
+-- turno, distinto por cada fila pero 100% determinista y reproducible en
+-- cada re-siembra (nada de random()). Esto permite que tramo1 y tramo2
+-- den valores DISTINTOS entre sí, necesario para probar la diferenciación
+-- real del módulo perfil_conteo.js.
+INSERT INTO conteos_caja(turno_id, tipo, monto_declarado, numero_conteo, hora)
+SELECT id, 'aleatorio',
+       ROUND(caja_apertura + (0.30 + (MOD(CAST(caja_apertura AS INTEGER) + CAST(caja_cierre AS INTEGER), 7)) * 0.05) * (caja_cierre - caja_apertura)),
+       1,
+       hora_apertura + ((hora_cierre - hora_apertura) * (0.30 + (MOD(CAST(caja_apertura AS INTEGER) + CAST(caja_cierre AS INTEGER), 7)) * 0.05))
+FROM turnos_caja
+WHERE negocio_id=13 AND nombre_empleado IN ('Pedro', 'Carlos', 'Marta')
+  AND conteo_aleatorio_omitido = false;
 
 -- ============================================================================
 -- VERIFICACIÓN
