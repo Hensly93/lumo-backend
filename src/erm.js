@@ -54,11 +54,15 @@ function puntajesBrechaPromedio(brechaPromAbs, tasaInconsistencia) {
 }
 
 function puntajesComportamiento(cambio) {
-  if (!cambio?.detectado) return 0;
+  if (!cambio?.detectado) {
+    const disponible = cambio?.motivo !== 'datos_insuficientes';
+    return { puntos: 0, disponible };
+  }
   const z = Math.abs(cambio.zscore_vs_peers || 0);
-  if (z >= 3.0) return 15;
-  if (z >= 2.0) return 8;
-  return 0;
+  let puntos = 0;
+  if (z >= 3.0) puntos = 15;
+  else if (z >= 2.0) puntos = 8;
+  return { puntos, disponible: true };
 }
 
 function puntajesOmision(tasaOmision) {
@@ -164,16 +168,23 @@ async function calcularRiesgoEmpleado(negocioId, nombreEmpleado) {
   }
 
   // 6. Calcular puntajes parciales
+  const resultadoComportamiento = puntajesComportamiento(cambioComp);
   const partes = {
     cusum:          puntajesCUSUM(cusumTurnos),
     zscore:         puntajesZScore(zEmpleado),
     brecha:         puntajesBrechaPromedio(brechaPromAbs, tasaInconsistencia),
-    comportamiento: puntajesComportamiento(cambioComp),
+    comportamiento: resultadoComportamiento.puntos,
     omision:        puntajesOmision(tasaOmision),
   };
 
   const score = calcularScore(partes);
   const nivelRiesgo = nivel(score);
+
+  const cusumDisponible = cusumTurnos.some(c => c?.disponible);
+  const zscoreDisponible = !!zEmpleado && zEmpleado.zscore !== null;
+  const comportamientoDisponible = resultadoComportamiento.disponible;
+  const señalesDisponibles = [cusumDisponible, zscoreDisponible, comportamientoDisponible]
+    .filter(Boolean).length;
 
   // 7. Señales activas (para el frontend — descripción sin nombrar al empleado)
   const señales = [];
@@ -247,6 +258,15 @@ async function calcularRiesgoEmpleado(negocioId, nombreEmpleado) {
       pct_umbral: c.pct_umbral ?? null,
       alarma: c.alarma ?? false,
     })),
+    confianza: {
+      señales_disponibles: señalesDisponibles,
+      señales_totales: 3,
+      detalle: {
+        cusum: cusumDisponible,
+        zscore: zscoreDisponible,
+        comportamiento: comportamientoDisponible,
+      },
+    },
   };
 }
 
