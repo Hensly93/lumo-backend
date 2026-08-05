@@ -339,6 +339,12 @@ async function resumenPatronesNegocio(usuarioId, limiteTurnos = 30) {
     else rachaActual = 0;
   }
 
+  const turnosTotal = Object.values(porTipoTurno).reduce((sum, d) => sum + d.turnos, 0);
+  const inconsistenciasTotal = Object.values(porTipoTurno).reduce((sum, d) => sum + d.inconsistencias, 0);
+  const tasaInconsistenciaGlobal = turnosTotal > 0
+    ? redondear((inconsistenciasTotal / turnosTotal) * 100, 1)
+    : 0;
+
   return {
     turnos_analizados: turnos.length,
     mediana_brecha: redondear(mediana),
@@ -349,6 +355,7 @@ async function resumenPatronesNegocio(usuarioId, limiteTurnos = 30) {
       brecha_total: redondear(d.brecha_total),
       tasa_inconsistencia: redondear((d.inconsistencias / d.turnos) * 100, 1),
     })),
+    tasa_inconsistencia_global: tasaInconsistenciaGlobal,
     racha_limpia_actual: rachaActual,
     racha_limpia_maxima: rachaMax,
   };
