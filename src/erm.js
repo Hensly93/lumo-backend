@@ -22,14 +22,16 @@ const TURNOS = ['manana', 'tarde', 'noche'];
 // ─── Score por señal ─────────────────────────────────────────────────────────
 // Cada señal suma puntos al riesgo (0 = limpio, 100 = crítico)
 
-function puntajesCUSUM(cusumTurnos) {
-  // Toma el peor CUSUM de todos los turnos del empleado
+function puntajesCUSUM(cusumTurnos, nombreEmpleado) {
   let maxPct = 0;
   for (const c of cusumTurnos) {
-    if (c?.disponible && c.pct_umbral > maxPct) maxPct = c.pct_umbral;
+    if (!c?.disponible) continue;
+    const contribucion = c.contribucion_por_empleado?.[nombreEmpleado] ?? 0;
+    if (contribucion < 0.30) continue;
+    if (c.pct_umbral > maxPct) maxPct = c.pct_umbral;
   }
-  if (maxPct >= 100) return 35;  // alarma activa
-  if (maxPct >= 70)  return 20;  // acercándose al umbral
+  if (maxPct >= 100) return 35;
+  if (maxPct >= 70)  return 20;
   if (maxPct >= 40)  return 8;
   return 0;
 }
@@ -170,7 +172,7 @@ async function calcularRiesgoEmpleado(negocioId, nombreEmpleado) {
   // 6. Calcular puntajes parciales
   const resultadoComportamiento = puntajesComportamiento(cambioComp);
   const partes = {
-    cusum:          puntajesCUSUM(cusumTurnos),
+    cusum:          puntajesCUSUM(cusumTurnos, nombreEmpleado),
     zscore:         puntajesZScore(zEmpleado),
     brecha:         puntajesBrechaPromedio(brechaPromAbs, tasaInconsistencia),
     comportamiento: resultadoComportamiento.puntos,
@@ -257,6 +259,7 @@ async function calcularRiesgoEmpleado(negocioId, nombreEmpleado) {
       disponible: c.disponible,
       pct_umbral: c.pct_umbral ?? null,
       alarma: c.alarma ?? false,
+      contribucion: c.contribucion_por_empleado?.[nombreEmpleado] ?? null,
     })),
     confianza: {
       señales_disponibles: señalesDisponibles,

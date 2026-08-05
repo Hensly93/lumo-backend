@@ -27,7 +27,8 @@ async function calcularCUSUM(usuarioId, tipoTurno, metrica = 'brecha', sucursalI
   const res = await pool.query(
     `SELECT
        brecha as valor,
-       hora_apertura
+       hora_apertura,
+       nombre_empleado
      FROM turnos_caja
      WHERE negocio_id=$1 AND LOWER(tipo_turno)=LOWER($2)
        AND estado='cerrado' AND brecha IS NOT NULL
@@ -42,6 +43,7 @@ async function calcularCUSUM(usuarioId, tipoTurno, metrica = 'brecha', sucursalI
   }
 
   const valores = res.rows.map(r => parseFloat(r.valor));
+  const empleados = res.rows.map(r => r.nombre_empleado);
   const n = valores.length;
 
   // Estimar media y σ de la primera mitad (baseline de referencia)
@@ -56,16 +58,24 @@ async function calcularCUSUM(usuarioId, tipoTurno, metrica = 'brecha', sucursalI
   // CUSUM de dos lados (S+ para aumentos, S- para disminuciones)
   let sPos = 0;
   let sNeg = 0;
+  let inicioRunPos = 0;
+  let inicioRunNeg = 0;
   const serie = [];
   let alarmaDetectada = false;
   let indiceAlarma = -1;
 
   for (let i = 0; i < n; i++) {
     const x = valores[i];
-    sPos = Math.max(0, sPos + (x - mu) - k);
-    sNeg = Math.max(0, sNeg - (x - mu) - k);
+    const incPos = (x - mu) - k;
+    const incNeg = -(x - mu) - k;
 
-    serie.push({ valor: x, sPos: Math.round(sPos), sNeg: Math.round(sNeg) });
+    sPos = Math.max(0, sPos + incPos);
+    sNeg = Math.max(0, sNeg + incNeg);
+
+    if (sPos === 0) inicioRunPos = i + 1;
+    if (sNeg === 0) inicioRunNeg = i + 1;
+
+    serie.push({ valor: x, sPos: Math.round(sPos), sNeg: Math.round(sNeg), incPos, incNeg, empleado: empleados[i] });
 
     if (!alarmaDetectada && (sPos > h || sNeg > h)) {
       alarmaDetectada = true;
@@ -76,6 +86,25 @@ async function calcularCUSUM(usuarioId, tipoTurno, metrica = 'brecha', sucursalI
   const ultimoS = serie[serie.length - 1];
   const pctUmbral = Math.max(ultimoS.sPos, ultimoS.sNeg) / h;
   const direccion = ultimoS.sPos > ultimoS.sNeg ? 'creciente' : 'decreciente';
+
+  // Atribución: sumar incrementos positivos por empleado, solo dentro de la racha activa
+  const inicioRun = direccion === 'creciente' ? inicioRunPos : inicioRunNeg;
+  const campoIncremento = direccion === 'creciente' ? 'incPos' : 'incNeg';
+
+  const contribucionesParciales = {};
+  for (let i = inicioRun; i < n; i++) {
+    const inc = serie[i][campoIncremento];
+    if (inc > 0) {
+      const emp = serie[i].empleado;
+      contribucionesParciales[emp] = (contribucionesParciales[emp] || 0) + inc;
+    }
+  }
+
+  const totalPositivo = Object.values(contribucionesParciales).reduce((a, b) => a + b, 0) || 1;
+  const contribucionPorEmpleado = {};
+  for (const [emp, val] of Object.entries(contribucionesParciales)) {
+    contribucionPorEmpleado[emp] = Math.round((val / totalPositivo) * 1000) / 1000;
+  }
 
   return {
     disponible: true,
@@ -91,6 +120,7 @@ async function calcularCUSUM(usuarioId, tipoTurno, metrica = 'brecha', sucursalI
     pct_umbral: Math.min(Math.round(pctUmbral * 100), 200),
     direccion,
     indice_alarma: indiceAlarma,
+    contribucion_por_empleado: contribucionPorEmpleado,
     alerta: alarmaDetectada ? {
       tipo: 'CUSUM_CAMBIO_CONDUCTUAL',
       prioridad: pctUmbral > 1.5 ? 'critico' : 'atencion',
