@@ -209,15 +209,15 @@ async function analizarCruceTurno(turnoId) {
 
 // ─── Detección de goteo (brechas acumuladas) ─────────────────────────────────
 
-async function detectarGoteo(usuarioId, ventanaDias = 21) {
+async function detectarGoteo(negocioId, ventanaDias = 21) {
   const res = await pool.query(
     `SELECT id, nombre_empleado, tipo_turno, brecha, caja_esperada,
             hora_apertura, conteo_aleatorio_omitido, conteo_aleatorio2_omitido
      FROM turnos_caja
-     WHERE usuario_id=$1 AND estado='cerrado' AND brecha IS NOT NULL
+     WHERE negocio_id=$1 AND estado='cerrado' AND brecha IS NOT NULL
        AND hora_apertura >= NOW() - ($2 || ' days')::INTERVAL
      ORDER BY hora_apertura ASC`,
-    [usuarioId, ventanaDias]
+    [negocioId, ventanaDias]
   );
   const turnos = res.rows;
   if (turnos.length < 3) return { detectado: false, motivo: 'datos_insuficientes', turnos_analizados: turnos.length };
@@ -286,16 +286,16 @@ async function detectarGoteo(usuarioId, ventanaDias = 21) {
 
 // ─── Resumen de patrones históricos para el dueño ────────────────────────────
 
-async function resumenPatronesNegocio(usuarioId, limiteTurnos = 30) {
+async function resumenPatronesNegocio(negocioId, limiteTurnos = 30) {
   const res = await pool.query(
     `SELECT t.id, t.nombre_empleado, t.tipo_turno, t.brecha, t.caja_esperada,
             t.hora_apertura, t.hora_cierre,
             t.conteo_aleatorio_omitido, t.conteo_aleatorio2_omitido,
             (SELECT COUNT(*) FROM egresos_caja e WHERE e.turno_id=t.id) as num_egresos
      FROM turnos_caja t
-     WHERE t.usuario_id=$1 AND t.estado='cerrado' AND t.brecha IS NOT NULL
+     WHERE t.negocio_id=$1 AND t.estado='cerrado' AND t.brecha IS NOT NULL
      ORDER BY t.hora_apertura DESC LIMIT $2`,
-    [usuarioId, limiteTurnos]
+    [negocioId, limiteTurnos]
   );
   const turnos = res.rows;
   if (turnos.length === 0) return { turnos_analizados: 0, patrones: [] };

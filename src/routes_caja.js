@@ -513,22 +513,22 @@ router.get('/cruce/:turno_id', async (req, res) => {
   }
 });
 
-// GET /api/caja/goteo/:usuario_id?dias=21 — detección de goteo (brechas acumuladas)
-router.get('/goteo/:usuario_id', async (req, res) => {
+// GET /api/caja/goteo?dias=21 — detección de goteo (brechas acumuladas)
+router.get('/goteo', auth, async (req, res) => {
   try {
     const dias = parseInt(req.query.dias) || 21;
-    const resultado = await detectarGoteo(parseInt(req.params.usuario_id), dias);
+    const resultado = await detectarGoteo(req.user.negocio_id, dias);
     res.json(resultado);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// GET /api/caja/patrones/:usuario_id?limite=30 — resumen histórico de patrones
-router.get('/patrones/:usuario_id', async (req, res) => {
+// GET /api/caja/patrones?limite=30 — resumen histórico de patrones
+router.get('/patrones', auth, async (req, res) => {
   try {
     const limite = parseInt(req.query.limite) || 30;
-    const resultado = await resumenPatronesNegocio(parseInt(req.params.usuario_id), limite);
+    const resultado = await resumenPatronesNegocio(req.user.negocio_id, limite);
     res.json(resultado);
   } catch (e) {
     res.status(500).json({ error: e.message });
