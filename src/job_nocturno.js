@@ -12,6 +12,7 @@ const pool = require('./db');
 const { calcularPrediccion } = require('./prediccion_adaptativa');
 const { notificarUsuario } = require('./push');
 const { calcularRiesgoAjustado } = require('./erm');
+const { detectarGoteo } = require('./cruce_variables');
 
 // ─── Paso 1: Agregar datos del día a agregados_zona ───────────────────────────
 
@@ -315,6 +316,86 @@ async function snapshotsERM(db) {
   };
 }
 
+// ─── Paso 6: Snapshots Goteo diarios + notificaciones ────────────────────────
+
+async function snapshotsGoteo(db) {
+  const hoy = new Date().toISOString().slice(0, 10);
+
+  const negociosRes = await db.query(`
+    SELECT id FROM negocios WHERE deletion_scheduled_at IS NULL
+  `);
+
+  let goteosDetectados = 0;
+  let notificacionesEnviadas = 0;
+
+  for (const { id: negocio_id } of negociosRes.rows) {
+    try {
+      const resultado = await detectarGoteo(negocio_id, 21);
+
+      // Caso de datos insuficientes: guardar registro simple, no notificar
+      if (resultado.motivo === 'datos_insuficientes') {
+        await db.query(`
+          INSERT INTO goteo_historico(negocio_id, fecha, detectado, motivo)
+          VALUES($1,$2,false,$3)
+          ON CONFLICT (negocio_id, fecha) DO UPDATE SET detectado=false, motivo=$3
+        `, [negocio_id, hoy, resultado.motivo]);
+        continue;
+      }
+
+      await db.query(`
+        INSERT INTO goteo_historico(
+          negocio_id, fecha, detectado, ventana_dias,
+          turnos_analizados, turnos_con_brecha, porcentaje_con_brecha,
+          brecha_total_acumulada, brecha_promedio_por_turno,
+          patron_empleado, patron_turno, mensaje
+        ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        ON CONFLICT (negocio_id, fecha)
+        DO UPDATE SET
+          detectado=$3, ventana_dias=$4, turnos_analizados=$5,
+          turnos_con_brecha=$6, porcentaje_con_brecha=$7,
+          brecha_total_acumulada=$8, brecha_promedio_por_turno=$9,
+          patron_empleado=$10, patron_turno=$11, mensaje=$12
+      `, [
+        negocio_id, hoy, resultado.detectado, resultado.ventana_dias,
+        resultado.turnos_analizados, resultado.turnos_con_brecha,
+        resultado.porcentaje_con_brecha, resultado.brecha_total_acumulada,
+        resultado.brecha_promedio_por_turno,
+        resultado.patron_empleado ? JSON.stringify(resultado.patron_empleado) : null,
+        resultado.patron_turno ? JSON.stringify(resultado.patron_turno) : null,
+        resultado.mensaje
+      ]);
+
+      if (resultado.detectado) {
+        goteosDetectados++;
+
+        const usuarioRes = await db.query(`
+          SELECT usuario_id FROM negocio_usuarios
+          WHERE negocio_id=$1 AND activo=true
+          ORDER BY created_at ASC LIMIT 1
+        `, [negocio_id]);
+
+        if (usuarioRes.rows.length > 0) {
+          const usuario_id = usuarioRes.rows[0].usuario_id;
+          await notificarUsuario(usuario_id, {
+            title: 'Patrón de goteo detectado',
+            body: resultado.mensaje,
+            url: '/empleados',
+          }, db).catch(() => {});
+          notificacionesEnviadas++;
+        }
+      }
+    } catch (e) {
+      console.error(`[SNAPSHOT GOTEO] Error con negocio ${negocio_id}:`, e.message);
+    }
+  }
+
+  return {
+    paso: 'snapshots_goteo',
+    goteos_detectados: goteosDetectados,
+    notificaciones_enviadas: notificacionesEnviadas,
+  };
+}
+
 // ─── Flujo principal ──────────────────────────────────────────────────────────
 
 async function runJobNocturno(db = pool) {
@@ -328,6 +409,7 @@ async function runJobNocturno(db = pool) {
     pasos.push(await compararConRealidad(db));
     pasos.push(await recordatorioPreciosCatalogo(db));
     pasos.push(await snapshotsERM(db));
+    pasos.push(await snapshotsGoteo(db));
   } catch (e) {
     console.error('[JOB NOCTURNO] Error fatal:', e.message);
     return { ok: false, error: e.message, pasos };
