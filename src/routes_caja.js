@@ -7,6 +7,7 @@ const { analizarTurnoConContexto, rankingEmpleadosTurno, contextTurnoActivo, det
 const { calcularRiesgoEmpleado } = require('./erm');
 const { notificarUsuario } = require('./push');
 const { auth } = require('./authMiddleware');
+const { analizarTramo1EnVivo } = require('./perfil_conteo');
 
 // Calcula hora aleatoria para conteo: entre 40 y 180 min despues de la apertura
 function calcularHoraConteo(desde) {
@@ -287,6 +288,27 @@ router.post('/conteo', async (req, res) => {
       'INSERT INTO conteos_caja(turno_id, tipo, monto_declarado, numero_conteo) VALUES($1,$2,$3,$4)',
       [turno_id, 'aleatorio', monto_declarado, num]
     );
+
+    // Push reactivo en conteo del medio (numero_conteo === 1)
+    if (num === 1) {
+      try {
+        const resultado = await analizarTramo1EnVivo(turno_id);
+        if (resultado.disponible && resultado.señales && resultado.señales.length > 0) {
+          const turno = await pool.query('SELECT usuario_id, nombre_empleado, tipo_turno FROM turnos_caja WHERE id=$1', [turno_id]);
+          if (turno.rows.length > 0) {
+            const t = turno.rows[0];
+            const tipoAlerta = resultado.tramo1.grado === 'critico' ? 'alertas_criticas' : 'alertas_medias';
+            await notificarUsuario(t.usuario_id, {
+              title: `Movimiento anómalo en caja (mitad del turno)`,
+              body: `${t.nombre_empleado} · ${t.tipo_turno} · Tramo 1: ${resultado.tramo1.grado} — ¿Hubo un gasto inesperado?`,
+              url: `/dashboard?turno_id=${turno_id}&accion=gasto`,
+            }, pool, tipoAlerta);
+          }
+        }
+      } catch (e) {
+        console.error('[CONTEO TRAMO1 PUSH]', e.message);
+      }
+    }
 
     res.json({ ok: true });
   } catch (e) {

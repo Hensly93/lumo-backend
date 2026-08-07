@@ -108,4 +108,95 @@ async function analizarTramosTurno(turnoId) {
   };
 }
 
-module.exports = { analizarTramosTurno };
+async function calcularTramo1DeUnTurno(turnoId) {
+  const conteosRes = await pool.query(
+    `SELECT tipo, monto_declarado, hora FROM conteos_caja
+     WHERE turno_id=$1 AND (tipo='apertura' OR (tipo='aleatorio' AND numero_conteo=1))`,
+    [turnoId]
+  );
+  const c = {};
+  conteosRes.rows.forEach(r => { c[r.tipo] = { monto: parseFloat(r.monto_declarado), hora: r.hora }; });
+  if (!c.apertura || !c.aleatorio) return null;
+
+  const egresosRes = await pool.query(
+    `SELECT monto, hora FROM egresos_caja WHERE turno_id=$1`,
+    [turnoId]
+  );
+  const egresos = egresosRes.rows.map(r => ({ monto: parseFloat(r.monto), hora: new Date(r.hora) }));
+  const horaAleatorio = new Date(c.aleatorio.hora);
+  const egresosTramo1 = egresos.filter(e => e.hora <= horaAleatorio).reduce((s, e) => s + e.monto, 0);
+  const tramo1Neto = (c.aleatorio.monto - c.apertura.monto) - egresosTramo1;
+  return { tramo1Neto };
+}
+
+async function analizarTramo1EnVivo(turnoId) {
+  const tRes = await pool.query('SELECT * FROM turnos_caja WHERE id=$1', [turnoId]);
+  if (tRes.rows.length === 0) return { error: 'Turno no encontrado' };
+  const t = tRes.rows[0];
+
+  const propio = await calcularTramo1DeUnTurno(turnoId);
+  if (!propio) {
+    return {
+      turno_id: turnoId, empleado: t.nombre_empleado, tipo_turno: t.tipo_turno,
+      disponible: false, motivo: 'sin_conteo_medio',
+    };
+  }
+
+  const diaSemana = new Date(t.hora_apertura).getDay();
+  const candidatosRes = await pool.query(
+    `SELECT id, hora_apertura FROM turnos_caja
+     WHERE negocio_id=$1 AND nombre_empleado=$2 AND tipo_turno=$3
+       AND estado='cerrado' AND id != $4
+     ORDER BY hora_apertura DESC LIMIT 60`,
+    [t.negocio_id, t.nombre_empleado, t.tipo_turno, turnoId]
+  );
+
+  const historicos = [];
+  for (const row of candidatosRes.rows) {
+    const tramos = await calcularTramo1DeUnTurno(row.id);
+    if (tramos) {
+      historicos.push({ ...tramos, dia_semana: new Date(row.hora_apertura).getDay() });
+    }
+  }
+
+  const conDia = historicos.filter(h => h.dia_semana === diaSemana);
+  let usados, segmentoUsado;
+  if (conDia.length >= MIN_TURNOS_COMPARACION) {
+    usados = conDia; segmentoUsado = 'empleado_turno_dia';
+  } else if (historicos.length >= MIN_TURNOS_COMPARACION) {
+    usados = historicos; segmentoUsado = 'empleado_turno';
+  } else {
+    return {
+      turno_id: turnoId, empleado: t.nombre_empleado, tipo_turno: t.tipo_turno,
+      disponible: false, motivo: 'datos_insuficientes',
+      n_turnos_comparacion: historicos.length,
+    };
+  }
+
+  function evaluarTramo(valorActual, historicosTramo) {
+    const mediana = calcularMediana(historicosTramo);
+    const mad = calcularMAD(historicosTramo, mediana);
+    if (mad === 0) return { neto: redondear(valorActual), zscore: 0, grado: 'normal', mediana_historica: redondear(mediana) };
+    const zscore = redondear(robustZScore(valorActual, mediana, mad), 2);
+    return { neto: redondear(valorActual), zscore, grado: grado(zscore), mediana_historica: redondear(mediana) };
+  }
+
+  const tramo1 = evaluarTramo(propio.tramo1Neto, usados.map(h => h.tramo1Neto));
+
+  const señales = [];
+  if (Math.abs(tramo1.zscore) >= 2.0) {
+    señales.push({
+      tipo: 'TRAMO1_ANOMALO',
+      descripcion: `Movimiento de caja entre apertura y conteo medio fuera de lo habitual (${tramo1.zscore} desvíos)`,
+      valor: tramo1.zscore, peso: tramo1.grado,
+    });
+  }
+
+  return {
+    turno_id: turnoId, empleado: t.nombre_empleado, tipo_turno: t.tipo_turno,
+    disponible: true, segmento_usado: segmentoUsado, n_turnos_comparacion: usados.length,
+    tramo1, señales,
+  };
+}
+
+module.exports = { analizarTramosTurno, analizarTramo1EnVivo };
