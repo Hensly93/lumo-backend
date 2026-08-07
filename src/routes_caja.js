@@ -24,16 +24,33 @@ function calcularTipoTurno() {
 
 // ─── Empleados ──────────────────────────────────────────────────────────────
 
-// GET /api/caja/empleados/:usuario_id?sucursal_id=X
-router.get('/empleados/:usuario_id', async (req, res) => {
+// GET /api/caja/empleados — con auth, para pantalla del dueño (usa JWT)
+router.get('/empleados', auth, async (req, res) => {
   try {
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
     const result = await pool.query(
       `SELECT id, nombre, sucursal_id FROM empleados_negocio
-       WHERE usuario_id=$1 AND activo=true
+       WHERE negocio_id=$1 AND activo=true
          AND ($2::integer IS NULL OR sucursal_id = $2)
        ORDER BY nombre`,
-      [req.params.usuario_id, sucursalId]
+      [req.user.negocio_id, sucursalId]
+    );
+    res.json(result.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/caja/empleados/:negocio_id?sucursal_id=X — público, para login de empleados
+router.get('/empleados/:negocio_id', async (req, res) => {
+  try {
+    const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
+    const result = await pool.query(
+      `SELECT id, nombre, sucursal_id FROM empleados_negocio
+       WHERE negocio_id=$1 AND activo=true
+         AND ($2::integer IS NULL OR sucursal_id = $2)
+       ORDER BY nombre`,
+      [req.params.negocio_id, sucursalId]
     );
     res.json(result.rows);
   } catch (e) {
@@ -42,22 +59,23 @@ router.get('/empleados/:usuario_id', async (req, res) => {
 });
 
 // POST /api/caja/empleados — registrar empleado (lo usa el dueño)
-router.post('/empleados', async (req, res) => {
+router.post('/empleados', auth, async (req, res) => {
   try {
-    const { usuario_id, nombre, pin, sucursal_id } = req.body;
-    if (!usuario_id || !nombre || !pin) {
-      return res.status(400).json({ error: 'usuario_id, nombre y pin requeridos' });
+    const negocio_id = req.user.negocio_id;
+    const { nombre, pin, sucursal_id } = req.body;
+    if (!nombre || !pin) {
+      return res.status(400).json({ error: 'nombre y pin requeridos' });
     }
     if (String(pin).length !== 4 || isNaN(Number(pin))) {
       return res.status(400).json({ error: 'PIN debe ser 4 dígitos numéricos' });
     }
     const pin_hash = await bcrypt.hash(String(pin), 10);
     const result = await pool.query(
-      `INSERT INTO empleados_negocio(usuario_id, nombre, pin_hash, sucursal_id)
+      `INSERT INTO empleados_negocio(negocio_id, nombre, pin_hash, sucursal_id)
        VALUES($1,$2,$3,$4)
-       ON CONFLICT(usuario_id, nombre) DO UPDATE SET pin_hash=$3, sucursal_id=$4, activo=true
+       ON CONFLICT(negocio_id, nombre) DO UPDATE SET pin_hash=$3, sucursal_id=$4, activo=true
        RETURNING id, nombre, sucursal_id`,
-      [usuario_id, nombre.trim(), pin_hash, sucursal_id || null]
+      [negocio_id, nombre.trim(), pin_hash, sucursal_id || null]
     );
     res.json(result.rows[0]);
   } catch (e) {
