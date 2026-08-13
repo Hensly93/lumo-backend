@@ -148,9 +148,9 @@ router.get('/empleados', auth, async (req, res) => {
               s.nombre AS sucursal_nombre
        FROM empleados_negocio e
        LEFT JOIN mis_sucursales s ON e.sucursal_id = s.id
-       WHERE e.usuario_id=$1 AND e.activo=true
+       WHERE e.negocio_id=$1 AND e.activo=true
        ORDER BY e.nombre`,
-      [req.user.id]
+      [req.user.negocio_id]
     );
     res.json(r.rows);
   } catch (e) {
@@ -168,12 +168,12 @@ router.post('/empleados', auth, async (req, res) => {
     }
     const pin_hash = await bcrypt.hash(String(pin), 10);
     const r = await pool.query(
-      `INSERT INTO empleados_negocio(usuario_id, nombre, pin_hash, sucursal_id)
+      `INSERT INTO empleados_negocio(negocio_id, nombre, pin_hash, sucursal_id)
        VALUES($1,$2,$3,$4)
-       ON CONFLICT(usuario_id, nombre)
+       ON CONFLICT(negocio_id, nombre)
        DO UPDATE SET pin_hash=$3, sucursal_id=$4, activo=true
        RETURNING id, nombre, sucursal_id, activo`,
-      [req.user.id, nombre.trim(), pin_hash, sucursal_id || null]
+      [req.user.negocio_id, nombre.trim(), pin_hash, sucursal_id || null]
     );
     res.json(r.rows[0]);
   } catch (e) {
@@ -187,8 +187,8 @@ router.patch('/empleados/:id', auth, async (req, res) => {
     const { nombre, pin, sucursal_id } = req.body;
 
     const emp = await pool.query(
-      'SELECT id, pin_hash FROM empleados_negocio WHERE id=$1 AND usuario_id=$2',
-      [req.params.id, req.user.id]
+      'SELECT id, pin_hash FROM empleados_negocio WHERE id=$1 AND negocio_id=$2',
+      [req.params.id, req.user.negocio_id]
     );
     if (emp.rows.length === 0) return res.status(404).json({ error: 'Empleado no encontrado' });
 
@@ -205,9 +205,9 @@ router.patch('/empleados/:id', auth, async (req, res) => {
         nombre      = COALESCE($1, nombre),
         pin_hash    = $2,
         sucursal_id = COALESCE($3, sucursal_id)
-       WHERE id=$4 AND usuario_id=$5
+       WHERE id=$4 AND negocio_id=$5
        RETURNING id, nombre, sucursal_id, activo`,
-      [nombre?.trim() || null, pin_hash, sucursal_id || null, req.params.id, req.user.id]
+      [nombre?.trim() || null, pin_hash, sucursal_id || null, req.params.id, req.user.negocio_id]
     );
     res.json(r.rows[0]);
   } catch (e) {
@@ -219,8 +219,8 @@ router.patch('/empleados/:id', auth, async (req, res) => {
 router.delete('/empleados/:id', auth, async (req, res) => {
   try {
     const r = await pool.query(
-      'UPDATE empleados_negocio SET activo=false WHERE id=$1 AND usuario_id=$2 RETURNING id',
-      [req.params.id, req.user.id]
+      'UPDATE empleados_negocio SET activo=false WHERE id=$1 AND negocio_id=$2 RETURNING id',
+      [req.params.id, req.user.negocio_id]
     );
     if (r.rowCount === 0) return res.status(404).json({ error: 'Empleado no encontrado' });
     res.json({ ok: true });
