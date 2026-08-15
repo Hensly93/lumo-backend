@@ -154,7 +154,7 @@ router.post('/apertura', async (req, res) => {
 
     // Validar PIN
     const emp = await pool.query(
-      'SELECT id, pin_hash FROM empleados_negocio WHERE usuario_id=$1 AND nombre=$2 AND activo=true',
+      'SELECT id, pin_hash, negocio_id FROM empleados_negocio WHERE usuario_id=$1 AND nombre=$2 AND activo=true',
       [usuario_id, nombre_empleado]
     );
     if (emp.rows.length === 0) return res.status(401).json({ error: 'Empleado no encontrado' });
@@ -175,9 +175,9 @@ router.post('/apertura', async (req, res) => {
     const tipoTurno = calcularTipoTurno();
 
     const result = await pool.query(
-      `INSERT INTO turnos_caja(usuario_id, nombre_empleado, tipo_turno, caja_apertura, hora_apertura, conteo_aleatorio_hora, sucursal_id)
-       VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-      [usuario_id, nombre_empleado, tipoTurno, caja_apertura, horaApertura, conteoHora, sucursal_id || null]
+      `INSERT INTO turnos_caja(usuario_id, nombre_empleado, tipo_turno, caja_apertura, hora_apertura, conteo_aleatorio_hora, sucursal_id, negocio_id)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [usuario_id, nombre_empleado, tipoTurno, caja_apertura, horaApertura, conteoHora, sucursal_id || null, emp.rows[0].negocio_id]
     );
 
     await pool.query(
