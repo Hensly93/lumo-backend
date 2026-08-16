@@ -10,7 +10,7 @@ const { agregarPorTurno, detectarAnomalias } = require('./deteccion');
 const { calcularCUSUMCompleto }              = require('./cusum');
 const { detectarPatronesSemana }             = require('./patron_semanal');
 const { cruzarCatalogoConTicket }            = require('./cruce_catalogo');
-const { calcularRiesgoEmpleado }             = require('./erm');
+const { calcularERMNegocio, calcularRiesgoEmpleado } = require('./erm');
 const { analizarCruceTurno }                 = require('./cruce_variables');
 
 const TOTAL_MODULOS = 6;
@@ -49,7 +49,7 @@ function calcularRiskScoreMotor(deteccion) {
 // Ponderación: ERM 60 % + CUSUM 40 %.
 
 function calcularContextoScore(erm, cusum) {
-  const erm_score  = erm?.score ?? 0;
+  const erm_score  = erm?.empleados?.[0]?.score ?? 0;
   const cusum_pcts = (cusum?.turnos || [])
     .filter(t => t.disponible)
     .map(t => t.pct_umbral ?? 0);
@@ -105,7 +105,7 @@ async function orchestrate({ negocio_id, uid = null, turno_actual = null }) {
     calcularCUSUMCompleto(negocio_id),
     detectarPatronesSemana(negocio_id),
     cruzarCatalogoConTicket(negocio_id),
-    uid          ? calcularRiesgoEmpleado(negocio_id, uid) : Promise.resolve(null),
+    calcularERMNegocio(negocio_id),
     turno_actual ? analizarCruceTurno(turno_actual)        : Promise.resolve(null),
   ]);
 
@@ -145,8 +145,8 @@ async function orchestrate({ negocio_id, uid = null, turno_actual = null }) {
     patrones:       patrones             ?? [],
     catalogo_señal: catalogo?.señal      ?? null,
     cruce_señales:  cruce?.señales       ?? [],
-    erm_nivel:      erm?.nivel           ?? null,
-    erm_score:      erm?.score           ?? null,
+    erm_nivel:      erm?.empleados?.[0]?.nivel ?? null,
+    erm_score:      erm?.empleados?.[0]?.score ?? null,
   };
 
   return {
