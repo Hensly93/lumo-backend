@@ -192,21 +192,17 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
   try {
     // Obtener negocio_id y tipo_negocio desde tabla negocios
     const negocioResult = await pool.query(
-      `SELECT n.id, n.tipo_negocio
-       FROM negocios n
-       JOIN negocio_usuarios nu ON nu.negocio_id = n.id
-       WHERE nu.usuario_id = $1 AND nu.activo = true
-       LIMIT 1`,
+      `SELECT id, tipo_negocio FROM negocios WHERE id = $1 LIMIT 1`,
       [usuarioId]
     );
     const { id: negocioId, tipo_negocio } = negocioResult.rows[0] || {};
     const tipoNegocio = normalizarTipoNegocio(tipo_negocio);
 
     const result = await pool.query(
-      `SELECT * FROM transacciones WHERE usuario_id = $1
+      `SELECT * FROM transacciones WHERE negocio_id = $1
        AND ($2::integer IS NULL OR sucursal_id = $2)
        ORDER BY fecha ASC`,
-      [usuarioId, sucursalId]
+      [negocioId, sucursalId]
     );
     const transacciones = result.rows;
 
