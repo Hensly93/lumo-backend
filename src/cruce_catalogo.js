@@ -16,7 +16,7 @@ async function cruzarCatalogoConTicket(usuarioId, sucursalId = null) {
   const catRes = await pool.query(
     `SELECT AVG(precio_venta) AS precio_promedio, COUNT(*) AS n_productos
      FROM productos
-     WHERE usuario_id=$1 AND activo=true AND precio_venta IS NOT NULL`,
+     WHERE negocio_id=$1 AND activo=true AND precio_venta IS NOT NULL`,
     [usuarioId]
   );
 
@@ -28,7 +28,7 @@ async function cruzarCatalogoConTicket(usuarioId, sucursalId = null) {
   const txRes = await pool.query(
     `SELECT AVG(monto) AS ticket_real, COUNT(*) AS n_tx
      FROM transacciones
-     WHERE usuario_id=$1
+     WHERE negocio_id=$1
        AND ($2::integer IS NULL OR sucursal_id=$2)
        AND fecha >= NOW() - INTERVAL '30 days'
        AND monto > 0`,

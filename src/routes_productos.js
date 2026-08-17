@@ -297,7 +297,7 @@ router.patch('/:id', auth, async (req, res) => {
 // Cruce ticket real vs precio promedio del catálogo (señal analítica para NICOLE)
 router.get('/precios-alertas', auth, async (req, res) => {
   try {
-    const cruce = await cruzarCatalogoConTicket(req.user.id);
+    const cruce = await cruzarCatalogoConTicket(req.user.negocio_id);
     res.json({ cruce });
   } catch (e) {
     res.status(500).json({ error: e.message });

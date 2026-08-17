@@ -59,8 +59,8 @@ async function analizarCruceTurno(turnoId) {
        COUNT(*) as cantidad_tx,
        COALESCE(AVG(monto),0) as ticket_promedio
      FROM transacciones
-     WHERE usuario_id=$1 AND fecha >= $2 AND fecha <= COALESCE($3, NOW())`,
-    [t.usuario_id, t.hora_apertura, t.hora_cierre]
+     WHERE negocio_id=$1 AND fecha >= $2 AND fecha <= COALESCE($3, NOW())`,
+    [t.negocio_id, t.hora_apertura, t.hora_cierre]
   );
   const v = ventasRes.rows[0];
   const totalVentas = parseFloat(v.total_ventas);
@@ -83,9 +83,9 @@ async function analizarCruceTurno(turnoId) {
   const historico = await pool.query(
     `SELECT brecha, caja_esperada, nombre_empleado, tipo_turno, hora_apertura
      FROM turnos_caja
-     WHERE usuario_id=$1 AND estado='cerrado' AND id != $2 AND brecha IS NOT NULL
+     WHERE negocio_id=$1 AND estado='cerrado' AND id != $2 AND brecha IS NOT NULL
      ORDER BY hora_apertura DESC LIMIT 60`,
-    [t.usuario_id, turnoId]
+    [t.negocio_id, turnoId]
   );
   const turnos = historico.rows;
 
@@ -134,8 +134,8 @@ async function analizarCruceTurno(turnoId) {
     // Si ticket real es >2x el histórico sin causa → señal
     const txHistRes = await pool.query(
       `SELECT AVG(monto) as ticket_hist FROM transacciones
-       WHERE usuario_id=$1 AND fecha >= NOW() - INTERVAL '60 days'`,
-      [t.usuario_id]
+       WHERE negocio_id=$1 AND fecha >= NOW() - INTERVAL '60 days'`,
+      [t.negocio_id]
     );
     const ticketHist = parseFloat(txHistRes.rows[0]?.ticket_hist || 0);
     if (ticketHist > 0 && ticketReal > ticketHist * 2.5) {

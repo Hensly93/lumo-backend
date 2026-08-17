@@ -28,7 +28,7 @@ async function detectarPatronesSemana(usuarioId, sucursalId = null) {
        DATE(fecha) AS dia,
        SUM(monto) AS total_ventas
      FROM transacciones
-     WHERE usuario_id = $1
+     WHERE negocio_id = $1
        AND ($2::integer IS NULL OR sucursal_id = $2)
        AND fecha >= NOW() - INTERVAL '60 days'
        AND monto > 0
