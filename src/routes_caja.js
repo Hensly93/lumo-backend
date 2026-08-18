@@ -391,8 +391,8 @@ router.post('/cierre', async (req, res) => {
          COALESCE(SUM(CASE WHEN metodo_pago='mp' THEN monto ELSE 0 END),0) as total_mp,
          COUNT(*) as cantidad_tx
        FROM transacciones
-       WHERE usuario_id=$1 AND fecha >= $2 AND fecha <= NOW()`,
-      [t.usuario_id, t.hora_apertura]
+       WHERE negocio_id=$1 AND fecha >= $2 AND fecha <= NOW()`,
+      [t.negocio_id, t.hora_apertura]
     );
     const totalVentas = parseFloat(ventas.rows[0].total_ventas);
     const totalMP = parseFloat(ventas.rows[0].total_mp);
