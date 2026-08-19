@@ -79,6 +79,14 @@ try {
 }
 
 try {
+  const geoRoutes = require("./routes_geo");
+  app.use("/api/geo", geoRoutes);
+  console.log("Geo OK");
+} catch(e) {
+  console.error("Geo ERROR:", e.message);
+}
+
+try {
   const usuarioRoutes = require("./routes_usuario");
   app.use("/api/usuario", usuarioRoutes);
   console.log("Usuario OK");
