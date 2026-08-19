@@ -19,6 +19,9 @@ const pool = require('./db');
 const https = require('https');
 const { calcularMediana, calcularMAD, robustZScore } = require('./deteccion');
 
+const DEFAULT_LAT_CABA = -34.6037;
+const DEFAULT_LON_CABA = -58.3816;
+
 // ─── Feriados Argentina 2026 ─────────────────────────────────────────────────
 
 const FERIADOS_ARG = new Set([
@@ -120,17 +123,43 @@ function factoresAjuste(ctx, clima) {
 // Buenos Aires: lat=-34.6037, lon=-58.3816
 // API gratuita, sin key. Timeout de 3 segundos para no bloquear.
 
-const _climaCache = {}; // { 'YYYY-MM-DD': { clima, timestamp } }
+async function resolverCoordenadasSucursal(negocioId, sucursalId) {
+  if (sucursalId) {
+    const r = await pool.query(
+      `SELECT latitud, longitud FROM mis_sucursales
+       WHERE id=$1 AND negocio_id=$2 AND geocoding_status='ok'`,
+      [sucursalId, negocioId]
+    );
+    if (r.rows.length > 0) return { lat: parseFloat(r.rows[0].latitud), lon: parseFloat(r.rows[0].longitud) };
+  }
+  // Fallback: primera sucursal geocodificada del negocio
+  const r2 = await pool.query(
+    `SELECT latitud, longitud FROM mis_sucursales
+     WHERE negocio_id=$1 AND geocoding_status='ok'
+     ORDER BY id ASC LIMIT 1`,
+    [negocioId]
+  );
+  if (r2.rows.length > 0) return { lat: parseFloat(r2.rows[0].latitud), lon: parseFloat(r2.rows[0].longitud) };
+  return null; // ninguna sucursal geocodificada todavía
+}
 
-async function fetchClima(fechaStr) {
-  // Cache por día
-  if (_climaCache[fechaStr] && (Date.now() - _climaCache[fechaStr].ts) < 6 * 3600 * 1000) {
-    return _climaCache[fechaStr].clima;
+const _climaCache = {}; // { 'YYYY-MM-DD_lat_lon': { clima, timestamp } }
+
+async function fetchClima(fechaStr, lat, lon) {
+  // Default temporal: se usa cuando no hay sucursal geocodificada todavía,
+  // o desde código no conectado (predicciones.js)
+  const latFinal = (lat == null || lat === undefined) ? DEFAULT_LAT_CABA : lat;
+  const lonFinal = (lon == null || lon === undefined) ? DEFAULT_LON_CABA : lon;
+
+  // Cache por día + ubicación
+  const cacheKey = `${fechaStr}_${latFinal.toFixed(2)}_${lonFinal.toFixed(2)}`;
+  if (_climaCache[cacheKey] && (Date.now() - _climaCache[cacheKey].ts) < 6 * 3600 * 1000) {
+    return _climaCache[cacheKey].clima;
   }
 
   return new Promise((resolve) => {
     const timeout = setTimeout(() => resolve('desconocido'), 3000);
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=-34.6037&longitude=-58.3816&daily=precipitation_sum,temperature_2m_max&timezone=America%2FArgentina%2FBuenos_Aires&start_date=${fechaStr}&end_date=${fechaStr}`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${latFinal}&longitude=${lonFinal}&daily=precipitation_sum,temperature_2m_max&timezone=America%2FArgentina%2FBuenos_Aires&start_date=${fechaStr}&end_date=${fechaStr}`;
 
     https.get(url, (res) => {
       let data = '';
@@ -145,7 +174,7 @@ async function fetchClima(fechaStr) {
           if (precip >= 5) clima = 'lluvia';
           else if (tempMax >= 35) clima = 'calor_extremo';
           else if (tempMax <= 5) clima = 'frio_extremo';
-          _climaCache[fechaStr] = { clima, ts: Date.now() };
+          _climaCache[cacheKey] = { clima, ts: Date.now() };
           resolve(clima);
         } catch {
           resolve('desconocido');
@@ -252,7 +281,8 @@ async function analizarTurnoConContexto(turnoId) {
   if (t.estado !== 'cerrado') return { error: 'El turno aún no está cerrado' };
 
   const ctx = getContextoTemporal(t.hora_apertura);
-  const clima = await fetchClima(ctx.fecha_str);
+  const coords = await resolverCoordenadasSucursal(t.negocio_id, t.sucursal_id);
+  const clima = await fetchClima(ctx.fecha_str, coords?.lat, coords?.lon);
   const { factor, componentes } = factoresAjuste(ctx, clima);
 
   // Brecha ajustada por contexto
@@ -350,7 +380,8 @@ function generarMensajePositivo(nombre, rachaLimpia) {
 async function contextTurnoActivo(negocioId, tipoTurno) {
   const ahora = new Date();
   const ctx = getContextoTemporal(ahora);
-  const clima = await fetchClima(ctx.fecha_str);
+  const coords = await resolverCoordenadasSucursal(negocioId, null);
+  const clima = await fetchClima(ctx.fecha_str, coords?.lat, coords?.lon);
   const { factor, componentes } = factoresAjuste(ctx, clima);
 
   // Ticket esperado del turno según contexto
@@ -426,6 +457,7 @@ module.exports = {
   getContextoTemporal,
   clavesContexto,
   factoresAjuste,
+  resolverCoordenadasSucursal,
   fetchClima,
   calcularZScoreEmpleado,
   rankingEmpleadosTurno,

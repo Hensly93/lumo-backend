@@ -3,7 +3,7 @@ const { generarInsight, generarInsightMetrica } = require('./insights');
 const { getBenchmarkSector, normalizarTipoNegocio, calcularZScoreSector } = require('./benchmarks_sector');
 const { calcularMetricasNegocio, getBaselineNegocio } = require('./baseline_negocio');
 const { calcularPesos, calcularScoreHibrido, determinarCapaOrigen, calcularZScorePropio } = require('./benchmark_hibrido');
-const { getContextoTemporal, fetchClima, factoresAjuste } = require('./zscore_contextual');
+const { getContextoTemporal, resolverCoordenadasSucursal, fetchClima, factoresAjuste } = require('./zscore_contextual');
 const { calcularUmbralCelda, condicionDesdeContexto } = require('./motor_conductual');
 const { orchestrate } = require('./orchestrator');
 const pool = require('./db');
@@ -246,7 +246,8 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
 
     // Contexto temporal actual + clima
     const ctx = getContextoTemporal(new Date());
-    const clima = await fetchClima(ctx.fecha_str);
+    const coords = await resolverCoordenadasSucursal(negocioId, sucursalId);
+    const clima = await fetchClima(ctx.fecha_str, coords?.lat, coords?.lon);
     const { factor: factorContexto, componentes: componentesContexto } = factoresAjuste(ctx, clima);
 
     // Métricas recientes (últimos 7 días) vs baseline histórico
