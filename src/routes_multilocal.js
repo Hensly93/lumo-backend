@@ -70,7 +70,9 @@ router.post('/sucursal', auth, async (req, res) => {
 router.get('/red', auth, async (req, res) => {
   try {
     const sucursales = await pool.query(
-      `SELECT id, nombre, direccion, activo, created_at
+      `SELECT id, nombre, direccion, activo, created_at,
+              calle, numero, localidad, provincia,
+              latitud, longitud, geocoding_status
        FROM mis_sucursales
        WHERE negocio_id=$1 AND activo=true
        ORDER BY nombre ASC`,
@@ -115,6 +117,13 @@ router.get('/red', auth, async (req, res) => {
           id: s.id,
           nombre: s.nombre,
           direccion: s.direccion,
+          calle: s.calle,
+          numero: s.numero,
+          localidad: s.localidad,
+          provincia: s.provincia,
+          latitud: s.latitud,
+          longitud: s.longitud,
+          geocoding_status: s.geocoding_status,
           ventas_mes: parseFloat(ventas.rows[0].total),
           tx_mes: txMes,
           brecha_promedio: Math.round(brechaVal),
@@ -145,18 +154,104 @@ router.get('/red', auth, async (req, res) => {
 });
 
 // ─── PATCH /api/multilocal/sucursal/:id ──────────────────────────────────────
-// Editar nombre o dirección de un local
+// Editar nombre o dirección de un local (con geocoding condicional)
 router.patch('/sucursal/:id', auth, async (req, res) => {
   try {
-    const { nombre, direccion } = req.body;
+    const { nombre, calle, numero, localidad, provincia } = req.body;
     if (!nombre) return res.status(400).json({ error: 'nombre requerido' });
-    const result = await pool.query(
-      `UPDATE mis_sucursales SET nombre=$1, direccion=$2
-       WHERE id=$3 AND negocio_id=$4 RETURNING *`,
-      [nombre.trim(), direccion?.trim() || null, req.params.id, req.user.negocio_id]
+
+    // Traer sucursal actual para comparar campos de dirección
+    const current = await pool.query(
+      `SELECT calle, numero, localidad, provincia, latitud, longitud, geocoding_status
+       FROM mis_sucursales
+       WHERE id=$1 AND negocio_id=$2`,
+      [req.params.id, req.user.negocio_id]
     );
-    if (result.rowCount === 0) return res.status(404).json({ error: 'Local no encontrado' });
-    res.json(result.rows[0]);
+
+    if (current.rowCount === 0) {
+      return res.status(404).json({ error: 'Local no encontrado' });
+    }
+
+    const actual = current.rows[0];
+
+    // Regenerar direccion legacy siempre
+    const direccion = calle || numero || localidad || provincia
+      ? `${calle || ''} ${numero || ''}, ${localidad || ''}, ${provincia || ''}`.trim()
+      : null;
+
+    // Comparar los 4 campos de dirección
+    const cambioDir = (
+      (calle?.trim() || null) !== (actual.calle || null) ||
+      (numero?.trim() || null) !== (actual.numero || null) ||
+      (localidad?.trim() || null) !== (actual.localidad || null) ||
+      (provincia?.trim() || null) !== (actual.provincia || null)
+    );
+
+    let latitud = actual.latitud;
+    let longitud = actual.longitud;
+    let geocoding_status = actual.geocoding_status;
+
+    // Si cambió alguno de los 4 campos: re-geocodificar
+    if (cambioDir) {
+      if (calle && localidad) {
+        const geoResult = await geocodificarDireccion(calle, numero, localidad, provincia);
+        if (geoResult.status === 'ok') {
+          latitud = geoResult.lat;
+          longitud = geoResult.lon;
+          geocoding_status = 'ok';
+        } else {
+          geocoding_status = 'error';
+        }
+      } else {
+        latitud = null;
+        longitud = null;
+        geocoding_status = 'pendiente';
+      }
+
+      // Update con nuevos datos de geocoding y timestamp
+      const result = await pool.query(
+        `UPDATE mis_sucursales
+         SET nombre=$1, direccion=$2,
+             calle=$3, numero=$4, localidad=$5, provincia=$6,
+             latitud=$7, longitud=$8, geocoding_status=$9, geocoding_fecha=NOW()
+         WHERE id=$10 AND negocio_id=$11
+         RETURNING *`,
+        [
+          nombre.trim(),
+          direccion,
+          calle?.trim() || null,
+          numero?.trim() || null,
+          localidad?.trim() || null,
+          provincia?.trim() || null,
+          latitud,
+          longitud,
+          geocoding_status,
+          req.params.id,
+          req.user.negocio_id,
+        ]
+      );
+      res.json(result.rows[0]);
+    } else {
+      // No cambió dirección: no tocar lat/lon/geocoding_status/geocoding_fecha
+      const result = await pool.query(
+        `UPDATE mis_sucursales
+         SET nombre=$1, direccion=$2,
+             calle=$3, numero=$4, localidad=$5, provincia=$6
+         WHERE id=$7 AND negocio_id=$8
+         RETURNING *`,
+        [
+          nombre.trim(),
+          direccion,
+          calle?.trim() || null,
+          numero?.trim() || null,
+          localidad?.trim() || null,
+          provincia?.trim() || null,
+          req.params.id,
+          req.user.negocio_id,
+        ]
+      );
+      res.json(result.rows[0]);
+    }
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
