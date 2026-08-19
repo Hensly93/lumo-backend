@@ -8,17 +8,56 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const pool = require('./db');
 const { auth } = require('./authMiddleware');
+const { geocodificarDireccion } = require('./geocoding');
 
 // ─── POST /api/multilocal/sucursal ───────────────────────────────────────────
-// Agregar un local propio (nombre + dirección)
+// Agregar un local propio (nombre + dirección estructurada + geocoding)
 router.post('/sucursal', auth, async (req, res) => {
   try {
-    const { nombre, direccion } = req.body;
+    const { nombre, calle, numero, localidad, provincia } = req.body;
     if (!nombre) return res.status(400).json({ error: 'nombre requerido' });
+
+    // Generar direccion legacy como concatenación
+    const direccion = calle || numero || localidad || provincia
+      ? `${calle || ''} ${numero || ''}, ${localidad || ''}, ${provincia || ''}`.trim()
+      : null;
+
+    // Geocodificar si hay datos de dirección
+    let latitud = null;
+    let longitud = null;
+    let geocoding_status = 'pendiente';
+
+    if (calle && localidad) {
+      const geoResult = await geocodificarDireccion(calle, numero, localidad, provincia);
+      if (geoResult.status === 'ok') {
+        latitud = geoResult.lat;
+        longitud = geoResult.lon;
+        geocoding_status = 'ok';
+      } else {
+        geocoding_status = 'error';
+      }
+    }
+
     const result = await pool.query(
-      `INSERT INTO mis_sucursales(usuario_id, nombre, direccion, negocio_id)
-       VALUES($1,$2,$3,$4) RETURNING *`,
-      [req.user.id, nombre.trim(), direccion?.trim() || null, req.user.negocio_id]
+      `INSERT INTO mis_sucursales(
+        usuario_id, nombre, direccion, negocio_id,
+        calle, numero, localidad, provincia,
+        latitud, longitud, geocoding_status, geocoding_fecha
+      )
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW()) RETURNING *`,
+      [
+        req.user.id,
+        nombre.trim(),
+        direccion,
+        req.user.negocio_id,
+        calle?.trim() || null,
+        numero?.trim() || null,
+        localidad?.trim() || null,
+        provincia?.trim() || null,
+        latitud,
+        longitud,
+        geocoding_status,
+      ]
     );
     res.json(result.rows[0]);
   } catch(e) {
