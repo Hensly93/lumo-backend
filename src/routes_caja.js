@@ -98,14 +98,14 @@ router.delete('/empleados/:id', async (req, res) => {
 // POST /api/caja/validar-pin
 router.post('/validar-pin', async (req, res) => {
   try {
-    const { usuario_id, nombre_empleado, pin } = req.body;
-    if (!usuario_id || !nombre_empleado || !pin) {
-      return res.status(400).json({ error: 'usuario_id, nombre_empleado y pin requeridos' });
+    const { negocio_id, nombre_empleado, pin } = req.body;
+    if (!negocio_id || !nombre_empleado || !pin) {
+      return res.status(400).json({ error: 'negocio_id, nombre_empleado y pin requeridos' });
     }
 
     const emp = await pool.query(
-      'SELECT id, pin_hash FROM empleados_negocio WHERE usuario_id=$1 AND nombre=$2 AND activo=true',
-      [usuario_id, nombre_empleado]
+      'SELECT id, pin_hash FROM empleados_negocio WHERE negocio_id=$1 AND nombre=$2 AND activo=true',
+      [negocio_id, nombre_empleado]
     );
     if (emp.rows.length === 0) {
       return res.status(401).json({ error: 'Empleado no encontrado' });
@@ -118,9 +118,9 @@ router.post('/validar-pin', async (req, res) => {
     // Buscar turno activo
     const turno = await pool.query(
       `SELECT * FROM turnos_caja
-       WHERE usuario_id=$1 AND nombre_empleado=$2 AND estado='activo'
+       WHERE negocio_id=$1 AND nombre_empleado=$2 AND estado='activo'
        ORDER BY hora_apertura DESC LIMIT 1`,
-      [usuario_id, nombre_empleado]
+      [negocio_id, nombre_empleado]
     );
 
     if (turno.rows.length > 0) {
@@ -147,15 +147,15 @@ router.post('/validar-pin', async (req, res) => {
 // POST /api/caja/apertura
 router.post('/apertura', async (req, res) => {
   try {
-    const { usuario_id, nombre_empleado, pin, caja_apertura, sucursal_id } = req.body;
-    if (!usuario_id || !nombre_empleado || !pin || caja_apertura === undefined) {
-      return res.status(400).json({ error: 'usuario_id, nombre_empleado, pin y caja_apertura requeridos' });
+    const { negocio_id, nombre_empleado, pin, caja_apertura, sucursal_id } = req.body;
+    if (!negocio_id || !nombre_empleado || !pin || caja_apertura === undefined) {
+      return res.status(400).json({ error: 'negocio_id, nombre_empleado, pin y caja_apertura requeridos' });
     }
 
     // Validar PIN
     const emp = await pool.query(
-      'SELECT id, pin_hash, negocio_id FROM empleados_negocio WHERE usuario_id=$1 AND nombre=$2 AND activo=true',
-      [usuario_id, nombre_empleado]
+      'SELECT id, pin_hash, negocio_id FROM empleados_negocio WHERE negocio_id=$1 AND nombre=$2 AND activo=true',
+      [negocio_id, nombre_empleado]
     );
     if (emp.rows.length === 0) return res.status(401).json({ error: 'Empleado no encontrado' });
     const valido = await bcrypt.compare(String(pin), emp.rows[0].pin_hash);
@@ -163,8 +163,8 @@ router.post('/apertura', async (req, res) => {
 
     // Verificar que no haya turno activo
     const activo = await pool.query(
-      `SELECT id FROM turnos_caja WHERE usuario_id=$1 AND nombre_empleado=$2 AND estado='activo'`,
-      [usuario_id, nombre_empleado]
+      `SELECT id FROM turnos_caja WHERE negocio_id=$1 AND nombre_empleado=$2 AND estado='activo'`,
+      [negocio_id, nombre_empleado]
     );
     if (activo.rows.length > 0) {
       return res.status(400).json({ error: 'Ya tenés un turno activo', turno_id: activo.rows[0].id });
@@ -174,10 +174,20 @@ router.post('/apertura', async (req, res) => {
     const conteoHora = calcularHoraConteo(horaApertura);
     const tipoTurno = calcularTipoTurno();
 
+    // Obtener usuario_id del owner del negocio
+    const owner = await pool.query(
+      `SELECT usuario_id FROM negocio_usuarios WHERE negocio_id=$1 AND rol='owner' AND activo=true`,
+      [negocio_id]
+    );
+    if (owner.rows.length === 0) {
+      return res.status(400).json({ error: 'No se encontró el dueño de este negocio' });
+    }
+    const usuarioIdReal = owner.rows[0].usuario_id;
+
     const result = await pool.query(
       `INSERT INTO turnos_caja(usuario_id, nombre_empleado, tipo_turno, caja_apertura, hora_apertura, conteo_aleatorio_hora, sucursal_id, negocio_id)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-      [usuario_id, nombre_empleado, tipoTurno, caja_apertura, horaApertura, conteoHora, sucursal_id || null, emp.rows[0].negocio_id]
+      [usuarioIdReal, nombre_empleado, tipoTurno, caja_apertura, horaApertura, conteoHora, sucursal_id || null, negocio_id]
     );
 
     await pool.query(

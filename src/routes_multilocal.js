@@ -16,9 +16,9 @@ router.post('/sucursal', auth, async (req, res) => {
     const { nombre, direccion } = req.body;
     if (!nombre) return res.status(400).json({ error: 'nombre requerido' });
     const result = await pool.query(
-      `INSERT INTO mis_sucursales(usuario_id, nombre, direccion)
-       VALUES($1,$2,$3) RETURNING *`,
-      [req.user.id, nombre.trim(), direccion?.trim() || null]
+      `INSERT INTO mis_sucursales(usuario_id, nombre, direccion, negocio_id)
+       VALUES($1,$2,$3,$4) RETURNING *`,
+      [req.user.id, nombre.trim(), direccion?.trim() || null, req.user.negocio_id]
     );
     res.json(result.rows[0]);
   } catch(e) {
@@ -33,9 +33,9 @@ router.get('/red', auth, async (req, res) => {
     const sucursales = await pool.query(
       `SELECT id, nombre, direccion, activo, created_at
        FROM mis_sucursales
-       WHERE usuario_id=$1 AND activo=true
+       WHERE negocio_id=$1 AND activo=true
        ORDER BY nombre ASC`,
-      [req.user.id]
+      [req.user.negocio_id]
     );
 
     if (sucursales.rows.length === 0) {
@@ -48,23 +48,23 @@ router.get('/red', auth, async (req, res) => {
           pool.query(
             `SELECT COALESCE(SUM(monto),0) as total, COUNT(*) as tx
              FROM transacciones
-             WHERE usuario_id=$1 AND sucursal_id=$2
+             WHERE negocio_id=$1 AND sucursal_id=$2
                AND DATE_TRUNC('month', fecha) = DATE_TRUNC('month', NOW())`,
-            [req.user.id, s.id]
+            [req.user.negocio_id, s.id]
           ),
           pool.query(
             `SELECT COALESCE(AVG(ABS(brecha)),0) as brecha_prom, COUNT(*) as n_turnos
              FROM turnos_caja
-             WHERE usuario_id=$1 AND sucursal_id=$2 AND estado='cerrado'
+             WHERE negocio_id=$1 AND sucursal_id=$2 AND estado='cerrado'
                AND hora_apertura >= NOW() - INTERVAL '30 days'`,
-            [req.user.id, s.id]
+            [req.user.negocio_id, s.id]
           ),
           pool.query(
             `SELECT nombre_empleado, tipo_turno, hora_apertura
              FROM turnos_caja
-             WHERE usuario_id=$1 AND sucursal_id=$2 AND estado='activo'
+             WHERE negocio_id=$1 AND sucursal_id=$2 AND estado='activo'
              ORDER BY hora_apertura DESC LIMIT 1`,
-            [req.user.id, s.id]
+            [req.user.negocio_id, s.id]
           ),
         ]);
 
@@ -113,8 +113,8 @@ router.patch('/sucursal/:id', auth, async (req, res) => {
     if (!nombre) return res.status(400).json({ error: 'nombre requerido' });
     const result = await pool.query(
       `UPDATE mis_sucursales SET nombre=$1, direccion=$2
-       WHERE id=$3 AND usuario_id=$4 RETURNING *`,
-      [nombre.trim(), direccion?.trim() || null, req.params.id, req.user.id]
+       WHERE id=$3 AND negocio_id=$4 RETURNING *`,
+      [nombre.trim(), direccion?.trim() || null, req.params.id, req.user.negocio_id]
     );
     if (result.rowCount === 0) return res.status(404).json({ error: 'Local no encontrado' });
     res.json(result.rows[0]);
@@ -129,8 +129,8 @@ router.delete('/sucursal/:id', auth, async (req, res) => {
   try {
     const result = await pool.query(
       `UPDATE mis_sucursales SET activo=false
-       WHERE id=$1 AND usuario_id=$2`,
-      [req.params.id, req.user.id]
+       WHERE id=$1 AND negocio_id=$2`,
+      [req.params.id, req.user.negocio_id]
     );
     if (result.rowCount === 0) return res.status(404).json({ error: 'Local no encontrado' });
     res.json({ ok: true });
@@ -139,14 +139,14 @@ router.delete('/sucursal/:id', auth, async (req, res) => {
   }
 });
 
-// ─── GET /api/multilocal/sucursales-publicas/:usuario_id ─────────────────────
+// ─── GET /api/multilocal/sucursales-publicas/:negocio_id ─────────────────────
 // Sin auth — usada por la vista de empleado para listar locales al abrir turno
-router.get('/sucursales-publicas/:usuario_id', async (req, res) => {
+router.get('/sucursales-publicas/:negocio_id', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT id, nombre, direccion FROM mis_sucursales
-       WHERE usuario_id=$1 AND activo=true ORDER BY nombre ASC`,
-      [req.params.usuario_id]
+       WHERE negocio_id=$1 AND activo=true ORDER BY nombre ASC`,
+      [req.params.negocio_id]
     );
     res.json(result.rows);
   } catch(e) {
