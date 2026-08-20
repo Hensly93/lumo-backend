@@ -188,9 +188,21 @@ router.post('/confirmar', auth, async (req, res) => {
       await client.query('BEGIN');
       let insertados = 0;
       let actualizados = 0;
+      const aumentosGrandes = [];
 
       for (const p of productos) {
         if (!p.nombre?.trim()) continue;
+
+        // Capturar precio anterior antes del INSERT
+        let precioAnterior = null;
+        if (p.precio_venta != null) {
+          const prev = await client.query(
+            'SELECT precio_venta FROM productos WHERE negocio_id=$1 AND nombre=$2 AND activo=true',
+            [req.user.negocio_id, p.nombre.trim()]
+          );
+          precioAnterior = prev.rows[0]?.precio_venta || null;
+        }
+
         // Upsert por (negocio_id, nombre) — si ya existe actualiza precio
         const r = await client.query(
           `INSERT INTO productos(negocio_id, nombre, categoria, precio_venta, precio_costo, unidad)
@@ -203,14 +215,50 @@ router.post('/confirmar', auth, async (req, res) => {
              unidad       = COALESCE(EXCLUDED.unidad, productos.unidad),
              activo       = true,
              updated_at   = NOW()
-           RETURNING (xmax = 0) AS insertado`,
+           RETURNING (xmax = 0) AS insertado, id`,
           [req.user.negocio_id, p.nombre.trim(), p.categoria || null, p.precio_venta || null, p.precio_costo || null, p.unidad || 'unidad']
         );
-        if (r.rows[0].insertado) insertados++; else actualizados++;
+
+        const esInsercion = r.rows[0].insertado;
+        const productoId = r.rows[0].id;
+
+        if (esInsercion) insertados++; else actualizados++;
+
+        // Registrar en histórico de precios (dentro de la transacción)
+        if (p.precio_venta != null) {
+          if (esInsercion) {
+            // Producto nuevo en esta carga
+            await client.query(
+              `INSERT INTO productos_historico_precios(producto_id, negocio_id, precio_anterior, precio_nuevo, origen)
+               VALUES($1,$2,NULL,$3,'carga_masiva')`,
+              [productoId, req.user.negocio_id, p.precio_venta]
+            );
+          } else {
+            // Producto ya existía: registrar solo si el precio cambió
+            if (precioAnterior !== null && parseFloat(precioAnterior) !== parseFloat(p.precio_venta)) {
+              await client.query(
+                `INSERT INTO productos_historico_precios(producto_id, negocio_id, precio_anterior, precio_nuevo, origen)
+                 VALUES($1,$2,$3,$4,'carga_masiva')`,
+                [productoId, req.user.negocio_id, precioAnterior, p.precio_venta]
+              );
+
+              // Detectar aumentos grandes (>20%)
+              const aumento = ((parseFloat(p.precio_venta) - parseFloat(precioAnterior)) / parseFloat(precioAnterior)) * 100;
+              if (aumento > 20) {
+                aumentosGrandes.push({
+                  nombre: p.nombre.trim(),
+                  precio_anterior: parseFloat(precioAnterior),
+                  precio_nuevo: parseFloat(p.precio_venta),
+                  aumento_porcentaje: Math.round(aumento)
+                });
+              }
+            }
+          }
+        }
       }
 
       await client.query('COMMIT');
-      res.json({ ok: true, insertados, actualizados });
+      res.json({ ok: true, insertados, actualizados, aumentosGrandes });
     } catch (e) {
       await client.query('ROLLBACK');
       throw e;
