@@ -80,7 +80,7 @@ function clavesContexto(ctx) {
 
 // Factores de ajuste multiplicativos por contexto
 // El baseline se ajusta ANTES de calcular el z-score
-function factoresAjuste(ctx, clima) {
+function factoresAjuste(ctx, clima, indiceInflacion = null) {
   let factor = 1.0;
   const componentes = [];
 
@@ -114,6 +114,13 @@ function factoresAjuste(ctx, clima) {
   if (ctx.es_feriado && clima === 'lluvia') {
     factor *= 0.90; // doble impacto: 0.65 × 0.80 × 0.90 = 0.468
     componentes.push({ causa: 'lluvia_x_feriado', ajuste: -0.10 });
+  }
+
+  // Inflación mensual (cuando está disponible)
+  if (indiceInflacion !== null && indiceInflacion !== 0) {
+    const factorInflacion = 1 + (indiceInflacion / 100);
+    factor *= factorInflacion;
+    componentes.push({ causa: 'inflacion_mensual', ajuste: Math.round(indiceInflacion) / 100 });
   }
 
   return { factor: Math.round(factor * 1000) / 1000, componentes };
