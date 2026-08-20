@@ -130,22 +130,30 @@ async function resolverCoordenadasSucursal(negocioId, sucursalId) {
        WHERE id=$1 AND negocio_id=$2 AND geocoding_status='ok'`,
       [sucursalId, negocioId]
     );
-    if (r.rows.length > 0) return { lat: parseFloat(r.rows[0].latitud), lon: parseFloat(r.rows[0].longitud) };
+    if (r.rows.length > 0) return {
+      lat: parseFloat(r.rows[0].latitud),
+      lon: parseFloat(r.rows[0].longitud),
+      sucursal_id: sucursalId
+    };
   }
   // Fallback: primera sucursal geocodificada del negocio
   const r2 = await pool.query(
-    `SELECT latitud, longitud FROM mis_sucursales
+    `SELECT id, latitud, longitud FROM mis_sucursales
      WHERE negocio_id=$1 AND geocoding_status='ok'
      ORDER BY id ASC LIMIT 1`,
     [negocioId]
   );
-  if (r2.rows.length > 0) return { lat: parseFloat(r2.rows[0].latitud), lon: parseFloat(r2.rows[0].longitud) };
+  if (r2.rows.length > 0) return {
+    lat: parseFloat(r2.rows[0].latitud),
+    lon: parseFloat(r2.rows[0].longitud),
+    sucursal_id: r2.rows[0].id
+  };
   return null; // ninguna sucursal geocodificada todavía
 }
 
 const _climaCache = {}; // { 'YYYY-MM-DD_lat_lon': { clima, timestamp } }
 
-async function fetchClima(fechaStr, lat, lon) {
+async function fetchClima(fechaStr, lat, lon, sucursalId) {
   // Default temporal: se usa cuando no hay sucursal geocodificada todavía,
   // o desde código no conectado (predicciones.js)
   const latFinal = (lat == null || lat === undefined) ? DEFAULT_LAT_CABA : lat;
@@ -175,6 +183,17 @@ async function fetchClima(fechaStr, lat, lon) {
           else if (tempMax >= 35) clima = 'calor_extremo';
           else if (tempMax <= 5) clima = 'frio_extremo';
           _climaCache[cacheKey] = { clima, ts: Date.now() };
+
+          // Guardar en clima_historico si tenemos sucursal_id (fire-and-forget)
+          if (sucursalId != null && sucursalId !== undefined) {
+            pool.query(
+              `INSERT INTO clima_historico(sucursal_id, fecha, clima, precipitacion_mm, temp_max)
+               VALUES($1,$2,$3,$4,$5)
+               ON CONFLICT (sucursal_id, fecha) DO NOTHING`,
+              [sucursalId, fechaStr, clima, precip, tempMax]
+            ).catch(() => {}); // fire-and-forget, no romper si falla el INSERT
+          }
+
           resolve(clima);
         } catch {
           resolve('desconocido');
@@ -282,7 +301,7 @@ async function analizarTurnoConContexto(turnoId) {
 
   const ctx = getContextoTemporal(t.hora_apertura);
   const coords = await resolverCoordenadasSucursal(t.negocio_id, t.sucursal_id);
-  const clima = await fetchClima(ctx.fecha_str, coords?.lat, coords?.lon);
+  const clima = await fetchClima(ctx.fecha_str, coords?.lat, coords?.lon, coords?.sucursal_id);
   const { factor, componentes } = factoresAjuste(ctx, clima);
 
   // Brecha ajustada por contexto
@@ -381,7 +400,7 @@ async function contextTurnoActivo(negocioId, tipoTurno) {
   const ahora = new Date();
   const ctx = getContextoTemporal(ahora);
   const coords = await resolverCoordenadasSucursal(negocioId, null);
-  const clima = await fetchClima(ctx.fecha_str, coords?.lat, coords?.lon);
+  const clima = await fetchClima(ctx.fecha_str, coords?.lat, coords?.lon, coords?.sucursal_id);
   const { factor, componentes } = factoresAjuste(ctx, clima);
 
   // Ticket esperado del turno según contexto

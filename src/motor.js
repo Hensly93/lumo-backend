@@ -247,7 +247,7 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
     // Contexto temporal actual + clima
     const ctx = getContextoTemporal(new Date());
     const coords = await resolverCoordenadasSucursal(negocioId, sucursalId);
-    const clima = await fetchClima(ctx.fecha_str, coords?.lat, coords?.lon);
+    const clima = await fetchClima(ctx.fecha_str, coords?.lat, coords?.lon, coords?.sucursal_id);
     const { factor: factorContexto, componentes: componentesContexto } = factoresAjuste(ctx, clima);
 
     // Métricas recientes (últimos 7 días) vs baseline histórico

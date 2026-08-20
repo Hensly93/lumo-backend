@@ -49,7 +49,7 @@ function turnosRestantesMes(turnos_por_dia = 3) {
 
 async function proyectarFacturacion(usuarioId, sucursalId = null) {
   const ctx = getContextoTemporal(new Date());
-  const clima = await fetchClima(ctx.fecha_str, null, null);
+  const clima = await fetchClima(ctx.fecha_str, null, null, null);
   const { factor } = factoresAjuste(ctx, clima);
 
   const res = await pool.query(
