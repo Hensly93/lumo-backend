@@ -32,7 +32,7 @@ router.get('/localidades', async (req, res) => {
     const params = new URLSearchParams({
       provincia: provincia_id,
       nombre: q,
-      campos: 'id,nombre',
+      campos: 'id,nombre,departamento',
       max: '15'
     });
 
@@ -55,9 +55,24 @@ router.get('/localidades', async (req, res) => {
 
     // Extraer solo el array de localidades del objeto de respuesta de Georef
     // Georef devuelve {cantidad, inicio, total, parametros, localidades: [...]}
-    // Solo necesitamos el array localidades
+    // Mapear a {id, nombre, departamento} y deduplicar por nombre+departamento
     if (data && Array.isArray(data.localidades)) {
-      return res.json(data.localidades);
+      const localidades = data.localidades.map(item => ({
+        id: item.id,
+        nombre: item.nombre,
+        departamento: item.departamento?.nombre || null
+      }));
+
+      // Deduplicar por combinación nombre+departamento
+      const seen = new Set();
+      const unicos = localidades.filter(loc => {
+        const key = `${loc.nombre}|${loc.departamento}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      return res.json(unicos);
     }
 
     // Si la estructura es inesperada, devolver array vacío
