@@ -14,7 +14,7 @@ const { geocodificarDireccion } = require('./geocoding');
 // Agregar un local propio (nombre + dirección estructurada + geocoding)
 router.post('/sucursal', auth, async (req, res) => {
   try {
-    const { nombre, calle, numero, localidad, provincia } = req.body;
+    const { nombre, calle, numero, localidad, provincia, provincia_id, localidad_id } = req.body;
     if (!nombre) return res.status(400).json({ error: 'nombre requerido' });
 
     // Generar direccion legacy como concatenación
@@ -42,9 +42,10 @@ router.post('/sucursal', auth, async (req, res) => {
       `INSERT INTO mis_sucursales(
         usuario_id, nombre, direccion, negocio_id,
         calle, numero, localidad, provincia,
-        latitud, longitud, geocoding_status, geocoding_fecha
+        latitud, longitud, geocoding_status, geocoding_fecha,
+        provincia_id, localidad_id
       )
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW()) RETURNING *`,
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),$12,$13) RETURNING *`,
       [
         req.user.id,
         nombre.trim(),
@@ -57,6 +58,8 @@ router.post('/sucursal', auth, async (req, res) => {
         latitud,
         longitud,
         geocoding_status,
+        provincia_id || null,
+        localidad_id || null,
       ]
     );
     res.json(result.rows[0]);
@@ -72,7 +75,8 @@ router.get('/red', auth, async (req, res) => {
     const sucursales = await pool.query(
       `SELECT id, nombre, direccion, activo, created_at,
               calle, numero, localidad, provincia,
-              latitud, longitud, geocoding_status
+              latitud, longitud, geocoding_status,
+              provincia_id, localidad_id
        FROM mis_sucursales
        WHERE negocio_id=$1 AND activo=true
        ORDER BY nombre ASC`,
@@ -124,6 +128,8 @@ router.get('/red', auth, async (req, res) => {
           latitud: s.latitud,
           longitud: s.longitud,
           geocoding_status: s.geocoding_status,
+          provincia_id: s.provincia_id,
+          localidad_id: s.localidad_id,
           ventas_mes: parseFloat(ventas.rows[0].total),
           tx_mes: txMes,
           brecha_promedio: Math.round(brechaVal),
@@ -157,7 +163,7 @@ router.get('/red', auth, async (req, res) => {
 // Editar nombre o dirección de un local (con geocoding condicional)
 router.patch('/sucursal/:id', auth, async (req, res) => {
   try {
-    const { nombre, calle, numero, localidad, provincia } = req.body;
+    const { nombre, calle, numero, localidad, provincia, provincia_id, localidad_id } = req.body;
     if (!nombre) return res.status(400).json({ error: 'nombre requerido' });
 
     // Traer sucursal actual para comparar campos de dirección
@@ -213,8 +219,9 @@ router.patch('/sucursal/:id', auth, async (req, res) => {
         `UPDATE mis_sucursales
          SET nombre=$1, direccion=$2,
              calle=$3, numero=$4, localidad=$5, provincia=$6,
-             latitud=$7, longitud=$8, geocoding_status=$9, geocoding_fecha=NOW()
-         WHERE id=$10 AND negocio_id=$11
+             latitud=$7, longitud=$8, geocoding_status=$9, geocoding_fecha=NOW(),
+             provincia_id=$10, localidad_id=$11
+         WHERE id=$12 AND negocio_id=$13
          RETURNING *`,
         [
           nombre.trim(),
@@ -226,6 +233,8 @@ router.patch('/sucursal/:id', auth, async (req, res) => {
           latitud,
           longitud,
           geocoding_status,
+          provincia_id || null,
+          localidad_id || null,
           req.params.id,
           req.user.negocio_id,
         ]
@@ -236,8 +245,9 @@ router.patch('/sucursal/:id', auth, async (req, res) => {
       const result = await pool.query(
         `UPDATE mis_sucursales
          SET nombre=$1, direccion=$2,
-             calle=$3, numero=$4, localidad=$5, provincia=$6
-         WHERE id=$7 AND negocio_id=$8
+             calle=$3, numero=$4, localidad=$5, provincia=$6,
+             provincia_id=$7, localidad_id=$8
+         WHERE id=$9 AND negocio_id=$10
          RETURNING *`,
         [
           nombre.trim(),
@@ -246,6 +256,8 @@ router.patch('/sucursal/:id', auth, async (req, res) => {
           numero?.trim() || null,
           localidad?.trim() || null,
           provincia?.trim() || null,
+          provincia_id || null,
+          localidad_id || null,
           req.params.id,
           req.user.negocio_id,
         ]
