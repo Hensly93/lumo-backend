@@ -195,7 +195,7 @@ router.post('/confirmar', auth, async (req, res) => {
         const r = await client.query(
           `INSERT INTO productos(negocio_id, nombre, categoria, precio_venta, precio_costo, unidad)
            VALUES($1,$2,$3,$4,$5,$6)
-           ON CONFLICT(negocio_id, nombre)
+           ON CONFLICT(negocio_id, nombre) WHERE activo=true
            DO UPDATE SET
              categoria    = COALESCE(EXCLUDED.categoria, productos.categoria),
              precio_venta = COALESCE(EXCLUDED.precio_venta, productos.precio_venta),
@@ -326,7 +326,7 @@ router.post('/', auth, async (req, res) => {
     const r = await pool.query(
       `INSERT INTO productos(negocio_id, nombre, categoria, precio_venta, precio_costo, unidad)
        VALUES($1,$2,$3,$4,$5,$6)
-       ON CONFLICT(negocio_id, nombre)
+       ON CONFLICT(negocio_id, nombre) WHERE activo=true
        DO UPDATE SET precio_venta=EXCLUDED.precio_venta, activo=true, updated_at=NOW()
        RETURNING *`,
       [req.user.negocio_id, nombre.trim(), categoria || null, precio_venta || null, precio_costo || null, unidad || 'unidad']
