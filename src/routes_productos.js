@@ -191,11 +191,11 @@ router.post('/confirmar', auth, async (req, res) => {
 
       for (const p of productos) {
         if (!p.nombre?.trim()) continue;
-        // Upsert por (usuario_id, nombre) — si ya existe actualiza precio
+        // Upsert por (negocio_id, nombre) — si ya existe actualiza precio
         const r = await client.query(
-          `INSERT INTO productos(usuario_id, nombre, categoria, precio_venta, precio_costo, unidad)
+          `INSERT INTO productos(negocio_id, nombre, categoria, precio_venta, precio_costo, unidad)
            VALUES($1,$2,$3,$4,$5,$6)
-           ON CONFLICT(usuario_id, nombre)
+           ON CONFLICT(negocio_id, nombre)
            DO UPDATE SET
              categoria    = COALESCE(EXCLUDED.categoria, productos.categoria),
              precio_venta = COALESCE(EXCLUDED.precio_venta, productos.precio_venta),
@@ -204,7 +204,7 @@ router.post('/confirmar', auth, async (req, res) => {
              activo       = true,
              updated_at   = NOW()
            RETURNING (xmax = 0) AS insertado`,
-          [req.user.id, p.nombre.trim(), p.categoria || null, p.precio_venta || null, p.precio_costo || null, p.unidad || 'unidad']
+          [req.user.negocio_id, p.nombre.trim(), p.categoria || null, p.precio_venta || null, p.precio_costo || null, p.unidad || 'unidad']
         );
         if (r.rows[0].insertado) insertados++; else actualizados++;
       }
@@ -227,8 +227,8 @@ router.get('/', auth, async (req, res) => {
   try {
     const { categoria, q } = req.query;
     let query = `SELECT id, nombre, categoria, precio_venta, precio_costo, unidad, updated_at
-                 FROM productos WHERE usuario_id=$1 AND activo=true`;
-    const params = [req.user.id];
+                 FROM productos WHERE negocio_id=$1 AND activo=true`;
+    const params = [req.user.negocio_id];
 
     if (categoria) { params.push(categoria); query += ` AND categoria=$${params.length}`; }
     if (q) { params.push(`%${q}%`); query += ` AND nombre ILIKE $${params.length}`; }
@@ -245,8 +245,8 @@ router.get('/', auth, async (req, res) => {
 router.get('/categorias', auth, async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT DISTINCT categoria FROM productos WHERE usuario_id=$1 AND activo=true AND categoria IS NOT NULL ORDER BY categoria`,
-      [req.user.id]
+      `SELECT DISTINCT categoria FROM productos WHERE negocio_id=$1 AND activo=true AND categoria IS NOT NULL ORDER BY categoria`,
+      [req.user.negocio_id]
     );
     res.json(r.rows.map(r => r.categoria));
   } catch (e) {
@@ -266,9 +266,9 @@ router.patch('/:id', auth, async (req, res) => {
         precio_costo = COALESCE($4, precio_costo),
         unidad       = COALESCE($5, unidad),
         updated_at   = NOW()
-       WHERE id=$6 AND usuario_id=$7
+       WHERE id=$6 AND negocio_id=$7
        RETURNING *`,
-      [nombre || null, categoria || null, precio_venta ?? null, precio_costo ?? null, unidad || null, req.params.id, req.user.id]
+      [nombre || null, categoria || null, precio_venta ?? null, precio_costo ?? null, unidad || null, req.params.id, req.user.negocio_id]
     );
     if (r.rowCount === 0) return res.status(404).json({ error: 'Producto no encontrado' });
 
@@ -277,8 +277,8 @@ router.patch('/:id', auth, async (req, res) => {
       setImmediate(async () => {
         try {
           const todas = await pool.query(
-            'SELECT * FROM transacciones WHERE usuario_id=$1 ORDER BY fecha ASC',
-            [req.user.id]
+            'SELECT * FROM transacciones WHERE negocio_id=$1 ORDER BY fecha ASC',
+            [req.user.negocio_id]
           );
           if (todas.rows.length >= 5) await actualizarBaselineNegocio(req.user.negocio_id, null, todas.rows);
         } catch (e) {
@@ -308,8 +308,8 @@ router.get('/precios-alertas', auth, async (req, res) => {
 router.delete('/:id', auth, async (req, res) => {
   try {
     const r = await pool.query(
-      'UPDATE productos SET activo=false WHERE id=$1 AND usuario_id=$2 RETURNING id',
-      [req.params.id, req.user.id]
+      'UPDATE productos SET activo=false WHERE id=$1 AND negocio_id=$2 RETURNING id',
+      [req.params.id, req.user.negocio_id]
     );
     if (r.rowCount === 0) return res.status(404).json({ error: 'Producto no encontrado' });
     res.json({ ok: true });
@@ -324,12 +324,12 @@ router.post('/', auth, async (req, res) => {
     const { nombre, categoria, precio_venta, precio_costo, unidad } = req.body;
     if (!nombre?.trim()) return res.status(400).json({ error: 'nombre requerido' });
     const r = await pool.query(
-      `INSERT INTO productos(usuario_id, nombre, categoria, precio_venta, precio_costo, unidad)
+      `INSERT INTO productos(negocio_id, nombre, categoria, precio_venta, precio_costo, unidad)
        VALUES($1,$2,$3,$4,$5,$6)
-       ON CONFLICT(usuario_id, nombre)
+       ON CONFLICT(negocio_id, nombre)
        DO UPDATE SET precio_venta=EXCLUDED.precio_venta, activo=true, updated_at=NOW()
        RETURNING *`,
-      [req.user.id, nombre.trim(), categoria || null, precio_venta || null, precio_costo || null, unidad || 'unidad']
+      [req.user.negocio_id, nombre.trim(), categoria || null, precio_venta || null, precio_costo || null, unidad || 'unidad']
     );
     res.json(r.rows[0]);
   } catch (e) {
