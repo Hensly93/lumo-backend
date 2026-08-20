@@ -258,6 +258,17 @@ router.get('/categorias', auth, async (req, res) => {
 router.patch('/:id', auth, async (req, res) => {
   try {
     const { nombre, categoria, precio_venta, precio_costo, unidad } = req.body;
+
+    // Capturar precio anterior si se actualiza precio_venta
+    let precioAnterior = null;
+    if (precio_venta != null) {
+      const prev = await pool.query(
+        'SELECT precio_venta FROM productos WHERE id=$1 AND negocio_id=$2',
+        [req.params.id, req.user.negocio_id]
+      );
+      precioAnterior = prev.rows[0]?.precio_venta || null;
+    }
+
     const r = await pool.query(
       `UPDATE productos SET
         nombre       = COALESCE($1, nombre),
@@ -272,17 +283,26 @@ router.patch('/:id', auth, async (req, res) => {
     );
     if (r.rowCount === 0) return res.status(404).json({ error: 'Producto no encontrado' });
 
-    // Punto 3: recalibrar baseline cuando cambia un precio (fire-and-forget)
+    // Punto 3: histórico de precio + recalibrar baseline (fire-and-forget)
     if (precio_venta != null) {
       setImmediate(async () => {
         try {
+          // Registrar cambio de precio si realmente cambió
+          if (precioAnterior !== null && parseFloat(precioAnterior) !== parseFloat(precio_venta)) {
+            await pool.query(
+              `INSERT INTO productos_historico_precios(producto_id, negocio_id, precio_anterior, precio_nuevo, origen)
+               VALUES($1,$2,$3,$4,'manual')`,
+              [req.params.id, req.user.negocio_id, precioAnterior, precio_venta]
+            );
+          }
+
           const todas = await pool.query(
             'SELECT * FROM transacciones WHERE negocio_id=$1 ORDER BY fecha ASC',
             [req.user.negocio_id]
           );
           if (todas.rows.length >= 5) await actualizarBaselineNegocio(req.user.negocio_id, null, todas.rows);
         } catch (e) {
-          console.error('[RECALIBRACION PRECIO]', e.message);
+          console.error('[HISTORICO PRECIO + RECALIBRACION]', e.message);
         }
       });
     }
@@ -323,15 +343,57 @@ router.post('/', auth, async (req, res) => {
   try {
     const { nombre, categoria, precio_venta, precio_costo, unidad } = req.body;
     if (!nombre?.trim()) return res.status(400).json({ error: 'nombre requerido' });
+
+    // Capturar precio anterior si existe el producto
+    let precioAnterior = null;
+    if (precio_venta != null) {
+      const prev = await pool.query(
+        'SELECT precio_venta FROM productos WHERE negocio_id=$1 AND nombre=$2 AND activo=true',
+        [req.user.negocio_id, nombre.trim()]
+      );
+      precioAnterior = prev.rows[0]?.precio_venta || null;
+    }
+
     const r = await pool.query(
       `INSERT INTO productos(negocio_id, nombre, categoria, precio_venta, precio_costo, unidad)
        VALUES($1,$2,$3,$4,$5,$6)
        ON CONFLICT(negocio_id, nombre) WHERE activo=true
        DO UPDATE SET precio_venta=EXCLUDED.precio_venta, activo=true, updated_at=NOW()
-       RETURNING *`,
+       RETURNING *, (xmax = 0) AS insertado`,
       [req.user.negocio_id, nombre.trim(), categoria || null, precio_venta || null, precio_costo || null, unidad || 'unidad']
     );
-    res.json(r.rows[0]);
+
+    const producto = r.rows[0];
+    const esInsercion = producto.insertado;
+
+    // Registrar en histórico (fire-and-forget)
+    if (precio_venta != null) {
+      setImmediate(async () => {
+        try {
+          if (esInsercion) {
+            // Producto nuevo: precio_anterior=NULL, origen='creacion_inicial'
+            await pool.query(
+              `INSERT INTO productos_historico_precios(producto_id, negocio_id, precio_anterior, precio_nuevo, origen)
+               VALUES($1,$2,NULL,$3,'creacion_inicial')`,
+              [producto.id, req.user.negocio_id, precio_venta]
+            );
+          } else {
+            // Producto ya existía (ON CONFLICT UPDATE): origen='manual', solo si cambió
+            if (precioAnterior !== null && parseFloat(precioAnterior) !== parseFloat(precio_venta)) {
+              await pool.query(
+                `INSERT INTO productos_historico_precios(producto_id, negocio_id, precio_anterior, precio_nuevo, origen)
+                 VALUES($1,$2,$3,$4,'manual')`,
+                [producto.id, req.user.negocio_id, precioAnterior, precio_venta]
+              );
+            }
+          }
+        } catch (e) {
+          console.error('[HISTORICO PRECIO POST]', e.message);
+        }
+      });
+    }
+
+    res.json(producto);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
