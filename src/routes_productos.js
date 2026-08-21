@@ -8,6 +8,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { actualizarBaselineNegocio } = require('./baseline_negocio');
 const { cruzarCatalogoConTicket } = require('./cruce_catalogo');
 const { auth } = require('./authMiddleware');
+const { calcularIndiceInflacion } = require('./indice_inflacion');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -366,7 +367,51 @@ router.patch('/:id', auth, async (req, res) => {
 router.get('/precios-alertas', auth, async (req, res) => {
   try {
     const cruce = await cruzarCatalogoConTicket(req.user.negocio_id);
-    res.json({ cruce });
+
+    // Necesito el tipo_negocio para calcular el índice
+    const negocioRes = await pool.query(
+      'SELECT tipo_negocio FROM negocios WHERE id=$1',
+      [req.user.negocio_id]
+    );
+    const tipoNegocio = negocioRes.rows[0]?.tipo_negocio || null;
+
+    // Productos con más de 30 días sin actualizar
+    const productosViejos = await pool.query(
+      `SELECT id, nombre, categoria, precio_venta,
+              EXTRACT(DAY FROM NOW() - updated_at)::int as dias_sin_actualizar
+       FROM productos
+       WHERE negocio_id=$1 AND activo=true AND precio_venta IS NOT NULL
+         AND updated_at < NOW() - INTERVAL '30 days'
+       ORDER BY updated_at ASC`,
+      [req.user.negocio_id]
+    );
+
+    let stale = [];
+    if (productosViejos.rows.length > 0) {
+      const inflacionResult = await calcularIndiceInflacion(req.user.negocio_id, tipoNegocio).catch(() => ({ disponible: false }));
+      const indiceMensual = inflacionResult.disponible ? inflacionResult.indice_mensual : null;
+
+      if (indiceMensual !== null && indiceMensual > 0) {
+        stale = productosViejos.rows.map(p => {
+          const mesesTranscurridos = Math.floor(p.dias_sin_actualizar / 30);
+          const factorCompuesto = Math.pow(1 + (indiceMensual / 100), mesesTranscurridos);
+          const precioSugerido = Math.round(parseFloat(p.precio_venta) * factorCompuesto);
+          const incrementoPct = Math.round(((precioSugerido - parseFloat(p.precio_venta)) / parseFloat(p.precio_venta)) * 100);
+
+          return {
+            id: p.id,
+            nombre: p.nombre,
+            categoria: p.categoria,
+            precio_actual: parseFloat(p.precio_venta),
+            precio_sugerido: precioSugerido,
+            incremento_pct: incrementoPct,
+            dias_sin_actualizar: p.dias_sin_actualizar,
+          };
+        });
+      }
+    }
+
+    res.json({ cruce, stale });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
