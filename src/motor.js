@@ -6,6 +6,7 @@ const { calcularPesos, calcularScoreHibrido, determinarCapaOrigen, calcularZScor
 const { getContextoTemporal, resolverCoordenadasSucursal, fetchClima, factoresAjuste } = require('./zscore_contextual');
 const { calcularUmbralCelda, condicionDesdeContexto } = require('./motor_conductual');
 const { orchestrate } = require('./orchestrator');
+const { calcularIndiceInflacion } = require('./indice_inflacion');
 const pool = require('./db');
 
 const METRICAS = ['ticket_promedio', 'ventas_por_turno', 'ratio_efectivo'];
@@ -248,7 +249,12 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
     const ctx = getContextoTemporal(new Date());
     const coords = await resolverCoordenadasSucursal(negocioId, sucursalId);
     const clima = await fetchClima(ctx.fecha_str, coords?.lat, coords?.lon, coords?.sucursal_id);
-    const { factor: factorContexto, componentes: componentesContexto } = factoresAjuste(ctx, clima);
+
+    // Índice de inflación (sistema híbrido 2 capas)
+    const inflacionResult = await calcularIndiceInflacion(negocioId, tipoNegocio).catch(() => ({ disponible: false }));
+    const indiceInflacion = inflacionResult.disponible ? inflacionResult.indice_mensual : null;
+
+    const { factor: factorContexto, componentes: componentesContexto } = factoresAjuste(ctx, clima, indiceInflacion);
 
     // Métricas recientes (últimos 7 días) vs baseline histórico
     // El baseline se ajusta por el factor de contexto antes de calcular z-score

@@ -403,12 +403,27 @@ function generarMensajePositivo(nombre, rachaLimpia) {
 // ─── Análisis de turno activo (sin cierre) ───────────────────────────────────
 // Para mostrar contexto en la pantalla del dueño mientras el turno corre.
 
-async function contextTurnoActivo(negocioId, tipoTurno) {
+async function contextTurnoActivo(negocioId, tipoTurno, tipoNegocio = null) {
   const ahora = new Date();
   const ctx = getContextoTemporal(ahora);
   const coords = await resolverCoordenadasSucursal(negocioId, null);
   const clima = await fetchClima(ctx.fecha_str, coords?.lat, coords?.lon, coords?.sucursal_id);
-  const { factor, componentes } = factoresAjuste(ctx, clima);
+
+  // Obtener tipo_negocio si no fue pasado como parámetro
+  if (!tipoNegocio) {
+    const negocioRes = await pool.query(
+      'SELECT tipo_negocio FROM negocios WHERE id=$1',
+      [negocioId]
+    );
+    tipoNegocio = negocioRes.rows[0]?.tipo_negocio || null;
+  }
+
+  // Índice de inflación (sistema híbrido 2 capas)
+  const { calcularIndiceInflacion } = require('./indice_inflacion');
+  const inflacionResult = await calcularIndiceInflacion(negocioId, tipoNegocio).catch(() => ({ disponible: false }));
+  const indiceInflacion = inflacionResult.disponible ? inflacionResult.indice_mensual : null;
+
+  const { factor, componentes } = factoresAjuste(ctx, clima, indiceInflacion);
 
   // Ticket esperado del turno según contexto
   const baselineRes = await pool.query(
