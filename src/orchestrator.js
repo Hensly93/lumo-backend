@@ -12,6 +12,7 @@ const { detectarPatronesSemana }             = require('./patron_semanal');
 const { cruzarCatalogoConTicket }            = require('./cruce_catalogo');
 const { calcularERMNegocio, calcularRiesgoEmpleado } = require('./erm');
 const { analizarCruceTurno }                 = require('./cruce_variables');
+const { atribuirAnomaliaSucursal }           = require('./perfil_sucursal');
 
 const TOTAL_MODULOS = 6;
 
@@ -116,6 +117,19 @@ async function orchestrate({ negocio_id, uid = null, turno_actual = null }) {
   const erm       = rERM.status       === 'fulfilled' ? rERM.value       : null;
   const cruce     = rCruce.status     === 'fulfilled' ? rCruce.value     : null;
 
+  // ── Atribución de anomalías por sucursal ───────────────────────────────────
+  const sucursalesPorTurno = {};
+  if (cusum?.turnos) {
+    for (const t of cusum.turnos) {
+      if (t.disponible && t.alerta) {
+        const atribucion = await atribuirAnomaliaSucursal(negocio_id, t.turno).catch(() => null);
+        if (atribucion?.sucursales_atribuidas?.length > 0) {
+          sucursalesPorTurno[t.turno] = atribucion.sucursales_atribuidas;
+        }
+      }
+    }
+  }
+
   const modulos_fallidos = [deteccion, cusum, patrones, catalogo, erm, cruce]
     .filter(v => v === null).length;
 
@@ -142,6 +156,7 @@ async function orchestrate({ negocio_id, uid = null, turno_actual = null }) {
   const señales_consolidadas = {
     anomalias,
     cusum_alertas:  cusum?.alertas_cusum ?? [],
+    sucursales_atribuidas: sucursalesPorTurno,
     patrones:       patrones             ?? [],
     catalogo_señal: catalogo?.señal      ?? null,
     cruce_señales:  cruce?.señales       ?? [],
