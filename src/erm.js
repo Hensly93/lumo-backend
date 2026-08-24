@@ -275,15 +275,16 @@ async function calcularRiesgoEmpleado(negocioId, nombreEmpleado) {
 
 // ─── ERM completo del negocio ─────────────────────────────────────────────────
 
-async function calcularERMNegocio(negocioId) {
+async function calcularERMNegocio(negocioId, sucursalId = null) {
   // Todos los empleados activos con turnos en los últimos 30 días
   const empRes = await pool.query(
     `SELECT DISTINCT nombre_empleado
      FROM turnos_caja
      WHERE negocio_id=$1 AND estado='cerrado'
        AND hora_apertura >= NOW() - INTERVAL '30 days'
+       AND ($2::integer IS NULL OR sucursal_id = $2)
      ORDER BY nombre_empleado`,
-    [negocioId]
+    [negocioId, sucursalId]
   );
 
   if (empRes.rows.length === 0) {
