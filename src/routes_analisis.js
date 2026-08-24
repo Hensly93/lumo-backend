@@ -12,6 +12,7 @@ const { gestionarAlertas, registrarFeedback } = require('./alert_manager');
 const { adaptarUmbralPorFeedback, getUmbralesUsuario } = require('./motor_conductual');
 const { calcularCUSUMCompleto, resetBaselinePorCambioConfirmado } = require('./cusum');
 const { calcularERMNegocio, calcularRiesgoEmpleado } = require('./erm');
+const { orchestrate } = require('./orchestrator');
 const { notificarUsuario } = require('./push');
 const pool = require('./db');
 const { auth } = require('./authMiddleware');
@@ -325,7 +326,7 @@ router.post('/nicole/chat', auth, async (req, res) => {
     if (!mensaje?.trim()) return res.status(400).json({ error: 'mensaje requerido' });
 
     // Armar contexto completo del negocio en paralelo
-    const [uRes, ventasRes, empleadosRes, alertasRes, predRes] = await Promise.all([
+    const [uRes, ventasRes, empleadosRes, predRes] = await Promise.all([
 
       // Perfil
       pool.query(
@@ -342,10 +343,10 @@ router.post('/nicole/chat', auth, async (req, res) => {
            DATE(fecha AT TIME ZONE 'America/Argentina/Buenos_Aires') AS dia,
            SUM(monto)                          AS venta_dia
          FROM transacciones
-         WHERE usuario_id=$1 AND fecha >= NOW() - INTERVAL '30 days'
+         WHERE negocio_id=$1 AND fecha >= NOW() - INTERVAL '30 days'
          GROUP BY dia
          ORDER BY dia ASC`,
-        [req.user.id]
+        [req.user.negocio_id]
       ),
 
       // Empleados: ticket promedio y ratio efectivo por turno
@@ -361,35 +362,23 @@ router.post('/nicole/chat', auth, async (req, res) => {
              0
            )                                                             AS ratio_efectivo
          FROM transacciones
-         WHERE usuario_id=$1
+         WHERE negocio_id=$1
            AND empleado IS NOT NULL
            AND fecha >= NOW() - INTERVAL '30 days'
          GROUP BY empleado, turno
          ORDER BY empleado, turno`,
-        [req.user.id]
+        [req.user.negocio_id]
       ),
-
-      // Alertas últimos 7 días
-      pool.query(
-        `SELECT tipo, prioridad, mensaje, timestamp
-         FROM alertas
-         WHERE usuario_id=$1
-           AND descartada = false
-           AND timestamp >= NOW() - INTERVAL '7 days'
-         ORDER BY timestamp DESC
-         LIMIT 5`,
-        [req.user.id]
-      ).catch(() => ({ rows: [] })),
 
       // Predicción activa más reciente
       pool.query(
         `SELECT fecha_target, valor_predicho, confianza, horizonte, mensaje_nicole
          FROM predicciones_negocio
-         WHERE usuario_id=$1
+         WHERE negocio_id=$1
            AND fecha_target >= CURRENT_DATE
          ORDER BY fecha_prediccion DESC, fecha_target ASC
          LIMIT 1`,
-        [req.user.id]
+        [req.user.negocio_id]
       ).catch(() => ({ rows: [] })),
     ]);
 
@@ -410,10 +399,13 @@ router.post('/nicole/chat', auth, async (req, res) => {
         ).join(' | ')
       : 'sin datos de empleados';
 
-    // Resumir alertas
-    const alertasStr = alertasRes.rows.length
-      ? alertasRes.rows.map(r => `[${r.prioridad}] ${r.mensaje}`).join(' | ')
-      : 'ninguna';
+    // Alertas reales desde orchestrator
+    const orchResult = await orchestrate({ negocio_id: req.user.negocio_id, uid: null, turno_actual: null }).catch(() => null);
+    const alertasReales = orchResult?.señales_consolidadas?.cusum_alertas ?? [];
+    const riskScore = orchResult?.risk_score_final ?? null;
+    const alertasStr = alertasReales.length
+      ? alertasReales.map(a => `[${a.prioridad}] ${a.mensaje}`).join(' | ')
+      : (riskScore !== null ? `sin alertas activas (score de riesgo: ${riskScore})` : 'sin datos suficientes');
 
     // Predicción activa
     const pred = predRes.rows[0];
