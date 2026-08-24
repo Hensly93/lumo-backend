@@ -319,6 +319,46 @@ router.get('/alertas', auth, async (req, res) => {
   }
 });
 
+// ─── NICOLE Tools ─────────────────────────────────────────────────────────────
+const NICOLE_TOOLS = [
+  {
+    name: "analizar_negocio",
+    description: "Trae el análisis completo del negocio: alertas activas, riesgo, ventas recientes. Usar cuando el dueño pregunta cómo viene el negocio en general, o por una sucursal específica.",
+    input_schema: {
+      type: "object",
+      properties: {
+        sucursal_id: { type: "integer", description: "ID de la sucursal específica, opcional. Si no se especifica, analiza todo el negocio." }
+      }
+    }
+  },
+  {
+    name: "consultar_riesgo_empleados",
+    description: "Trae el nivel de riesgo (ERM) de los empleados del negocio, opcionalmente filtrado por sucursal o por un empleado específico.",
+    input_schema: {
+      type: "object",
+      properties: {
+        sucursal_id: { type: "integer", description: "ID de sucursal, opcional." },
+        empleado: { type: "string", description: "Nombre del empleado específico, opcional." }
+      }
+    }
+  }
+];
+
+async function ejecutarToolNicole(nombre, input, negocioId) {
+  try {
+    if (nombre === "analizar_negocio") {
+      return await analizarNegocio(negocioId, input.sucursal_id || null);
+    }
+    if (nombre === "consultar_riesgo_empleados") {
+      if (input.empleado) return await calcularRiesgoEmpleado(negocioId, input.empleado);
+      return await calcularERMNegocio(negocioId, input.sucursal_id || null);
+    }
+    return { error: "tool desconocida: " + nombre };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
 // POST /api/nicole/chat — chat conversacional con NICOLE
 router.post('/nicole/chat', auth, async (req, res) => {
   try {
@@ -435,28 +475,54 @@ Predicción: ${predStr}`;
       { role: 'user', content: mensaje },
     ];
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-5',
-        max_tokens: 400,
-        system: systemPrompt,
-        messages,
-      }),
-    });
+    let currentMessages = [...messages];
+    let finalText = null;
+    let iteraciones = 0;
+    const MAX_ITERACIONES = 3;
 
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`Claude API ${response.status}: ${err}`);
+    while (finalText === null && iteraciones < MAX_ITERACIONES) {
+      iteraciones++;
+
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-5',
+          max_tokens: 400,
+          system: systemPrompt,
+          messages: currentMessages,
+          tools: NICOLE_TOOLS,
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`Claude API ${response.status}: ${err}`);
+      }
+
+      const data = await response.json();
+
+      if (data.stop_reason === 'tool_use') {
+        const toolUseBlock = data.content.find(b => b.type === 'tool_use');
+        if (!toolUseBlock) { finalText = 'No pude procesar la consulta.'; break; }
+
+        const resultado = await ejecutarToolNicole(toolUseBlock.name, toolUseBlock.input, req.user.negocio_id);
+
+        currentMessages = [
+          ...currentMessages,
+          { role: 'assistant', content: data.content },
+          { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseBlock.id, content: JSON.stringify(resultado) }] },
+        ];
+      } else {
+        finalText = data.content?.find(b => b.type === 'text')?.text?.trim() ?? 'No pude generar una respuesta. Intentá de nuevo.';
+      }
     }
 
-    const data = await response.json();
-    const respuesta = data.content?.find(b => b.type === 'text')?.text?.trim() ?? 'No pude generar una respuesta. Intentá de nuevo.';
+    const respuesta = finalText ?? 'No pude generar una respuesta después de varios intentos.';
     res.json({ respuesta });
   } catch(e) {
     res.status(500).json({ error: e.message });
