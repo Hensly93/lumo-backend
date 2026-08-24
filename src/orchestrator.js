@@ -177,6 +177,7 @@ async function orchestrate({ negocio_id, uid = null, turno_actual = null }) {
       cusum: cusum ?? { alertas_cusum: [], turnos: [] },
       patron_semanal: patrones ?? [],
       cruce_catalogo: catalogo ?? { disponible: false },
+      sucursales_atribuidas: sucursalesPorTurno,
     },
 
     // Scoring

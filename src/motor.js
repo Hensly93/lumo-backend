@@ -239,6 +239,7 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
     const cusumResult    = contexto?.señales_individuales?.cusum    ?? { alertas_cusum: [], turnos: [] };
     const patronesSemana = contexto?.señales_individuales?.patron_semanal ?? [];
     const cruceCatalogo  = contexto?.señales_individuales?.cruce_catalogo ?? { disponible: false };
+    const sucursalesAtribuidas = contexto?.señales_individuales?.sucursales_atribuidas ?? {};
 
     const pesos = calcularPesos(transacciones.length);
     const benchmarkSector = tipoNegocio ? await getBenchmarkSector(tipoNegocio) : {};
@@ -350,6 +351,7 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
       señales,                                    // para gestionarAlertas en /alertas
       cusum:            cusumResult.turnos,        // estado CUSUM por turno
       patrones_semana:  patronesSemana,            // patrones estructurales detectados
+      sucursales_atribuidas: sucursalesAtribuidas, // atribución de anomalías por sucursal
     };
   } catch(e) {
     console.error(e);
