@@ -159,6 +159,96 @@ router.get('/red', auth, async (req, res) => {
   }
 });
 
+// ─── GET /api/multilocal/red-vivo ────────────────────────────────────────────
+// Dashboard en vivo: datos del día actual + turnos activos con efectivo esperado
+router.get('/red-vivo', auth, async (req, res) => {
+  try {
+    const { sucursal_ids } = req.query;
+    const idsFiltro = sucursal_ids
+      ? sucursal_ids.split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id))
+      : null;
+
+    const sucursales = await pool.query(
+      `SELECT id, nombre
+       FROM mis_sucursales
+       WHERE negocio_id=$1 AND activo=true
+         AND ($2::integer[] IS NULL OR id = ANY($2::integer[]))
+       ORDER BY nombre ASC`,
+      [req.user.negocio_id, idsFiltro]
+    );
+
+    if (sucursales.rows.length === 0) {
+      return res.json({ sucursales: [] });
+    }
+
+    const datosVivo = await Promise.all(
+      sucursales.rows.map(async (s) => {
+        const [ventasHoy, turnoActivo] = await Promise.all([
+          pool.query(
+            `SELECT COALESCE(SUM(monto),0) as total, COUNT(*) as tx
+             FROM transacciones
+             WHERE negocio_id=$1 AND sucursal_id=$2
+               AND fecha >= DATE_TRUNC('day', NOW())`,
+            [req.user.negocio_id, s.id]
+          ),
+          pool.query(
+            `SELECT nombre_empleado, tipo_turno, hora_apertura, caja_apertura
+             FROM turnos_caja
+             WHERE negocio_id=$1 AND sucursal_id=$2 AND estado='activo'
+             ORDER BY hora_apertura DESC LIMIT 1`,
+            [req.user.negocio_id, s.id]
+          ),
+        ]);
+
+        const turno = turnoActivo.rows[0] || null;
+        let brechaTurnoActivo = null;
+
+        if (turno) {
+          const egresosRes = await pool.query(
+            `SELECT COALESCE(SUM(monto),0) as total
+             FROM egresos_caja eg
+             JOIN turnos_caja tc ON tc.id = eg.turno_id
+             WHERE tc.negocio_id=$1 AND tc.sucursal_id=$2 AND tc.estado='activo'`,
+            [req.user.negocio_id, s.id]
+          );
+
+          const ventasDesdeApertura = await pool.query(
+            `SELECT
+               COALESCE(SUM(monto),0) as total,
+               COALESCE(SUM(CASE WHEN metodo_pago='mp' THEN monto ELSE 0 END),0) as total_mp
+             FROM transacciones
+             WHERE negocio_id=$1 AND sucursal_id=$2 AND fecha >= $3`,
+            [req.user.negocio_id, s.id, turno.hora_apertura]
+          );
+
+          const esperado = parseFloat(turno.caja_apertura)
+            + parseFloat(ventasDesdeApertura.rows[0].total)
+            - parseFloat(ventasDesdeApertura.rows[0].total_mp)
+            - parseFloat(egresosRes.rows[0].total);
+          brechaTurnoActivo = Math.round(esperado);
+        }
+
+        return {
+          id: s.id,
+          nombre: s.nombre,
+          ventas_hoy: parseFloat(ventasHoy.rows[0].total),
+          tx_hoy: parseInt(ventasHoy.rows[0].tx),
+          turno_activo: turno ? {
+            nombre_empleado: turno.nombre_empleado,
+            tipo_turno: turno.tipo_turno,
+            hora_apertura: turno.hora_apertura,
+          } : null,
+          efectivo_esperado_ahora: brechaTurnoActivo,
+        };
+      })
+    );
+
+    res.json({ sucursales: datosVivo, actualizado: new Date().toISOString() });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── PATCH /api/multilocal/sucursal/:id ──────────────────────────────────────
 // Editar nombre o dirección de un local (con geocoding condicional)
 router.patch('/sucursal/:id', auth, async (req, res) => {
