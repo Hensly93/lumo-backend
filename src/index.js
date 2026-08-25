@@ -103,6 +103,14 @@ try {
 }
 
 try {
+  const scannerRoutes = require("./routes_scanner");
+  app.use("/api/scanner", scannerRoutes);
+  console.log("Scanner OK");
+} catch(e) {
+  console.error("Scanner ERROR:", e.message);
+}
+
+try {
   const historialRoutes = require("./routes_historial");
   app.use("/api/historial", historialRoutes);
   console.log("Historial OK");
