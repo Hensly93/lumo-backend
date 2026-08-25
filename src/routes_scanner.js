@@ -90,6 +90,12 @@ router.get('/sesion/:token', async (req, res) => {
   try {
     const { token } = req.params;
 
+    // Validar formato UUID antes de hacer la query
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(token)) {
+      return res.status(401).json({ error: 'Sesión inválida o expirada' });
+    }
+
     const sesion = await pool.query(
       `SELECT s.*, t.nombre_empleado, t.estado
        FROM sesiones_scanner s
@@ -115,6 +121,9 @@ router.get('/sesion/:token', async (req, res) => {
       expira_en: s.expira_en
     });
   } catch (e) {
+    if (e.code === '22P02') {
+      return res.status(401).json({ error: 'Sesión inválida o expirada' });
+    }
     res.status(500).json({ error: e.message });
   }
 });
