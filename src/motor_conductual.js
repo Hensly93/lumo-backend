@@ -28,9 +28,9 @@ function celdaKey(tipoTurno, diaSemana, condicion = 'normal') {
 
 function condicionDesdeContexto(ctx) {
   if (!ctx) return 'normal';
-  if (ctx.esFeriado) return 'feriado';
-  if (ctx.clima?.lluvia) return 'lluvia';
-  if (ctx.esDiaCobro || ctx.esFinQuincena) return 'quincena';
+  if (ctx.es_feriado) return 'feriado';
+  if (ctx.clima === 'lluvia') return 'lluvia';
+  if (ctx.es_dia_cobro || (ctx.quincena === 2 && ctx.dia >= 26)) return 'quincena';
   return 'normal';
 }
 

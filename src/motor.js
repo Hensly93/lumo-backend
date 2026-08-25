@@ -277,9 +277,9 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
     const señalesSectorPorTurno = evaluarSeñalesSectorPorTurno(agregados, benchmarkSector);
 
     // P6: umbral dinámico para la celda del contexto actual
-    const turnoActual = ctx.hora < 14 ? 'MANANA' : ctx.hora < 20 ? 'TARDE' : 'NOCHE';
+    const turnoActual = ctx.turno.toUpperCase();
     const umbralDinamico = await calcularUmbralCelda(
-      negocioId, turnoActual, ctx.diaSemana, condicionDesdeContexto({ ...ctx, clima })
+      negocioId, turnoActual, ctx.dia_semana, condicionDesdeContexto(ctx)
     ).catch(() => UMBRAL_SEÑAL);
 
     // Detección de segmento (Capa 2 - z-score robusto por turno+franja+quincena)
