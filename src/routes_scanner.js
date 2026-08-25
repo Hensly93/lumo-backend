@@ -236,15 +236,15 @@ router.post('/finalizar-venta', async (req, res) => {
 
     await client.query('BEGIN');
 
-    // Obtener negocio_id del turno
+    // Obtener datos del turno para atribución completa
     const turno = await client.query(
-      'SELECT negocio_id FROM turnos_caja WHERE id=$1 AND estado=$2',
+      'SELECT negocio_id, nombre_empleado, tipo_turno, sucursal_id FROM turnos_caja WHERE id=$1 AND estado=$2',
       [turno_id, 'activo']
     );
     if (turno.rows.length === 0) {
       throw new Error('Turno no activo');
     }
-    const negocio_id = turno.rows[0].negocio_id;
+    const { negocio_id, nombre_empleado, tipo_turno, sucursal_id } = turno.rows[0];
 
     // Obtener items del carrito
     const carrito = await client.query(
@@ -262,12 +262,12 @@ router.post('/finalizar-venta', async (req, res) => {
       monto_total += parseFloat(item.cantidad) * parseFloat(item.precio_unitario);
     }
 
-    // Crear transacción
+    // Crear transacción con atribución completa para CUSUM/ERM
     const transaccion = await client.query(
-      `INSERT INTO transacciones (negocio_id, metodo_pago, monto)
-       VALUES ($1, $2, $3)
-       RETURNING id, created_at`,
-      [negocio_id, metodo_pago, monto_total]
+      `INSERT INTO transacciones (negocio_id, monto, tipo, empleado, turno, metodo_pago, sucursal_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, fecha`,
+      [negocio_id, monto_total, 'venta', nombre_empleado, tipo_turno, metodo_pago, sucursal_id]
     );
 
     const transaccion_id = transaccion.rows[0].id;
@@ -293,7 +293,7 @@ router.post('/finalizar-venta', async (req, res) => {
       transaccion_id,
       monto_total,
       items_procesados: carrito.rows.length,
-      created_at: transaccion.rows[0].created_at
+      fecha: transaccion.rows[0].fecha
     });
   } catch (e) {
     await client.query('ROLLBACK');
