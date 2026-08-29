@@ -91,4 +91,18 @@ router.get('/pendientes', auth, async (req, res) => {
   }
 });
 
+// DELETE /api/scanner-dueno/pendientes/:id — sacar de la cola una vez cargado
+router.delete('/pendientes/:id', auth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      'DELETE FROM codigos_pendientes_dueno WHERE id=$1 AND negocio_id=$2 RETURNING *',
+      [req.params.id, req.user.negocio_id]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ error: 'No encontrado' });
+    res.json({ eliminado: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
