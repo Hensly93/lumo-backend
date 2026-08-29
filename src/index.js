@@ -111,6 +111,14 @@ try {
 }
 
 try {
+  const scannerDuenoRoutes = require("./routes_scanner_dueno");
+  app.use("/api/scanner-dueno", scannerDuenoRoutes);
+  console.log("Scanner Dueno OK");
+} catch(e) {
+  console.error("Scanner Dueno ERROR:", e.message);
+}
+
+try {
   const historialRoutes = require("./routes_historial");
   app.use("/api/historial", historialRoutes);
   console.log("Historial OK");
