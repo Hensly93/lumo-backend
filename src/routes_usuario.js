@@ -144,7 +144,7 @@ router.delete('/logo', auth, async (req, res) => {
 router.get('/empleados', auth, async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT e.id, e.nombre, e.activo, e.sucursal_id,
+      `SELECT e.id, e.nombre, e.activo, e.sucursal_id, e.puede_cargar_productos,
               s.nombre AS sucursal_nombre
        FROM empleados_negocio e
        LEFT JOIN mis_sucursales s ON e.sucursal_id = s.id
