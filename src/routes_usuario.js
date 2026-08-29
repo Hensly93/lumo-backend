@@ -184,7 +184,7 @@ router.post('/empleados', auth, async (req, res) => {
 // ─── PATCH /api/usuario/empleados/:id ────────────────────────────────────────
 router.patch('/empleados/:id', auth, async (req, res) => {
   try {
-    const { nombre, pin, sucursal_id } = req.body;
+    const { nombre, pin, sucursal_id, puede_cargar_productos } = req.body;
 
     const emp = await pool.query(
       'SELECT id, pin_hash FROM empleados_negocio WHERE id=$1 AND negocio_id=$2',
@@ -202,12 +202,13 @@ router.patch('/empleados/:id', auth, async (req, res) => {
 
     const r = await pool.query(
       `UPDATE empleados_negocio SET
-        nombre      = COALESCE($1, nombre),
-        pin_hash    = $2,
-        sucursal_id = COALESCE($3, sucursal_id)
-       WHERE id=$4 AND negocio_id=$5
-       RETURNING id, nombre, sucursal_id, activo`,
-      [nombre?.trim() || null, pin_hash, sucursal_id || null, req.params.id, req.user.negocio_id]
+        nombre                  = COALESCE($1, nombre),
+        pin_hash                = $2,
+        sucursal_id             = COALESCE($3, sucursal_id),
+        puede_cargar_productos  = COALESCE($4, puede_cargar_productos)
+       WHERE id=$5 AND negocio_id=$6
+       RETURNING id, nombre, sucursal_id, activo, puede_cargar_productos`,
+      [nombre?.trim() || null, pin_hash, sucursal_id || null, puede_cargar_productos ?? null, req.params.id, req.user.negocio_id]
     );
     res.json(r.rows[0]);
   } catch (e) {
