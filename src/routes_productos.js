@@ -306,7 +306,7 @@ router.get('/categorias', auth, async (req, res) => {
 // ─── PATCH /api/productos/:id ─────────────────────────────────────────────────
 router.patch('/:id', auth, async (req, res) => {
   try {
-    const { nombre, categoria, precio_venta, precio_costo, unidad } = req.body;
+    const { nombre, categoria, precio_venta, precio_costo, unidad, codigo_barras } = req.body;
 
     // Capturar precio anterior si se actualiza precio_venta
     let precioAnterior = null;
@@ -320,15 +320,16 @@ router.patch('/:id', auth, async (req, res) => {
 
     const r = await pool.query(
       `UPDATE productos SET
-        nombre       = COALESCE($1, nombre),
-        categoria    = COALESCE($2, categoria),
-        precio_venta = COALESCE($3, precio_venta),
-        precio_costo = COALESCE($4, precio_costo),
-        unidad       = COALESCE($5, unidad),
-        updated_at   = NOW()
-       WHERE id=$6 AND negocio_id=$7
+        nombre        = COALESCE($1, nombre),
+        categoria     = COALESCE($2, categoria),
+        precio_venta  = COALESCE($3, precio_venta),
+        precio_costo  = COALESCE($4, precio_costo),
+        unidad        = COALESCE($5, unidad),
+        codigo_barras = COALESCE($6, codigo_barras),
+        updated_at    = NOW()
+       WHERE id=$7 AND negocio_id=$8
        RETURNING *`,
-      [nombre || null, categoria || null, precio_venta ?? null, precio_costo ?? null, unidad || null, req.params.id, req.user.negocio_id]
+      [nombre || null, categoria || null, precio_venta ?? null, precio_costo ?? null, unidad || null, codigo_barras || null, req.params.id, req.user.negocio_id]
     );
     if (r.rowCount === 0) return res.status(404).json({ error: 'Producto no encontrado' });
 
@@ -358,6 +359,9 @@ router.patch('/:id', auth, async (req, res) => {
 
     res.json(r.rows[0]);
   } catch (e) {
+    if (e.code === '23505') {
+      return res.status(409).json({ error: 'Ya existe un producto con ese código de barras en este negocio' });
+    }
     res.status(500).json({ error: e.message });
   }
 });
@@ -434,7 +438,7 @@ router.delete('/:id', auth, async (req, res) => {
 // ─── POST /api/productos — agregar uno manual ─────────────────────────────────
 router.post('/', auth, async (req, res) => {
   try {
-    const { nombre, categoria, precio_venta, precio_costo, unidad } = req.body;
+    const { nombre, categoria, precio_venta, precio_costo, unidad, codigo_barras } = req.body;
     if (!nombre?.trim()) return res.status(400).json({ error: 'nombre requerido' });
 
     // Capturar precio anterior si existe el producto
@@ -448,12 +452,12 @@ router.post('/', auth, async (req, res) => {
     }
 
     const r = await pool.query(
-      `INSERT INTO productos(negocio_id, nombre, categoria, precio_venta, precio_costo, unidad)
-       VALUES($1,$2,$3,$4,$5,$6)
+      `INSERT INTO productos(negocio_id, nombre, categoria, precio_venta, precio_costo, unidad, codigo_barras)
+       VALUES($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT(negocio_id, nombre) WHERE activo=true
-       DO UPDATE SET precio_venta=EXCLUDED.precio_venta, activo=true, updated_at=NOW()
+       DO UPDATE SET precio_venta=EXCLUDED.precio_venta, codigo_barras=COALESCE(EXCLUDED.codigo_barras, productos.codigo_barras), activo=true, updated_at=NOW()
        RETURNING *, (xmax = 0) AS insertado`,
-      [req.user.negocio_id, nombre.trim(), categoria || null, precio_venta || null, precio_costo || null, unidad || 'unidad']
+      [req.user.negocio_id, nombre.trim(), categoria || null, precio_venta || null, precio_costo || null, unidad || 'unidad', codigo_barras || null]
     );
 
     const producto = r.rows[0];
@@ -488,6 +492,9 @@ router.post('/', auth, async (req, res) => {
 
     res.json(producto);
   } catch (e) {
+    if (e.code === '23505') {
+      return res.status(409).json({ error: 'Ya existe un producto con ese código de barras en este negocio' });
+    }
     res.status(500).json({ error: e.message });
   }
 });
