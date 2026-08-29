@@ -358,14 +358,23 @@ router.post('/producto', async (req, res) => {
     }
 
     const turno = await pool.query(
-      `SELECT negocio_id FROM turnos_caja WHERE id=$1 AND estado='activo'`,
+      `SELECT negocio_id, nombre_empleado FROM turnos_caja WHERE id=$1 AND estado='activo'`,
       [turno_id]
     );
     if (turno.rows.length === 0) {
       return res.status(400).json({ error: 'Turno no activo' });
     }
 
-    const negocio_id = turno.rows[0].negocio_id;
+    const { negocio_id, nombre_empleado } = turno.rows[0];
+
+    const permiso = await pool.query(
+      `SELECT puede_cargar_productos FROM empleados_negocio WHERE negocio_id=$1 AND nombre=$2 AND activo=true`,
+      [negocio_id, nombre_empleado]
+    );
+
+    if (permiso.rows.length === 0 || !permiso.rows[0].puede_cargar_productos) {
+      return res.status(403).json({ error: 'No tenés permiso para cargar productos nuevos. Pedile al dueño que te lo habilite.' });
+    }
 
     const result = await pool.query(
       `INSERT INTO productos (negocio_id, nombre, precio_venta, codigo_barras)
