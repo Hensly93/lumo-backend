@@ -33,6 +33,13 @@ function mediana(xs) { if (!xs.length) return null; const s = [...xs].sort((a, b
 function proximo(dow, desde) { for (let k = 1; k <= 7; k++) { const f = sumarDias(desde, k); if (dowDe(f) === dow) return f; } return null; }
 function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
+// Una sola predicción por sucursal por pedido (la usan caja y capacidad).
+async function prediccionSucursal(negocioId, s, db, opciones) {
+  const memo = (opciones._memoPred = opciones._memoPred || {});
+  if (!memo[s]) memo[s] = calcularPrediccion(negocioId, s, db, null, { ...opciones, _memoPred: undefined, guardar: false });
+  return memo[s];
+}
+
 // ─── 1. Controles de caja ─────────────────────────────────────────────────────
 async function recomendacionesControl(negocioId, sucursalId, db, turnos, nombres) {
   const recs = [];
@@ -176,7 +183,7 @@ async function recomendacionesCaja(negocioId, sucursalId, db, turnos, nombres, p
   });
 
   for (const s of sucs) {
-    const pred = await calcularPrediccion(negocioId, Number(s), db, null, { ...opciones, guardar: false });
+    const pred = await prediccionSucursal(negocioId, Number(s), db, opciones);
     if (!pred.disponible) continue;
     const p = pred.predicciones.find(x => x.fecha_target === manana);
     if (!p) continue;
@@ -220,6 +227,155 @@ async function recomendacionesCaja(negocioId, sucursalId, db, turnos, nombres, p
   return recs;
 }
 
+// ─── 3. Capacidad de cajas ────────────────────────────────────────────────────
+// Capacidad de UNA caja (clientes por hora), en este orden:
+//   1. La que cargó el dueño para la sucursal (mis_sucursales.capacidad_caja_hora).
+//   2. Referencia PROVISORIA del rubro, nunca menor a lo máximo que ya despachó una caja sola.
+const REFERENCIA_RUBRO = [
+  [/caf|bar|gastr|resto|panad|helad/i, 25],
+  [/kiosk|kiosc/i, 40],
+  [/almac|super|minimer|despens|autoserv/i, 30],
+];
+function referenciaRubro(rubro) {
+  for (const [re, v] of REFERENCIA_RUBRO) if (re.test(rubro || '')) return v;
+  return 25;
+}
+function p95(xs) { if (!xs.length) return 0; const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(s.length * 0.95))]; }
+function franjas(horas) { // [9,10,13] → [[9,11],[13,14]]
+  const out = [];
+  [...horas].sort((a, b) => a - b).forEach(h => {
+    const u = out[out.length - 1];
+    if (u && u[1] === h) u[1] = h + 1; else out.push([h, h + 1]);
+  });
+  return out;
+}
+function textoFranjas(fs) { return fs.map(([a, b]) => `de ${a} a ${b} h`).join(' y '); }
+
+async function recomendacionesCapacidad(negocioId, sucursalId, db, turnos, nombres, opciones) {
+  const recs = [];
+  const hoy = hoyAR();
+  const desde30 = sumarDias(hoy, -30);
+  const sucs = [...new Set(turnos.filter(t => t.dia >= desde30 && t.sucursal_id != null).map(t => String(t.sucursal_id)))]
+    .filter(s => sucursalId == null || Number(s) === sucursalId);
+  if (!sucs.length) return recs;
+
+  const rRes = await db.query(`SELECT tipo_negocio FROM negocios WHERE id = $1`, [negocioId]);
+  const rubro = rRes.rows[0]?.tipo_negocio || '';
+  const ref = referenciaRubro(rubro);
+  const cRes = await db.query(`SELECT id, capacidad_caja_hora FROM mis_sucursales WHERE id = ANY($1::int[])`, [sucs.map(Number)]);
+  const capDueno = Object.fromEntries(cRes.rows.map(r => [String(r.id), r.capacidad_caja_hora]));
+
+  // Tickets por sucursal, día y hora (últimos 60 días)
+  const tkRes = await db.query(
+    `SELECT sucursal_id, to_char((fecha - INTERVAL '3 hours')::date, 'YYYY-MM-DD') AS dia,
+            EXTRACT(HOUR FROM fecha - INTERVAL '3 hours')::int AS h, COUNT(*)::int AS n
+     FROM transacciones
+     WHERE negocio_id = $1 AND fecha >= NOW() - INTERVAL '60 days' AND sucursal_id = ANY($2::int[])
+     GROUP BY 1, 2, 3`,
+    [negocioId, sucs.map(Number)]
+  );
+
+  // Cajas abiertas por sucursal, día y hora (de los turnos)
+  const cajas = {};
+  turnos.forEach(t => {
+    if (t.sucursal_id == null || t.h_ap == null || t.h_ci == null) return;
+    for (let h = t.h_ap; h < t.h_ci; h++) {
+      const k = `${t.sucursal_id}|${t.dia}|${h}`;
+      cajas[k] = (cajas[k] || 0) + 1;
+    }
+  });
+
+  for (const s of sucs) {
+    const filas = tkRes.rows.filter(r => String(r.sucursal_id) === s);
+    // Despacho observado por caja (solo horas con caja abierta)
+    const obs = filas.map(r => { const c = cajas[`${s}|${r.dia}|${r.h}`]; return c ? r.n / c : null; }).filter(x => x != null);
+    let capacidad, fuente;
+    if (capDueno[s]) { capacidad = capDueno[s]; fuente = 'dueno'; }
+    else {
+      const maxObs = p95(obs);
+      capacidad = Math.max(ref, Math.ceil(maxObs));
+      fuente = maxObs > ref ? 'observado' : 'referencia';
+    }
+
+    // Reparto horario de tickets por día de semana, y cajas habituales por día de semana y hora
+    const porDowH = {}, porDow = {};
+    filas.forEach(r => {
+      const w = dowDe(r.dia);
+      porDowH[`${w}|${r.h}`] = (porDowH[`${w}|${r.h}`] || 0) + r.n;
+      porDow[w] = (porDow[w] || 0) + r.n;
+    });
+    const habitual = (w, h) => {
+      const vals = [];
+      for (let k = 1; k <= 30; k++) { const d = sumarDias(hoy, -k); if (dowDe(d) === w) vals.push(cajas[`${s}|${d}|${h}`] || 0); }
+      return mediana(vals) ?? 0;
+    };
+
+    const pred = await prediccionSucursal(negocioId, Number(s), db, opciones);
+    if (!pred.disponible) continue;
+    const ticketProm = pred.predicciones[0]?.ticket_promedio || null;
+
+    const faltan = [], sobran = [];
+    for (const p of pred.predicciones) {
+      const w = dowDe(p.fecha_target);
+      if (!p.tickets_esperados || !porDow[w]) continue;
+      const hFalta = [], hSobra = [];
+      let enJuego = 0, picoPorHora = 0;
+      for (let h = 0; h < 24; h++) {
+        const share = (porDowH[`${w}|${h}`] || 0) / porDow[w];
+        if (!share) continue;
+        const esperado = p.tickets_esperados * share;
+        const hab = habitual(w, h);
+        if (hab < 1) continue; // horario sin caja habitual: no se opina
+        // Margen del 10%: solo falta una caja si la demanda supera claramente lo que despachan las que hay.
+        if (esperado > capacidad * hab * 1.10) {
+          hFalta.push(h);
+          picoPorHora = Math.max(picoPorHora, esperado);
+          if (ticketProm) enJuego += (esperado - capacidad * hab) * ticketProm;
+        } else if (hab >= 2 && esperado <= 0.5 * capacidad * (hab - 1)) {
+          hSobra.push(h);
+        }
+      }
+      if (hFalta.length) faltan.push({ p, w, fr: franjas(hFalta), pico: picoPorHora, enJuego });
+      if (hSobra.length >= 2) sobran.push({ p, w, fr: franjas(hSobra) });
+    }
+
+    const nombreSuc = nombres[s] || `sucursal ${s}`;
+    const textoCap = fuente === 'dueno' ? 'según el valor que cargaste'
+      : fuente === 'observado' ? 'lo máximo que ya despachó una caja tuya'
+      : `referencia provisoria para ${rubro || 'tu rubro'}, ajustable`;
+
+    if (faltan.length) {
+      const top = faltan.sort((a, b) => b.pico - a.pico).slice(0, 3)
+        .sort((a, b) => (a.p.fecha_target < b.p.fecha_target ? -1 : 1)); // las 3 más fuertes, en orden de fecha
+      const enJuego = top.reduce((a, f) => a + f.enJuego, 0);
+      recs.push({
+        id: 'CAPACIDAD_FALTA_CAJA',
+        categoria: 'personal',
+        prioridad: 'alta',
+        mensaje: top.map(f => `${DIA[f.w]} ${fechaCorta(f.p.fecha_target)} ${textoFranjas(f.fr)}`).join('; ') +
+          ` en ${nombreSuc}: se esperan hasta unos ${Math.round(top[0].pico)} clientes por hora y una caja atiende unos ${capacidad} (${textoCap}).` +
+          (enJuego >= 1000 ? ` Con una sola caja quedarían unos ${fmt(enJuego)} en ventas en juego.` : ''),
+        accion: `Abrí una caja más (o sumá una persona en el mostrador) en ${top.reduce((a, f) => a + f.fr.length, 0) > 1 ? 'esas franjas' : 'esa franja'}.`,
+        datos: { sucursal_id: Number(s), capacidad, fuente_capacidad: fuente,
+                 dias: top.map(f => ({ fecha: f.p.fecha_target, franjas: f.fr, pico_clientes_hora: Math.round(f.pico) })) },
+      });
+    }
+    if (sobran.length) {
+      const top = sobran.slice(0, 3);
+      recs.push({
+        id: 'CAPACIDAD_SOBRA_PERSONAL',
+        categoria: 'personal',
+        prioridad: 'info',
+        mensaje: top.map(f => `${DIA[f.w]} ${fechaCorta(f.p.fecha_target)} ${textoFranjas(f.fr)}`).join('; ') +
+          ` en ${nombreSuc}: la demanda esperada entra en una caja menos de las que solés tener abiertas (una caja atiende unos ${capacidad} clientes por hora, ${textoCap}).`,
+        accion: 'En esas franjas, la segunda persona puede reponer, ordenar o adelantar tareas en vez de estar en caja.',
+        datos: { sucursal_id: Number(s), capacidad, fuente_capacidad: fuente, dias: top.map(f => ({ fecha: f.p.fecha_target, franjas: f.fr })) },
+      });
+    }
+  }
+  return recs;
+}
+
 // ─── Orquestador ──────────────────────────────────────────────────────────────
 async function recomendacionesEcosistema(negocioId, sucursalId = null, db = pool, opciones = {}) {
   const tRes = await db.query(
@@ -250,6 +406,8 @@ async function recomendacionesEcosistema(negocioId, sucursalId = null, db = pool
   if (control) recs.push(...control.recs);
   const caja = await seguro('caja', () => recomendacionesCaja(negocioId, sucursalId, db, turnos, nombres, control?.patrones || [], opciones));
   if (caja) recs.push(...caja);
+  const capac = await seguro('capacidad', () => recomendacionesCapacidad(negocioId, sucursalId, db, turnos, nombres, opciones));
+  if (capac) recs.push(...capac);
   const pred = await seguro('prediccion', () => recomendacionesDePrediccion(negocioId, sucursalId, db, opciones));
   if (pred) recs.push(...pred);
 
