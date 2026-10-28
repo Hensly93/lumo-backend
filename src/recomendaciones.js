@@ -9,7 +9,7 @@
 //   - La predicción siempre dispara una acción concreta
 
 const pool = require('./db');
-const { recomendacionesDePrediccion } = require('./recomendaciones_prediccion');
+const { recomendacionesEcosistema } = require('./recomendaciones_ecosistema');
 
 // ─── Reglas de recomendación ──────────────────────────────────────────────────
 
@@ -228,7 +228,7 @@ async function generarRecomendaciones(negocioId, sucursalId = null) {
     })
   );
 
-  resultados.push(...(await recomendacionesDePrediccion(negocioId, sucursalId).catch(e => { console.error('Recomendaciones de predicción fallaron:', e.message); return []; })));
+  { const nuevas = await recomendacionesEcosistema(negocioId, sucursalId).catch(e => { console.error('Recomendar v2 falló:', e.message); return []; }); const reemplazadas = new Set(nuevas.flatMap(n => n.reemplaza || [])); for (let i = resultados.length - 1; i >= 0; i--) if (reemplazadas.has(resultados[i].id)) resultados.splice(i, 1); resultados.push(...nuevas); }
   // Ordenar por prioridad
   const orden = { critica: 0, alta: 1, media: 2, info: 3 };
   resultados.sort((a, b) => (orden[a.prioridad] ?? 4) - (orden[b.prioridad] ?? 4));
