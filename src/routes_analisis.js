@@ -235,7 +235,20 @@ router.get('/predicciones', auth, async (req, res) => {
       mensaje_nicole = r.mensaje;
     }
 
-    res.json({ ...prediccion, mensaje_nicole });
+    // Predicción de HOY para la tarjeta "Facturación estimada hoy" del Home
+    let facturacion = { disponible: false };
+    try {
+      const h = await calcularPrediccion(req.user.negocio_id, sucursalId, pool, null, { incluirHoy: true, guardar: false });
+      const hoyP = h.disponible ? h.predicciones[0] : null;
+      if (hoyP) facturacion = {
+        disponible: true,
+        fecha: hoyP.fecha_target,
+        venta_diaria_esperada: hoyP.valor_predicho,
+        rango: { min: hoyP.rango_min, max: hoyP.rango_max },
+        confianza: { pct: Math.round(hoyP.confianza * 100) },
+      };
+    } catch (e) { console.error('facturacion hoy:', e.message); }
+    res.json({ ...prediccion, mensaje_nicole, facturacion });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
