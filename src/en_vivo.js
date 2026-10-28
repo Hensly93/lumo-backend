@@ -134,6 +134,8 @@ async function negocioEnVivo(negocioId, sucursalId = null, db = pool, opciones =
       avance_dia_pct: Math.round(fraccionDia * 100),
       ultima_hora: ultimaHora,
       horario: { desde: primera, hasta: ultima + 1 },
+      rango_dia: { min: r0(hoy.rango_min ?? esperadoDia), max: r0(hoy.rango_max ?? esperadoDia) },
+      confianza: hoy.confianza,
     });
   }
 
@@ -143,6 +145,9 @@ async function negocioEnVivo(negocioId, sucursalId = null, db = pool, opciones =
     tickets: filas.reduce((a, f) => a + f.tickets, 0),
     esperado_hasta_ahora: conPred.length ? r0(conPred.reduce((a, f) => a + f.esperado_hasta_ahora, 0)) : null,
     esperado_dia: conPred.length ? r0(conPred.reduce((a, f) => a + f.esperado_dia, 0)) : null,
+    rango_dia: conPred.length ? { min: r0(conPred.reduce((a, f) => a + f.rango_dia.min, 0)), max: r0(conPred.reduce((a, f) => a + f.rango_dia.max, 0)) } : null,
+    // La confianza del total es la del local con menos datos (la más prudente)
+    confianza: conPred.length ? Math.min(...conPred.map(f => f.confianza)) : null,
   };
   return { ahora, sucursales: filas, total };
 }

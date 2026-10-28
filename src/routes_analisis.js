@@ -321,6 +321,42 @@ router.get('/ventas-diarias', auth, async (req, res) => {
 });
 
 // GET /api/alertas — motor unificado: métricas + CUSUM + deduplicación
+// GET /inicio — todo el Home con UNA sola fuente de verdad (mismos números que Alertas y En Vivo)
+router.get('/inicio', auth, async (req, res) => {
+  try {
+    const { negocioEnVivo } = require('./en_vivo');
+    const negocioId = req.user.negocio_id;
+    const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
+    const suc = Number.isNaN(sucursalId) ? null : sucursalId;
+    const [analisis, vivo, recs] = await Promise.all([
+      analizarNegocio(negocioId, suc),
+      negocioEnVivo(negocioId, suc),
+      generarRecomendaciones(negocioId, suc).catch(e => { console.error('inicio/recomendaciones:', e.message); return { recomendaciones: [] }; }),
+    ]);
+    const resAlertas = await gestionarAlertas(negocioId, analisis.señales || []);
+    const ahoraISO = new Date().toISOString();
+    // Inconsistencias de caja (críticas/altas) de las recomendaciones, con el mismo formato que las alertas
+    const deCaja = (recs.recomendaciones || [])
+      .filter(r => r.categoria === 'inconsistencia_operativa' && (r.prioridad === 'critica' || r.prioridad === 'alta'))
+      .map(r => ({ tipo: 'Caja', prioridad: r.prioridad === 'critica' ? 'critico' : 'atencion', mensaje: r.mensaje, accion: r.accion,
+                   timestamp: ahoraISO, datos: r.datos, origen: 'recomendaciones', id: r.id }));
+    const items = [...(resAlertas.alertas || []), ...deCaja];
+    const t = vivo.total || {};
+    res.json({
+      fecha: vivo.ahora?.fecha, sucursal_id: suc,
+      hoy: { disponible: t.esperado_dia != null, esperado_dia: t.esperado_dia ?? null, rango: t.rango_dia ?? null,
+             confianza_pct: t.confianza != null ? Math.round(t.confianza * 100) : null },
+      en_vivo: vivo,
+      revisar: {
+        criticas: items.filter(a => ['critico', 'inconsistencia'].includes(a.prioridad)).length,
+        atencion: items.filter(a => ['atencion', 'ineficiencia'].includes(a.prioridad)).length,
+        items,
+      },
+      analisis,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 router.get('/alertas', auth, async (req, res) => {
   try {
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
