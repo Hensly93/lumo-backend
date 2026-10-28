@@ -9,7 +9,7 @@
 //      Si error > 30% por 3 días seguidos → log de alerta interna
 
 const pool = require('./db');
-const { calcularPrediccion } = require('./prediccion_adaptativa');
+const { calcularPrediccion, ownerDeNegocio } = require('./prediccion_adaptativa');
 const { notificarUsuario } = require('./push');
 const { calcularRiesgoAjustado } = require('./erm');
 const { detectarGoteo } = require('./cruce_variables');
@@ -81,9 +81,9 @@ async function agregarDatosDia(db) {
 
 async function calcularPredicciones(db) {
   const activosRes = await db.query(`
-    SELECT DISTINCT usuario_id, sucursal_id
+    SELECT DISTINCT negocio_id, sucursal_id
     FROM transacciones
-    WHERE fecha >= NOW() - INTERVAL '7 days'
+    WHERE fecha >= NOW() - INTERVAL '7 days' AND negocio_id IS NOT NULL
   `);
 
   const resultados = [];
@@ -91,13 +91,14 @@ async function calcularPredicciones(db) {
   let sin_datos = 0;
   let errores = 0;
 
-  for (const { usuario_id, sucursal_id } of activosRes.rows) {
+  for (const { negocio_id, sucursal_id } of activosRes.rows) {
     try {
-      const r = await calcularPrediccion(usuario_id, sucursal_id, db);
+      const r = await calcularPrediccion(negocio_id, sucursal_id, db);
       if (r.disponible) {
         ok++;
         // Notificar al dueño por push
-        await notificarUsuario(usuario_id, {
+        const ownerId = await ownerDeNegocio(negocio_id, db);
+        if (ownerId) await notificarUsuario(ownerId, {
           title: 'NICOLE actualizó tus predicciones',
           body: `Horizonte ${r.horizonte} · confianza ${Math.round((r.confianza ?? 0) * 100)}%`,
           url: '/predicciones',
@@ -105,10 +106,10 @@ async function calcularPredicciones(db) {
       } else {
         sin_datos++;
       }
-      resultados.push({ usuario_id, sucursal_id, disponible: r.disponible, horizonte: r.horizonte ?? null });
+      resultados.push({ negocio_id, sucursal_id, disponible: r.disponible, horizonte: r.horizonte ?? null });
     } catch (e) {
       errores++;
-      resultados.push({ usuario_id, sucursal_id, error: e.message });
+      resultados.push({ negocio_id, sucursal_id, error: e.message });
     }
   }
 

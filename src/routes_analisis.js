@@ -191,7 +191,7 @@ router.get('/predicciones', auth, async (req, res) => {
   try {
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
 
-    const prediccion = await calcularPrediccion(req.user.id, sucursalId);
+    const prediccion = await calcularPrediccion(req.user.negocio_id, sucursalId);
     if (!prediccion.disponible) return res.json(prediccion);
 
     // Obtener datos del negocio para el mensaje de NICOLE
@@ -212,21 +212,21 @@ router.get('/predicciones', auth, async (req, res) => {
       `SELECT pn.fecha_target, pn.valor_predicho, hp.error_porcentual
        FROM predicciones_negocio pn
        JOIN historial_predicciones hp ON hp.prediccion_id = pn.id
-       WHERE pn.usuario_id = $1
+       WHERE pn.negocio_id = $1
          AND ($2::integer IS NULL OR pn.sucursal_id = $2)
        ORDER BY pn.fecha_prediccion DESC
        LIMIT 3`,
-      [req.user.id, sucursalId]
+      [req.user.negocio_id, sucursalId]
     );
     const historial_reciente = histRes.rows;
 
     // Generar mensaje NICOLE para la primera predicción guardada
     const primeraId = await pool.query(
       `SELECT id FROM predicciones_negocio
-       WHERE usuario_id = $1 AND fecha_prediccion = CURRENT_DATE
+       WHERE negocio_id = $1 AND fecha_prediccion = (NOW() - INTERVAL '3 hours')::date
          AND ($2::integer IS NULL OR sucursal_id = $2)
        ORDER BY id ASC LIMIT 1`,
-      [req.user.id, sucursalId]
+      [req.user.negocio_id, sucursalId]
     );
 
     let mensaje_nicole = null;
