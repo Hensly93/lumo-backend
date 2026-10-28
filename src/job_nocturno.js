@@ -10,6 +10,7 @@
 
 const pool = require('./db');
 const { calcularPrediccion, ownerDeNegocio } = require('./prediccion_adaptativa');
+const { guardarClimaReciente } = require('./clima_diario');
 const { notificarUsuario } = require('./push');
 const { calcularRiesgoAjustado } = require('./erm');
 const { detectarGoteo } = require('./cruce_variables');
@@ -406,6 +407,7 @@ async function runJobNocturno(db = pool) {
   const pasos = [];
   try {
     pasos.push(await agregarDatosDia(db));
+    pasos.push(await guardarClimaReciente(db));
     pasos.push(await calcularPredicciones(db));
     pasos.push(await compararConRealidad(db));
     pasos.push(await recordatorioPreciosCatalogo(db));

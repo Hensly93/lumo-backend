@@ -407,8 +407,12 @@ async function calcularPrediccion(negocio_id, sucursal_id = null, db = pool, rie
           if (ticketProm[sk]) tickets += v / ticketProm[sk];
         });
 
+        // Efectos menores al 1% del día no se muestran (ruido); se suman a la base
+        // para que base + efectos visibles = valor predicho.
+        const umbral = Math.max(1, valor * 0.01);
+        Object.keys(efectos).forEach(n => { if (Math.abs(efectos[n]) < umbral) base += efectos[n]; });
         const listaEfectos = Object.keys(efectos)
-          .filter(n => Math.abs(efectos[n]) >= 1)
+          .filter(n => Math.abs(efectos[n]) >= umbral)
           .map(n => ({ variable: n, descripcion: DESCRIPCION[n] || n, efecto_pesos: r0(efectos[n]) }));
 
         predicciones.push({
