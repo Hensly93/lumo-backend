@@ -244,7 +244,7 @@ router.get('/predicciones', auth, async (req, res) => {
 // GET /api/recomendaciones — Obj 6: motor de recomendaciones
 router.get('/recomendaciones', auth, async (req, res) => {
   try {
-    const resultado = await generarRecomendaciones(req.user.id);
+    const resultado = await generarRecomendaciones(req.user.negocio_id, req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null);
     res.json(resultado);
   } catch(e) {
     res.status(500).json({ error: e.message });

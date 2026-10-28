@@ -9,6 +9,7 @@
 //   - La predicción siempre dispara una acción concreta
 
 const pool = require('./db');
+const { recomendacionesDePrediccion } = require('./recomendaciones_prediccion');
 
 // ─── Reglas de recomendación ──────────────────────────────────────────────────
 
@@ -19,18 +20,18 @@ const REGLAS = [
     id: 'TURNO_INCONSISTENTE_SOSTENIDO',
     categoria: 'inconsistencia_operativa',
     prioridad: 'critica',
-    evaluar: async (usuarioId) => {
+    evaluar: async (negocioId) => {
       const res = await pool.query(
         `SELECT tipo_turno,
                 COUNT(*) FILTER (WHERE ABS(brecha) > 1000) as turnos_con_brecha,
                 COUNT(*) as total_turnos,
                 MIN(hora_apertura) as primer_turno
          FROM turnos_caja
-         WHERE usuario_id=$1 AND estado='cerrado'
+         WHERE negocio_id=$1 AND estado='cerrado'
            AND hora_apertura >= NOW() - INTERVAL '21 days'
          GROUP BY tipo_turno
          HAVING COUNT(*) >= 6`,
-        [usuarioId]
+        [negocioId]
       );
       const alertas = [];
       for (const r of res.rows) {
@@ -56,17 +57,17 @@ const REGLAS = [
     id: 'BRECHA_CRECIENTE',
     categoria: 'tendencia_negativa',
     prioridad: 'alta',
-    evaluar: async (usuarioId) => {
+    evaluar: async (negocioId) => {
       const res = await pool.query(
         `SELECT
            DATE_TRUNC('week', hora_apertura) as semana,
            AVG(ABS(brecha)) as brecha_promedio
          FROM turnos_caja
-         WHERE usuario_id=$1 AND estado='cerrado' AND brecha IS NOT NULL
+         WHERE negocio_id=$1 AND estado='cerrado' AND brecha IS NOT NULL
            AND hora_apertura >= NOW() - INTERVAL '28 days'
          GROUP BY semana
          ORDER BY semana ASC`,
-        [usuarioId]
+        [negocioId]
       );
       if (res.rows.length < 3) return [];
       const brechas = res.rows.map(r => parseFloat(r.brecha_promedio));
@@ -90,18 +91,18 @@ const REGLAS = [
     id: 'CONTEOS_OMITIDOS_FRECUENTES',
     categoria: 'error_operativo',
     prioridad: 'alta',
-    evaluar: async (usuarioId) => {
+    evaluar: async (negocioId) => {
       const res = await pool.query(
         `SELECT
            COUNT(*) as total,
            SUM(CASE WHEN conteo_aleatorio_omitido THEN 1 ELSE 0 END) as omitidos,
            tipo_turno
          FROM turnos_caja
-         WHERE usuario_id=$1 AND estado='cerrado'
+         WHERE negocio_id=$1 AND estado='cerrado'
            AND hora_apertura >= NOW() - INTERVAL '21 days'
          GROUP BY tipo_turno
          HAVING COUNT(*) >= 4`,
-        [usuarioId]
+        [negocioId]
       );
       const alertas = [];
       for (const r of res.rows) {
@@ -123,17 +124,17 @@ const REGLAS = [
     id: 'RACHA_POSITIVA_TURNO',
     categoria: 'positivo',
     prioridad: 'info',
-    evaluar: async (usuarioId) => {
+    evaluar: async (negocioId) => {
       const res = await pool.query(
         `SELECT tipo_turno, COUNT(*) as n_limpios
          FROM turnos_caja
-         WHERE usuario_id=$1 AND estado='cerrado'
+         WHERE negocio_id=$1 AND estado='cerrado'
            AND ABS(COALESCE(brecha,0)) <= 1000
            AND conteo_aleatorio_omitido = false
            AND hora_apertura >= NOW() - INTERVAL '14 days'
          GROUP BY tipo_turno
          HAVING COUNT(*) >= 7`,
-        [usuarioId]
+        [negocioId]
       );
       return res.rows.map(r => ({ turno: r.tipo_turno, n: parseInt(r.n_limpios) }));
     },
@@ -148,15 +149,15 @@ const REGLAS = [
     id: 'DIFERENCIA_ENTRE_TURNOS',
     categoria: 'atencion',
     prioridad: 'media',
-    evaluar: async (usuarioId) => {
+    evaluar: async (negocioId) => {
       const res = await pool.query(
         `SELECT tipo_turno, AVG(ABS(brecha)) as brecha_media, COUNT(*) as n
          FROM turnos_caja
-         WHERE usuario_id=$1 AND estado='cerrado' AND brecha IS NOT NULL
+         WHERE negocio_id=$1 AND estado='cerrado' AND brecha IS NOT NULL
            AND hora_apertura >= NOW() - INTERVAL '30 days'
          GROUP BY tipo_turno
          HAVING COUNT(*) >= 5`,
-        [usuarioId]
+        [negocioId]
       );
       if (res.rows.length < 2) return [];
       const turnos = res.rows.map(r => ({ turno: r.tipo_turno, brecha: parseFloat(r.brecha_media), n: parseInt(r.n) }));
@@ -181,12 +182,12 @@ const REGLAS = [
     id: 'EGRESOS_FRAGMENTADOS',
     categoria: 'atencion',
     prioridad: 'media',
-    evaluar: async (usuarioId) => {
+    evaluar: async (negocioId) => {
       const res = await pool.query(
         `SELECT COUNT(*) as total_egresos, AVG(monto) as monto_promedio
          FROM egresos_caja
-         WHERE usuario_id=$1 AND hora >= NOW() - INTERVAL '7 days'`,
-        [usuarioId]
+         WHERE negocio_id=$1 AND hora >= NOW() - INTERVAL '7 days'`,
+        [negocioId]
       );
       const total = parseInt(res.rows[0]?.total_egresos || 0);
       const promedio = parseFloat(res.rows[0]?.monto_promedio || 0);
@@ -203,13 +204,13 @@ const REGLAS = [
 
 // ─── Generador principal ──────────────────────────────────────────────────────
 
-async function generarRecomendaciones(usuarioId) {
+async function generarRecomendaciones(negocioId, sucursalId = null) {
   const resultados = [];
 
   await Promise.allSettled(
     REGLAS.map(async (regla) => {
       try {
-        const casos = await regla.evaluar(usuarioId);
+        const casos = await regla.evaluar(negocioId);
         for (const caso of casos) {
           resultados.push({
             id: regla.id,
@@ -227,6 +228,7 @@ async function generarRecomendaciones(usuarioId) {
     })
   );
 
+  resultados.push(...(await recomendacionesDePrediccion(negocioId, sucursalId).catch(e => { console.error('Recomendaciones de predicción fallaron:', e.message); return []; })));
   // Ordenar por prioridad
   const orden = { critica: 0, alta: 1, media: 2, info: 3 };
   resultados.sort((a, b) => (orden[a.prioridad] ?? 4) - (orden[b.prioridad] ?? 4));
