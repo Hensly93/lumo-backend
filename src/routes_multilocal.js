@@ -251,6 +251,39 @@ router.get('/red-vivo', auth, async (req, res) => {
 
 // ─── PATCH /api/multilocal/sucursal/:id ──────────────────────────────────────
 // Editar nombre o dirección de un local (con geocoding condicional)
+// GET /capacidad — capacidad de caja por local (clientes por hora) y referencia del rubro
+router.get('/capacidad', auth, async (req, res) => {
+  try {
+    const { referenciaRubro } = require('./recomendaciones_ecosistema');
+    const n = await pool.query('SELECT tipo_negocio FROM negocios WHERE id=$1', [req.user.negocio_id]);
+    const rubro = n.rows[0]?.tipo_negocio || '';
+    const s = await pool.query(
+      `SELECT id, nombre, capacidad_caja_hora FROM mis_sucursales
+       WHERE negocio_id=$1 AND COALESCE(activo, true) = true ORDER BY id`,
+      [req.user.negocio_id]
+    );
+    res.json({ rubro, referencia: referenciaRubro(rubro), sucursales: s.rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PATCH /sucursal/:id/capacidad — body { capacidad_caja_hora: entero 1..500 | null }
+router.patch('/sucursal/:id/capacidad', auth, async (req, res) => {
+  try {
+    const v = req.body?.capacidad_caja_hora;
+    const cap = (v === null || v === undefined || v === '') ? null : Number(v);
+    if (cap !== null && (!Number.isInteger(cap) || cap < 1 || cap > 500)) {
+      return res.status(400).json({ error: 'La capacidad tiene que ser un número entero entre 1 y 500, o vacío.' });
+    }
+    const r = await pool.query(
+      `UPDATE mis_sucursales SET capacidad_caja_hora=$1 WHERE id=$2 AND negocio_id=$3
+       RETURNING id, nombre, capacidad_caja_hora`,
+      [cap, req.params.id, req.user.negocio_id]
+    );
+    if (!r.rowCount) return res.status(404).json({ error: 'Local no encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 router.patch('/sucursal/:id', auth, async (req, res) => {
   try {
     const { nombre, calle, numero, localidad, provincia, provincia_id, localidad_id } = req.body;

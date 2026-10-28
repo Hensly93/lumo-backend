@@ -415,4 +415,4 @@ async function recomendacionesEcosistema(negocioId, sucursalId = null, db = pool
   return recs;
 }
 
-module.exports = { recomendacionesEcosistema };
+module.exports = { recomendacionesEcosistema, referenciaRubro };
