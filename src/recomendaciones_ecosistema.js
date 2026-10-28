@@ -210,7 +210,7 @@ async function recomendacionesCaja(negocioId, sucursalId, db, turnos, nombres, p
       prioridad: alerta ? 'alta' : 'info',
       mensaje: `Mañana (${DIA[dowM]} ${fechaCorta(manana)}) en ${nombreSuc}, así deberían cerrar las cajas: ` +
         lineas.map(l => `turno ${nombreTurno(l.tipo)} (${l.h0}–${l.h1} h) cerca de ${fmt(l.meta)} ` +
-          `(apertura ${fmt(l.apertura)} + ~${fmt(l.efEsperado)} en efectivo)`).join('; ') + '.' +
+          `(apertura ${fmt(l.apertura)} + unos ${fmt(l.efEsperado)} en efectivo)`).join('; ') + '.' +
         (alerta ? ' Ojo: es el día y turno con faltantes recurrentes.' : ''),
       accion: lineas.map(l => `si el turno ${nombreTurno(l.tipo)} cierra por debajo de ${fmt(l.minimo)}, revisalo en el momento`).join('; ')
         .replace(/^./, c => c.toUpperCase()) + '.',
