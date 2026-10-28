@@ -153,7 +153,9 @@ async function ownerDeNegocio(negocio_id, db = pool) {
 // opciones.guardar = false → no escribe en predicciones_negocio (para pruebas)
 // opciones.pronostico = { [sucursal_id]: { 'YYYY-MM-DD': {clima,...} } } → inyectar (pruebas)
 async function calcularPrediccion(negocio_id, sucursal_id = null, db = pool, riesgo_contexto = null, opciones = {}) {
-  const guardar = opciones.guardar !== false;
+  // opciones.incluirHoy = true → la lista arranca en HOY (para "Tu Negocio en Vivo"); nunca se guarda.
+  const kIni = opciones.incluirHoy ? 0 : 1;
+  const guardar = opciones.guardar !== false && !opciones.incluirHoy;
   if (!negocio_id) {
     return { disponible: false, motivo: 'sin_negocio', minimo_requerido: MINIMO_DIAS_CON_VENTAS };
   }
@@ -373,7 +375,7 @@ async function calcularPrediccion(negocio_id, sucursal_id = null, db = pool, rie
       };
 
       predicciones = [];
-      for (let k = 1; k <= HORIZONTE_DIAS; k++) {
+      for (let k = kIni; k <= HORIZONTE_DIAS; k++) {
         const f = sumarDias(hoy, k);
         const w = dowDe(f);
         const eventos = calendario[f] || [];
@@ -459,7 +461,7 @@ async function calcularPrediccion(negocio_id, sucursal_id = null, db = pool, rie
 
     modelo = { tipo: 'simple', motivo: `menos de ${MIN_DIAS_MODELO} días con ventas`, dias_con_ventas: diasDistintos };
     predicciones = [];
-    for (let k = 1; k <= HORIZONTE_DIAS; k++) {
+    for (let k = kIni; k <= HORIZONTE_DIAS; k++) {
       const f = sumarDias(hoy, k);
       const w = dowDe(f);
       const eventos = calendario[f] || [];

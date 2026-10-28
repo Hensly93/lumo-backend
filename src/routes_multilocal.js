@@ -161,6 +161,15 @@ router.get('/red', auth, async (req, res) => {
 
 // ─── GET /api/multilocal/red-vivo ────────────────────────────────────────────
 // Dashboard en vivo: datos del día actual + turnos activos con efectivo esperado
+// GET /en-vivo — Tu Negocio en Vivo: ventas de hoy vs. lo esperado a esta hora, por local
+router.get('/en-vivo', auth, async (req, res) => {
+  try {
+    const { negocioEnVivo } = require('./en_vivo');
+    const suc = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
+    res.json(await negocioEnVivo(req.user.negocio_id, Number.isNaN(suc) ? null : suc));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 router.get('/red-vivo', auth, async (req, res) => {
   try {
     const { sucursal_ids } = req.query;
