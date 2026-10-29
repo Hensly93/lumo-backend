@@ -357,6 +357,19 @@ router.get('/inicio', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /periodos?periodo=hoy|semana|mes|anio&sucursal_id= — comparativas justas + valor real (IPC)
+router.get('/periodos', auth, async (req, res) => {
+  try {
+    const { calcularPeriodo } = require('./periodos');
+    const periodo = ['hoy', 'semana', 'mes', 'anio'].includes(req.query.periodo) ? req.query.periodo : 'mes';
+    const suc = parseInt(req.query.sucursal_id, 10);
+    res.json(await calcularPeriodo(req.user.negocio_id, Number.isFinite(suc) ? suc : null, periodo));
+  } catch (e) {
+    console.error('[periodos]', e);
+    res.status(500).json({ error: 'No se pudo calcular el período' });
+  }
+});
+
 router.get('/alertas', auth, async (req, res) => {
   try {
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
