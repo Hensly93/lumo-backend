@@ -1,5 +1,13 @@
 const express = require('express');
 const router = express.Router();
+
+// Aislamiento entre negocios: ¿el turno pertenece al negocio del dueño logueado?
+async function turnoDelNegocio(turnoId, negocioId) {
+  try {
+    const r = await pool.query('SELECT 1 FROM turnos_caja WHERE id=$1 AND negocio_id=$2', [parseInt(turnoId), negocioId]);
+    return r.rowCount > 0;
+  } catch { return false; }
+}
 const bcrypt = require('bcryptjs');
 const pool = require('./db');
 const { analizarCruceTurno, detectarGoteo, resumenPatronesNegocio } = require('./cruce_variables');
@@ -84,9 +92,9 @@ router.post('/empleados', auth, async (req, res) => {
 });
 
 // DELETE /api/caja/empleados/:id — desactivar empleado
-router.delete('/empleados/:id', async (req, res) => {
+router.delete('/empleados/:id', auth, async (req, res) => {
   try {
-    await pool.query('UPDATE empleados_negocio SET activo=false WHERE id=$1', [req.params.id]);
+    await pool.query('UPDATE empleados_negocio SET activo=false WHERE id=$1 AND negocio_id=$2', [req.params.id, req.user.negocio_id]);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -484,16 +492,16 @@ router.post('/cierre', async (req, res) => {
 // ─── Historial de turnos (para el dueño) ────────────────────────────────────
 
 // GET /api/caja/historial/:usuario_id
-router.get('/historial/:usuario_id', async (req, res) => {
+router.get('/historial/:usuario_id', auth, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 20;
     const result = await pool.query(
       `SELECT id, nombre_empleado, tipo_turno, caja_apertura, caja_cierre, caja_esperada, brecha,
               hora_apertura, hora_cierre, estado,
               conteo_aleatorio_omitido, conteo_aleatorio2_omitido
-       FROM turnos_caja WHERE usuario_id=$1
+       FROM turnos_caja WHERE negocio_id=$1
        ORDER BY hora_apertura DESC LIMIT $2`,
-      [req.params.usuario_id, limit]
+      [req.user.negocio_id, limit]
     );
     res.json(result.rows);
   } catch (e) {
@@ -504,7 +512,8 @@ router.get('/historial/:usuario_id', async (req, res) => {
 // ─── Z-score contextual ──────────────────────────────────────────────────────
 
 // GET /api/caja/contexto-turno/:turno_id — z-score + contexto temporal de un turno cerrado
-router.get('/contexto-turno/:turno_id', async (req, res) => {
+router.get('/contexto-turno/:turno_id', auth, async (req, res) => {
+  if (!(await turnoDelNegocio(req.params.turno_id, req.user.negocio_id))) return res.status(404).json({ error: 'Turno no encontrado' });
   try {
     const resultado = await analizarTurnoConContexto(parseInt(req.params.turno_id));
     res.json(resultado);
@@ -554,7 +563,8 @@ router.get('/comportamiento/:empleado/:tipo_turno', auth, async (req, res) => {
 // ─── Motor de cruce de variables ────────────────────────────────────────────
 
 // GET /api/caja/cruce/:turno_id — análisis cruzado de un turno cerrado
-router.get('/cruce/:turno_id', async (req, res) => {
+router.get('/cruce/:turno_id', auth, async (req, res) => {
+  if (!(await turnoDelNegocio(req.params.turno_id, req.user.negocio_id))) return res.status(404).json({ error: 'Turno no encontrado' });
   try {
     const resultado = await analizarCruceTurno(parseInt(req.params.turno_id));
     res.json(resultado);
@@ -589,7 +599,8 @@ router.get('/patrones', auth, async (req, res) => {
 // Marca el turno y excluye su brecha del ERM y del baseline futuro.
 
 // POST /api/caja/gasto-inesperado
-router.post('/gasto-inesperado', async (req, res) => {
+router.post('/gasto-inesperado', auth, async (req, res) => {
+  if (!(await turnoDelNegocio(req.body?.turno_id, req.user.negocio_id))) return res.status(404).json({ error: 'Turno no encontrado' });
   try {
     const { turno_id, usuario_id } = req.body;
     if (!turno_id || !usuario_id) {
