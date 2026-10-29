@@ -21,6 +21,7 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json());
+app.use(require('./normalizar_respuesta')); // mensajes/recomendaciones como objeto → texto (evita pantalla blanca)
 
 try {
   const authRoutes = require("./auth");
