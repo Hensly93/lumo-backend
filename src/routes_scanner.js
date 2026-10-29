@@ -1,14 +1,16 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('./db');
+const { authTurno, crearSesionTurno, verificarBloqueoPin, registrarIntentoPin } = require('./sesion_empleado');
 
 // ─────────────────────────────────────────────────────────────────────
 // GET /api/scanner/producto?turno_id=X&codigo=Y
 // Busca producto por código de barras en el negocio del turno activo
 // ─────────────────────────────────────────────────────────────────────
-router.get('/producto', async (req, res) => {
+router.get('/producto', authTurno, async (req, res) => {
   try {
-    const { turno_id, codigo } = req.query;
+    const { codigo } = req.query;
+    const turno_id = req.turno.id;
     if (!turno_id || !codigo) {
       return res.status(400).json({ error: 'turno_id y codigo requeridos' });
     }
@@ -42,9 +44,9 @@ router.get('/producto', async (req, res) => {
 // Crea sesión temporal que vincula scanner con turno activo
 // Body: { turno_id }
 // ─────────────────────────────────────────────────────────────────────
-router.post('/sesion', async (req, res) => {
+router.post('/sesion', authTurno, async (req, res) => {
   try {
-    const { turno_id } = req.body;
+    const turno_id = req.turno.id;
     if (!turno_id) {
       return res.status(400).json({ error: 'turno_id requerido' });
     }
@@ -133,9 +135,10 @@ router.get('/sesion/:token', async (req, res) => {
 // Agrega item al carrito del turno
 // Body: { turno_id, producto_id, cantidad, agregado_por }
 // ─────────────────────────────────────────────────────────────────────
-router.post('/carrito', async (req, res) => {
+router.post('/carrito', authTurno, async (req, res) => {
   try {
-    const { turno_id, producto_id, cantidad, agregado_por } = req.body;
+    const { producto_id, cantidad, agregado_por } = req.body;
+    const turno_id = req.turno.id;
 
     if (!turno_id || !producto_id || !cantidad || !agregado_por) {
       return res.status(400).json({ error: 'Faltan campos requeridos' });
@@ -179,9 +182,9 @@ router.post('/carrito', async (req, res) => {
 // GET /api/scanner/carrito/:turno_id
 // Obtiene todos los items del carrito de un turno
 // ─────────────────────────────────────────────────────────────────────
-router.get('/carrito/:turno_id', async (req, res) => {
+router.get('/carrito/:turno_id', authTurno, async (req, res) => {
   try {
-    const { turno_id } = req.params;
+    const turno_id = req.turno.id;
 
     const items = await pool.query(
       `SELECT c.*, p.nombre as producto_nombre, p.codigo_barras
@@ -210,9 +213,10 @@ router.get('/carrito/:turno_id', async (req, res) => {
 // DELETE /api/scanner/carrito/:turno_id/:item_id
 // Elimina un item del carrito
 // ─────────────────────────────────────────────────────────────────────
-router.delete('/carrito/:turno_id/:item_id', async (req, res) => {
+router.delete('/carrito/:turno_id/:item_id', authTurno, async (req, res) => {
   try {
-    const { turno_id, item_id } = req.params;
+    const { item_id } = req.params;
+    const turno_id = req.turno.id;
 
     const result = await pool.query(
       `DELETE FROM carrito_items WHERE id=$1 AND turno_id=$2 RETURNING *`,
@@ -234,10 +238,11 @@ router.delete('/carrito/:turno_id/:item_id', async (req, res) => {
 // Convierte carrito en transacción + transacciones_detalle y vacía carrito
 // Body: { turno_id, metodo_pago }
 // ─────────────────────────────────────────────────────────────────────
-router.post('/finalizar-venta', async (req, res) => {
+router.post('/finalizar-venta', authTurno, async (req, res) => {
   const client = await pool.connect();
   try {
-    const { turno_id, metodo_pago } = req.body;
+    const { metodo_pago } = req.body;
+    const turno_id = req.turno.id;
 
     if (!turno_id || !metodo_pago) {
       return res.status(400).json({ error: 'Faltan campos requeridos' });
@@ -317,9 +322,10 @@ router.post('/finalizar-venta', async (req, res) => {
 // Actualiza cantidad de un item en el carrito
 // Body: { cantidad }
 // ─────────────────────────────────────────────────────────────────────
-router.patch('/carrito/:turno_id/:item_id', async (req, res) => {
+router.patch('/carrito/:turno_id/:item_id', authTurno, async (req, res) => {
   try {
-    const { turno_id, item_id } = req.params;
+    const { item_id } = req.params;
+    const turno_id = req.turno.id;
     const { cantidad } = req.body;
 
     if (!cantidad || cantidad <= 0) {
@@ -349,9 +355,10 @@ router.patch('/carrito/:turno_id/:item_id', async (req, res) => {
 // Alta rápida de producto cuando el código escaneado no existe
 // Body: { turno_id, codigo_barras, nombre, precio_venta }
 // ─────────────────────────────────────────────────────────────────────
-router.post('/producto', async (req, res) => {
+router.post('/producto', authTurno, async (req, res) => {
   try {
-    const { turno_id, codigo_barras, nombre, precio_venta } = req.body;
+    const { codigo_barras, nombre, precio_venta } = req.body;
+    const turno_id = req.turno.id;
 
     if (!turno_id || !codigo_barras || !nombre || precio_venta === undefined) {
       return res.status(400).json({ error: 'Faltan campos requeridos' });

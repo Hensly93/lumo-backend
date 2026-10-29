@@ -10,6 +10,7 @@ async function turnoDelNegocio(turnoId, negocioId) {
 }
 const bcrypt = require('bcryptjs');
 const pool = require('./db');
+const { authTurno, crearSesionTurno, verificarBloqueoPin, registrarIntentoPin } = require('./sesion_empleado');
 const { analizarCruceTurno, detectarGoteo, resumenPatronesNegocio } = require('./cruce_variables');
 const { analizarTurnoConContexto, rankingEmpleadosTurno, contextTurnoActivo, detectarCambioComportamiento } = require('./zscore_contextual');
 const { calcularRiesgoEmpleado } = require('./erm');
@@ -118,7 +119,10 @@ router.post('/validar-pin', async (req, res) => {
     if (emp.rows.length === 0) {
       return res.status(401).json({ error: 'Empleado no encontrado' });
     }
+    const minBloqueo = await verificarBloqueoPin(emp.rows[0].id);
+    if (minBloqueo) return res.status(429).json({ error: `Demasiados intentos con PIN incorrecto. Probá de nuevo en ${minBloqueo} minutos.` });
     const valido = await bcrypt.compare(String(pin), emp.rows[0].pin_hash);
+    await registrarIntentoPin(emp.rows[0].id, valido);
     if (!valido) {
       return res.status(401).json({ error: 'PIN incorrecto' });
     }
@@ -140,7 +144,8 @@ router.post('/validar-pin', async (req, res) => {
       );
       return res.json({
         valido: true,
-        turno_activo: { ...t, duracion_minutos: duracionMin, total_egresos: parseFloat(egresos.rows[0].total) }
+        turno_activo: { ...t, sesion_token_hash: undefined, duracion_minutos: duracionMin, total_egresos: parseFloat(egresos.rows[0].total) },
+        sesion_token: await crearSesionTurno(t.id)
       });
     }
 
@@ -166,7 +171,10 @@ router.post('/apertura', async (req, res) => {
       [negocio_id, nombre_empleado]
     );
     if (emp.rows.length === 0) return res.status(401).json({ error: 'Empleado no encontrado' });
+    const minBloqueo = await verificarBloqueoPin(emp.rows[0].id);
+    if (minBloqueo) return res.status(429).json({ error: `Demasiados intentos con PIN incorrecto. Probá de nuevo en ${minBloqueo} minutos.` });
     const valido = await bcrypt.compare(String(pin), emp.rows[0].pin_hash);
+    await registrarIntentoPin(emp.rows[0].id, valido);
     if (!valido) return res.status(401).json({ error: 'PIN incorrecto' });
 
     // Verificar que no haya turno activo
@@ -205,6 +213,7 @@ router.post('/apertura', async (req, res) => {
 
     res.json({
       turno: result.rows[0],
+      sesion_token: await crearSesionTurno(result.rows[0].id),
       tipo_turno: tipoTurno,
       conteo_aleatorio_hora: conteoHora
     });
@@ -216,9 +225,9 @@ router.post('/apertura', async (req, res) => {
 // ─── Estado del turno activo ─────────────────────────────────────────────────
 
 // GET /api/caja/turno/:turno_id
-router.get('/turno/:turno_id', async (req, res) => {
+router.get('/turno/:turno_id', authTurno, async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM turnos_caja WHERE id=$1', [req.params.turno_id]);
+    const result = await pool.query('SELECT * FROM turnos_caja WHERE id=$1', [req.turno.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Turno no encontrado' });
 
     const t = result.rows[0];
@@ -251,9 +260,9 @@ router.get('/turno/:turno_id', async (req, res) => {
 // ─── Conteo pendiente (I3) ───────────────────────────────────────────────────
 
 // GET /api/caja/conteo-pendiente/:turno_id
-router.get('/conteo-pendiente/:turno_id', async (req, res) => {
+router.get('/conteo-pendiente/:turno_id', authTurno, async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM turnos_caja WHERE id=$1', [req.params.turno_id]);
+    const result = await pool.query('SELECT * FROM turnos_caja WHERE id=$1', [req.turno.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Turno no encontrado' });
 
     const t = result.rows[0];
@@ -309,9 +318,10 @@ router.get('/conteo-pendiente/:turno_id', async (req, res) => {
 // ─── Registro de conteo (I3) ─────────────────────────────────────────────────
 
 // POST /api/caja/conteo
-router.post('/conteo', async (req, res) => {
+router.post('/conteo', authTurno, async (req, res) => {
   try {
-    const { turno_id, monto_declarado, numero_conteo } = req.body;
+    const { monto_declarado, numero_conteo } = req.body;
+    const turno_id = req.turno.id;
     if (!turno_id || monto_declarado === undefined) {
       return res.status(400).json({ error: 'turno_id y monto_declarado requeridos' });
     }
@@ -355,9 +365,10 @@ router.post('/conteo', async (req, res) => {
 // ─── Registro de egresos ─────────────────────────────────────────────────────
 
 // POST /api/caja/egreso
-router.post('/egreso', async (req, res) => {
+router.post('/egreso', authTurno, async (req, res) => {
   try {
-    const { turno_id, monto, motivo } = req.body;
+    const { monto, motivo } = req.body;
+    const turno_id = req.turno.id;
     if (!turno_id || !monto || !motivo) {
       return res.status(400).json({ error: 'turno_id, monto y motivo requeridos' });
     }
@@ -382,9 +393,10 @@ router.post('/egreso', async (req, res) => {
 // ─── Cierre de turno ─────────────────────────────────────────────────────────
 
 // POST /api/caja/cierre
-router.post('/cierre', async (req, res) => {
+router.post('/cierre', authTurno, async (req, res) => {
   try {
-    const { turno_id, caja_cierre } = req.body;
+    const { caja_cierre } = req.body;
+    const turno_id = req.turno.id;
     if (!turno_id || caja_cierre === undefined) {
       return res.status(400).json({ error: 'turno_id y caja_cierre requeridos' });
     }
