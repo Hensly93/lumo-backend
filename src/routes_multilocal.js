@@ -7,6 +7,7 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const pool = require('./db');
+const { negocioPorCodigo, obtenerOCrearCodigo, asignarCodigoNuevo, formatearCodigo } = require('./codigo_negocio');
 const { auth } = require('./authMiddleware');
 const { geocodificarDireccion } = require('./geocoding');
 
@@ -162,6 +163,20 @@ router.get('/red', auth, async (req, res) => {
 // ─── GET /api/multilocal/red-vivo ────────────────────────────────────────────
 // Dashboard en vivo: datos del día actual + turnos activos con efectivo esperado
 // GET /en-vivo — Tu Negocio en Vivo: ventas de hoy vs. lo esperado a esta hora, por local
+// GET /codigo-acceso — código del Modo empleado (se crea la primera vez)
+router.get('/codigo-acceso', auth, async (req, res) => {
+  try { res.json({ codigo: formatearCodigo(await obtenerOCrearCodigo(req.user.negocio_id)) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /codigo-acceso/regenerar — solo el dueño
+router.post('/codigo-acceso/regenerar', auth, async (req, res) => {
+  try {
+    if (req.user.rol && req.user.rol !== 'owner') return res.status(403).json({ error: 'Solo el dueño puede cambiar el código' });
+    res.json({ codigo: formatearCodigo(await asignarCodigoNuevo(req.user.negocio_id)) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 router.get('/en-vivo', auth, async (req, res) => {
   try {
     const { negocioEnVivo } = require('./en_vivo');
@@ -420,11 +435,13 @@ router.delete('/sucursal/:id', auth, async (req, res) => {
 // ─── GET /api/multilocal/sucursales-publicas/:negocio_id ─────────────────────
 // Sin auth — usada por la vista de empleado para listar locales al abrir turno
 router.get('/sucursales-publicas/:negocio_id', async (req, res) => {
+  const negocioCod = await negocioPorCodigo(req.params.negocio_id);
+  if (!negocioCod) return res.status(404).json({ error: 'Código de negocio incorrecto' });
   try {
     const result = await pool.query(
       `SELECT id, nombre, direccion FROM mis_sucursales
        WHERE negocio_id=$1 AND activo=true ORDER BY nombre ASC`,
-      [req.params.negocio_id]
+      [negocioCod]
     );
     res.json(result.rows);
   } catch(e) {

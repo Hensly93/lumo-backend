@@ -10,6 +10,7 @@ async function turnoDelNegocio(turnoId, negocioId) {
 }
 const bcrypt = require('bcryptjs');
 const pool = require('./db');
+const { negocioPorCodigo, obtenerOCrearCodigo, asignarCodigoNuevo, formatearCodigo } = require('./codigo_negocio');
 const { authTurno, crearSesionTurno, verificarBloqueoPin, registrarIntentoPin } = require('./sesion_empleado');
 const { analizarCruceTurno, detectarGoteo, resumenPatronesNegocio } = require('./cruce_variables');
 const { analizarTurnoConContexto, rankingEmpleadosTurno, contextTurnoActivo, detectarCambioComportamiento } = require('./zscore_contextual');
@@ -52,6 +53,8 @@ router.get('/empleados', auth, async (req, res) => {
 
 // GET /api/caja/empleados/:negocio_id?sucursal_id=X — público, para login de empleados
 router.get('/empleados/:negocio_id', async (req, res) => {
+  const negocioCod = await negocioPorCodigo(req.params.negocio_id);
+  if (!negocioCod) return res.status(404).json({ error: 'Código de negocio incorrecto' });
   try {
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
     const result = await pool.query(
@@ -59,7 +62,7 @@ router.get('/empleados/:negocio_id', async (req, res) => {
        WHERE negocio_id=$1 AND activo=true
          AND ($2::integer IS NULL OR sucursal_id = $2)
        ORDER BY nombre`,
-      [req.params.negocio_id, sucursalId]
+      [negocioCod, sucursalId]
     );
     res.json(result.rows);
   } catch (e) {
@@ -107,7 +110,8 @@ router.delete('/empleados/:id', auth, async (req, res) => {
 // POST /api/caja/validar-pin
 router.post('/validar-pin', async (req, res) => {
   try {
-    const { negocio_id, nombre_empleado, pin } = req.body;
+    const { nombre_empleado, pin } = req.body;
+    const negocio_id = await negocioPorCodigo(req.body.negocio_id);
     if (!negocio_id || !nombre_empleado || !pin) {
       return res.status(400).json({ error: 'negocio_id, nombre_empleado y pin requeridos' });
     }
@@ -160,7 +164,8 @@ router.post('/validar-pin', async (req, res) => {
 // POST /api/caja/apertura
 router.post('/apertura', async (req, res) => {
   try {
-    const { negocio_id, nombre_empleado, pin, caja_apertura, sucursal_id } = req.body;
+    const { nombre_empleado, pin, caja_apertura, sucursal_id } = req.body;
+    const negocio_id = await negocioPorCodigo(req.body.negocio_id);
     if (!negocio_id || !nombre_empleado || !pin || caja_apertura === undefined) {
       return res.status(400).json({ error: 'negocio_id, nombre_empleado, pin y caja_apertura requeridos' });
     }
@@ -199,6 +204,10 @@ router.post('/apertura', async (req, res) => {
       return res.status(400).json({ error: 'No se encontró el dueño de este negocio' });
     }
     const usuarioIdReal = owner.rows[0].usuario_id;
+    if (sucursal_id) {
+      const sv = await pool.query('SELECT 1 FROM mis_sucursales WHERE id=$1 AND negocio_id=$2', [sucursal_id, negocio_id]);
+      if (!sv.rowCount) return res.status(400).json({ error: 'Local inválido para este negocio' });
+    }
 
     const result = await pool.query(
       `INSERT INTO turnos_caja(usuario_id, nombre_empleado, tipo_turno, caja_apertura, hora_apertura, conteo_aleatorio_hora, sucursal_id, negocio_id)
