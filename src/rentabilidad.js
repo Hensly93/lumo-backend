@@ -140,6 +140,8 @@ async function calcularRentabilidad(negocioId, sucursalId = null, opciones = {},
     db.query('SELECT modo, base, valor::float AS valor FROM impuestos_declarados WHERE negocio_id = $1', [negocioId]),
     sucursalesDelNegocio(db, negocioId),
   ]);
+  let ipcRows = [];
+  try { ipcRows = (await db.query(`SELECT to_char(mes,'YYYY-MM') AS mes, indice::float AS indice FROM ipc_mensual ORDER BY mes`)).rows; } catch { /* sin IPC */ }
   const imp = iRes.rows[0] || { modo: 'ninguno', base: 'ventas', valor: 0 };
 
   // Participación del local en las ventas del mes (para repartir gastos generales e impuesto fijo)
@@ -159,13 +161,17 @@ async function calcularRentabilidad(negocioId, sucursalId = null, opciones = {},
     const gm = gRes.rows.filter(g => g.mes === mes);
     const cargados = gm.length > 0;
     const porCat = {};
+    const porCatMes = {};   // monto del mes completo (sin proporcional): para comparar mes contra mes
     for (const g of gm) {
       let peso;
       if (sucursalId == null) peso = 1;
       else if (g.sucursal_id === sucursalId) peso = 1;
       else if (g.sucursal_id == null) peso = part;
       else peso = 0;
-      if (peso) porCat[g.categoria] = (porCat[g.categoria] || 0) + g.monto * peso * factor;
+      if (peso) {
+        porCat[g.categoria] = (porCat[g.categoria] || 0) + g.monto * peso * factor;
+        porCatMes[g.categoria] = (porCatMes[g.categoria] || 0) + g.monto * peso;
+      }
     }
     const egresos = eRes.rows.filter(e => e.mes === mes && (sucursalId == null || e.sucursal_id === sucursalId)).reduce((s, e) => s + e.total, 0);
     const gastos = Object.values(porCat).reduce((s, x) => s + x, 0);
@@ -179,6 +185,7 @@ async function calcularRentabilidad(negocioId, sucursalId = null, opciones = {},
       gastos: cargados ? r0(gastos) : null,
       egresos_caja: r0(egresos),
       por_categoria: Object.fromEntries(Object.entries(porCat).map(([k, v]) => [k, r0(v)])),
+      por_categoria_mes: Object.fromEntries(Object.entries(porCatMes).map(([k, v]) => [k, r0(v)])),
       ganancia_operativa: r0(ganancia),
       margen: ganancia != null && ventas > 0 ? Math.round((ganancia / ventas) * 1000) / 10 : null,
       impuestos_declarados: r0(impuestos),
@@ -202,6 +209,7 @@ async function calcularRentabilidad(negocioId, sucursalId = null, opciones = {},
       equilibrio = {
         meses_usados: base.map(f => f.mes),
         gastos_fijos_mes: r0(fijos),
+        gastos_fijos_mes_sin_caja: r0(fijos - base.reduce((s, f) => s + f.egresos_caja, 0) / base.length),
         costo_variable_pct: Math.round(ratioVar * 1000) / 10,
         ventas_necesarias_mes: r0(mes),
         ventas_necesarias_dia: r0(mes / diasMes),
@@ -225,6 +233,8 @@ async function calcularRentabilidad(negocioId, sucursalId = null, opciones = {},
     ...(egresosTot ? [{ categoria: 'egresos_caja', label: 'Gastos de caja (registrados en turnos)', total: r0(egresosTot) }] : []),
   ].sort((a, b) => b.total - a.total).map(x => ({ ...x, pct: totalGastos ? Math.round((x.total / totalGastos) * 1000) / 10 : 0 }));
 
+  const recomendaciones = generarRecomendaciones({ filas, equilibrio, ipcRows, ahora, fracActual });
+
   return {
     sucursal_id: sucursalId,
     ahora: ahora.toISOString().slice(0, 16).replace('T', ' '),
@@ -236,7 +246,168 @@ async function calcularRentabilidad(negocioId, sucursalId = null, opciones = {},
     en_que_se_va: enQueSeVa,
     impuestos: imp,
     hay_gastos: gRes.rows.length > 0,
+    recomendaciones,
   };
+}
+
+
+// ─── Recomendaciones: qué hacer para ganar más (sin fotos de facturas, con lo cargado) ───
+// Cada una: { id, tipo: 'alerta'|'atencion'|'positiva', titulo, detalle, accion, impacto_pesos }
+const fmtP = n => '$' + Math.round(Math.abs(n)).toLocaleString('es-AR');
+const fmtPct = n => `${n > 0 ? '+' : ''}${(Math.round(n * 10) / 10).toLocaleString('es-AR')}%`;
+const NOMBRE_MES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+const nombreMes = m => NOMBRE_MES[Number(m.slice(5, 7)) - 1];
+
+function inflacionDelMes(ipcRows, mes) {
+  // Variación mensual del IPC para "mes"; si todavía no se publicó, la última publicada
+  const i = ipcRows.findIndex(r => r.mes === mes);
+  const k = i > 0 ? i : ipcRows.length - 1;
+  if (k < 1) return null;
+  return { pct: (ipcRows[k].indice / ipcRows[k - 1].indice - 1) * 100, mes: ipcRows[k].mes, estimada: i < 1 };
+}
+
+const CONSEJO = {
+  mercaderia: 'Si tus precios de venta no subieron igual, estás perdiendo margen en cada venta. Revisá los precios de lo que más vendés y pedí otra cotización a otro proveedor.',
+  servicios: 'Mirá la boleta: si subió el consumo (kWh o m³) y no solo la tarifa, revisá heladeras, freezers y equipos que queden prendidos.',
+  alquiler: 'Si es un ajuste del contrato, tenelo en cuenta en tus precios: es un costo fijo que pagás vendas o no.',
+  sueldos: 'Revisá cuánta gente tenés por turno contra lo que se vende en cada hora: en las horas flojas puede sobrar personal.',
+  comisiones: 'Las comisiones crecen con los cobros con tarjeta y QR. Evaluá un pequeño descuento por efectivo o transferencia.',
+  mantenimiento: 'Si se repite mes a mes, puede convenir reemplazar el equipo en vez de seguir arreglándolo.',
+  marketing: 'Fijate si este gasto trajo más ventas en Períodos; si no, ajustalo.',
+  otros: 'Revisá qué entró en "Otros": si es un gasto que se repite, conviene darle su categoría.',
+};
+
+function generarRecomendaciones({ filas, equilibrio, ipcRows, ahora, fracActual }) {
+  const recs = [];
+  const conGastos = filas.filter(f => f.gastos_cargados);
+  const label = id => (CATEGORIAS.find(c => c.id === id) || { label: id }).label;
+
+  // 1) Cada categoría: último mes cargado contra el anterior, comparado con la inflación
+  if (conGastos.length >= 2) {
+    const cur = conGastos[conGastos.length - 1], prev = conGastos[conGastos.length - 2];
+    const infl = inflacionDelMes(ipcRows, cur.mes);
+    const inflPct = infl ? infl.pct : 0;
+    const ventasRef = (filas.filter(f => !f.en_curso && f.ventas > 0).slice(-1)[0] || cur).ventas || 0;
+    for (const [cat, monto] of Object.entries(cur.por_categoria_mes)) {
+      const antes = prev.por_categoria_mes[cat];
+      if (!antes || !monto) continue;
+      const varPct = (monto / antes - 1) * 100;
+      const exceso = monto - antes * (1 + inflPct / 100);
+      if (varPct - inflPct >= 5 && exceso >= Math.max(5000, ventasRef * 0.003)) {
+        recs.push({
+          id: `suba_${cat}_${cur.mes}`, tipo: varPct - inflPct >= 15 ? 'alerta' : 'atencion',
+          titulo: `${label(cat)} subió ${fmtPct(varPct)} en ${nombreMes(cur.mes)}`,
+          detalle: `Pasó de ${fmtP(antes)} a ${fmtP(monto)}.` + (infl ? ` La inflación ${infl.estimada ? 'del último mes publicado' : 'del mes'} fue ${fmtPct(inflPct)}: son ${fmtP(exceso)} por encima de la inflación.` : ''),
+          accion: CONSEJO[cat] || CONSEJO.otros,
+          impacto_pesos: Math.round(exceso),
+        });
+      }
+    }
+  }
+
+  // 2) Costo variable: cuánto de cada $100 vendidos se va en mercadería y comisiones (meses cerrados)
+  const cerrados = filas.filter(f => !f.en_curso && f.gastos_cargados && f.ventas > 0);
+  if (cerrados.length >= 2) {
+    const ratio = f => ((f.por_categoria.mercaderia || 0) + (f.por_categoria.comisiones || 0)) / f.ventas;
+    const ult = cerrados[cerrados.length - 1];
+    const previos = cerrados.slice(-4, -1);
+    const antes = previos.reduce((s, f) => s + ratio(f), 0) / previos.length;
+    const ahoraR = ratio(ult);
+    if (ahoraR - antes >= 0.03 && antes > 0) {
+      const impacto = (ahoraR - antes) * ult.ventas;
+      recs.push({
+        id: `margen_${ult.mes}`, tipo: 'alerta',
+        titulo: `Tus precios quedaron atrás de tus costos`,
+        detalle: `En ${nombreMes(ult.mes)}, de cada $100 que vendiste se fueron $${Math.round(ahoraR * 100)} en mercadería y comisiones (antes, $${Math.round(antes * 100)}). Son ${fmtP(impacto)} menos de ganancia en el mes.`,
+        accion: 'Actualizá los precios de los productos que más vendés. Cuando cargues las facturas de tus proveedores, LumoBi te va a decir producto por producto cuál quedó atrasado.',
+        impacto_pesos: Math.round(impacto),
+      });
+    }
+  }
+
+  // 3) Ventas reales del último mes cerrado contra el anterior
+  const conVentas = filas.filter(f => !f.en_curso && f.ventas > 0);
+  if (conVentas.length >= 2) {
+    const a = conVentas[conVentas.length - 1], b = conVentas[conVentas.length - 2];
+    const infl = inflacionDelMes(ipcRows, a.mes);
+    if (infl && b.ventas > 0) {
+      const nominal = (a.ventas / b.ventas - 1) * 100;
+      const real = ((1 + nominal / 100) / (1 + infl.pct / 100) - 1) * 100;
+      if (real <= -3) {
+        recs.push({
+          id: `ventas_reales_${a.mes}`, tipo: 'atencion',
+          titulo: `En ${nombreMes(a.mes)} vendiste ${(Math.round(-real * 10) / 10).toLocaleString('es-AR')}% menos en términos reales`,
+          detalle: `Tus ventas cambiaron ${fmtPct(nominal)} y la inflación fue ${fmtPct(infl.pct)}: en plata de hoy, vendiste menos.`,
+          accion: 'Mirá en Períodos qué días, horarios o locales cayeron, y si subiste precios por encima de lo que acepta tu clientela.',
+          impacto_pesos: Math.round(b.ventas * (1 + infl.pct / 100) - a.ventas),
+        });
+      }
+    }
+  }
+
+  // 4) Mes en curso contra el punto de equilibrio
+  const act = filas[filas.length - 1];
+  if (equilibrio && fracActual > 0.1) {
+    const diasMes = new Date(Date.UTC(ahora.getUTCFullYear(), ahora.getUTCMonth() + 1, 0)).getUTCDate();
+    const diasRestantes = Math.max(1, Math.ceil(diasMes * (1 - fracActual)));
+    const falta = equilibrio.ventas_necesarias_mes - act.ventas;
+    const promedio = act.ventas / Math.max(1, diasMes * fracActual);
+    if (equilibrio.mes_en_curso.diferencia < 0) {
+      recs.push({
+        id: `equilibrio_${act.mes}`, tipo: 'alerta',
+        titulo: `Vas ${fmtP(equilibrio.mes_en_curso.diferencia)} abajo de lo necesario para cubrir el mes`,
+        detalle: `Para cubrir tus gastos de ${nombreMes(act.mes)} te faltan ${fmtP(falta)}: unos ${fmtP(falta / diasRestantes)} por día en los ${diasRestantes} días que quedan (hoy promediás ${fmtP(promedio)} por día).`,
+        accion: 'Mirá en Predicciones qué días vienen mejor y reforzá esos; evitá gastos que se puedan pasar al mes que viene.',
+        impacto_pesos: Math.round(-equilibrio.mes_en_curso.diferencia),
+      });
+    } else {
+      recs.push({
+        id: `equilibrio_ok_${act.mes}`, tipo: 'positiva',
+        titulo: falta <= 0 ? `Ya cubriste todos tus gastos de ${nombreMes(act.mes)}` : `Vas ${fmtP(equilibrio.mes_en_curso.diferencia)} arriba de lo necesario`,
+        detalle: falta <= 0
+          ? `Desde acá, lo que vendas (menos el costo de la mercadería) es ganancia.`
+          : `A este ritmo cubrís el mes. Te faltan ${fmtP(falta)} para el punto de equilibrio.`,
+        accion: 'Buen momento para guardar un colchón o adelantar una compra a buen precio.',
+        impacto_pesos: 0,
+      });
+    }
+  }
+
+  // 5) Cuánto se movió el punto de equilibrio con los gastos del último mes cargado
+  if (equilibrio && conGastos.length) {
+    const ult = conGastos[conGastos.length - 1];
+    const fijosNuevos = Object.entries(ult.por_categoria_mes).filter(([k]) => !VARIABLES.has(k)).reduce((s, [, v]) => s + v, 0);
+    const ratioVar = equilibrio.costo_variable_pct / 100;
+    const egresosProm = equilibrio.gastos_fijos_mes - (equilibrio.gastos_fijos_mes_sin_caja ?? equilibrio.gastos_fijos_mes);
+    const nuevoMes = (fijosNuevos + egresosProm) / (1 - ratioVar);
+    const cambio = nuevoMes / equilibrio.ventas_necesarias_mes - 1;
+    if (cambio >= 0.03) {
+      const diasMes = 30;
+      recs.push({
+        id: `equilibrio_sube_${ult.mes}`, tipo: 'atencion',
+        titulo: `Con los gastos de ${nombreMes(ult.mes)}, tu punto de equilibrio sube ${fmtPct(cambio * 100)}`,
+        detalle: `Ahora necesitás vender unos ${fmtP(nuevoMes)} por mes para cubrir todo: ${fmtP((nuevoMes - equilibrio.ventas_necesarias_mes) / diasMes)} más por día que antes.`,
+        accion: 'Si estos gastos van a seguir, ajustá precios ahora y no a fin de mes.',
+        impacto_pesos: Math.round(nuevoMes - equilibrio.ventas_necesarias_mes),
+      });
+    }
+  }
+
+  // 6) Último mes cerrado con pérdida
+  const ultCerrado = [...filas].reverse().find(f => !f.en_curso && f.gastos_cargados);
+  if (ultCerrado && ultCerrado.ganancia_operativa < 0) {
+    const top = Object.entries(ultCerrado.por_categoria).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k, v]) => `${label(k).split(' (')[0].toLowerCase()} (${fmtP(v)})`);
+    recs.push({
+      id: `perdida_${ultCerrado.mes}`, tipo: 'alerta',
+      titulo: `En ${nombreMes(ultCerrado.mes)} perdiste ${fmtP(ultCerrado.ganancia_operativa)}`,
+      detalle: `Vendiste ${fmtP(ultCerrado.ventas)} y gastaste más. Lo que más pesa: ${top.join(' y ')}.`,
+      accion: 'Empezá por el gasto más grande: es donde un 10% menos se nota de verdad.',
+      impacto_pesos: Math.round(-ultCerrado.ganancia_operativa),
+    });
+  }
+
+  const orden = { alerta: 0, atencion: 1, positiva: 2 };
+  return recs.sort((a, b) => orden[a.tipo] - orden[b.tipo] || b.impacto_pesos - a.impacto_pesos).slice(0, 6);
 }
 
 module.exports = { CATEGORIAS, obtenerGastos, guardarGastos, guardarImpuestos, calcularRentabilidad };
