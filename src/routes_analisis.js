@@ -370,6 +370,30 @@ router.get('/periodos', auth, async (req, res) => {
   }
 });
 
+// ─── Rentabilidad: gastos mensuales → ganancia operativa antes de impuestos ───
+const soloDueno = (req, res) => { if (req.user.rol && req.user.rol !== 'owner') { res.status(403).json({ error: 'Solo el dueño puede cargar gastos' }); return false; } return true; };
+const errorRentab = (res, e) => { if (!e.status) console.error('[rentabilidad]', e); res.status(e.status || 500).json({ error: e.status ? e.message : 'No se pudo procesar' }); };
+router.get('/rentabilidad', auth, async (req, res) => {
+  try {
+    const suc = parseInt(req.query.sucursal_id, 10);
+    res.json(await require('./rentabilidad').calcularRentabilidad(req.user.negocio_id, Number.isFinite(suc) ? suc : null));
+  } catch (e) { errorRentab(res, e); }
+});
+router.get('/gastos', auth, async (req, res) => {
+  try { res.json(await require('./rentabilidad').obtenerGastos(req.user.negocio_id, String(req.query.mes || ''))); }
+  catch (e) { errorRentab(res, e); }
+});
+router.post('/gastos', auth, async (req, res) => {
+  if (!soloDueno(req, res)) return;
+  try { res.json(await require('./rentabilidad').guardarGastos(req.user.negocio_id, String(req.body?.mes || ''), req.body?.items)); }
+  catch (e) { errorRentab(res, e); }
+});
+router.post('/impuestos', auth, async (req, res) => {
+  if (!soloDueno(req, res)) return;
+  try { res.json(await require('./rentabilidad').guardarImpuestos(req.user.negocio_id, req.body || {})); }
+  catch (e) { errorRentab(res, e); }
+});
+
 router.get('/alertas', auth, async (req, res) => {
   try {
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
