@@ -295,9 +295,17 @@ router.get('/conteo-pendiente/:turno_id', authTurno, async (req, res) => {
       const min = Math.floor((ahora - new Date(t.conteo_aleatorio_hora)) / 60000);
       if (min >= 15) {
         await pool.query('UPDATE turnos_caja SET conteo_aleatorio_omitido=true WHERE id=$1', [t.id]);
+
+        // Obtener info de sucursal para la notificación
+        const sucParte = t.sucursal_id
+          ? await pool.query('SELECT nombre FROM mis_sucursales WHERE id=$1', [t.sucursal_id])
+              .then(r => r.rows[0]?.nombre ? ` · Local ${r.rows[0].nombre}` : ` · Local #${t.sucursal_id}`)
+              .catch(() => ` · Local #${t.sucursal_id}`)
+          : '';
+
         notificarUsuario(t.usuario_id, {
-          title: 'Conteo de caja no respondido',
-          body: `${t.nombre_empleado} no respondió el conteo aleatorio a tiempo`,
+          title: 'Conteo de caja sin responder',
+          body: `${t.nombre_empleado} · turno ${t.tipo_turno}${sucParte} — Pasaron 15 minutos sin registrar el conteo`,
           url: '/dashboard',
         }, pool, 'conteos_perdidos').catch(() => {});
       }
@@ -310,9 +318,17 @@ router.get('/conteo-pendiente/:turno_id', authTurno, async (req, res) => {
       const min = Math.floor((ahora - new Date(t.conteo_aleatorio2_hora)) / 60000);
       if (min >= 15) {
         await pool.query('UPDATE turnos_caja SET conteo_aleatorio2_omitido=true WHERE id=$1', [t.id]);
+
+        // Obtener info de sucursal
+        const sucParte = t.sucursal_id
+          ? await pool.query('SELECT nombre FROM mis_sucursales WHERE id=$1', [t.sucursal_id])
+              .then(r => r.rows[0]?.nombre ? ` · Local ${r.rows[0].nombre}` : ` · Local #${t.sucursal_id}`)
+              .catch(() => ` · Local #${t.sucursal_id}`)
+          : '';
+
         notificarUsuario(t.usuario_id, {
-          title: 'Conteo de caja no respondido',
-          body: `${t.nombre_empleado} no respondió el segundo conteo aleatorio a tiempo`,
+          title: 'Conteo de caja sin responder',
+          body: `${t.nombre_empleado} · turno ${t.tipo_turno}${sucParte} — Pasaron 15 minutos sin registrar el segundo conteo`,
           url: '/dashboard',
         }, pool, 'conteos_perdidos').catch(() => {});
       }
@@ -349,13 +365,21 @@ router.post('/conteo', authTurno, async (req, res) => {
       try {
         const resultado = await analizarTramo1EnVivo(turno_id);
         if (resultado.disponible && resultado.señales && resultado.señales.length > 0) {
-          const turno = await pool.query('SELECT usuario_id, nombre_empleado, tipo_turno FROM turnos_caja WHERE id=$1', [turno_id]);
+          const turno = await pool.query('SELECT usuario_id, nombre_empleado, tipo_turno, sucursal_id FROM turnos_caja WHERE id=$1', [turno_id]);
           if (turno.rows.length > 0) {
             const t = turno.rows[0];
+
+            // Obtener info de sucursal
+            const sucParte = t.sucursal_id
+              ? await pool.query('SELECT nombre FROM mis_sucursales WHERE id=$1', [t.sucursal_id])
+                  .then(r => r.rows[0]?.nombre ? ` · Local ${r.rows[0].nombre}` : ` · Local #${t.sucursal_id}`)
+                  .catch(() => ` · Local #${t.sucursal_id}`)
+              : '';
+
             const tipoAlerta = resultado.tramo1.grado === 'critico' ? 'alertas_criticas' : 'alertas_medias';
             await notificarUsuario(t.usuario_id, {
-              title: `Movimiento anómalo en caja (mitad del turno)`,
-              body: `${t.nombre_empleado} · ${t.tipo_turno} · Tramo 1: ${resultado.tramo1.grado} — ¿Hubo un gasto inesperado?`,
+              title: 'Diferencia inusual en mitad del turno',
+              body: `${t.nombre_empleado} · turno ${t.tipo_turno}${sucParte} — La caja mostró un movimiento por fuera del patrón habitual. ¿Hubo un gasto no registrado?`,
               url: `/dashboard?turno_id=${turno_id}&accion=gasto`,
             }, pool, tipoAlerta);
           }
@@ -460,26 +484,30 @@ router.post('/cierre', authTurno, async (req, res) => {
     // Fix 1+2+3: ERM + push al dueño (fire-and-forget, no bloquea la respuesta)
     setImmediate(async () => {
       try {
-        const erm = await calcularRiesgoEmpleado(t.negocio_id, t.nombre_empleado).catch(() => null);
-        const ermNivel = erm?.nivel ?? 'sin_datos';
+        // Obtener info de sucursal
+        const sucParte = t.sucursal_id
+          ? await pool.query('SELECT nombre FROM mis_sucursales WHERE id=$1', [t.sucursal_id])
+              .then(r => r.rows[0]?.nombre ? ` · Local ${r.rows[0].nombre}` : ` · Local #${t.sucursal_id}`)
+              .catch(() => ` · Local #${t.sucursal_id}`)
+          : '';
 
         if (hayBrecha) {
-          // Fix 2+3: brecha detectada → push preguntando si fue gasto inesperado
-          // Determinar tipo de alerta según severidad
+          // Brecha detectada → push preguntando si fue gasto no registrado
           const tipoAlerta = estado === 'critico' ? 'alertas_criticas' : 'alertas_medias';
+          const direccion = brecha > 0 ? 'de menos' : 'de más';
 
           await notificarUsuario(t.usuario_id, {
-            title: `Brecha de $${Math.round(brechaAbs).toLocaleString('es-AR')} en el cierre`,
-            body: `${t.nombre_empleado} · ${t.tipo_turno} · ERM: ${ermNivel} — ¿Fue un gasto inesperado?`,
+            title: `Diferencia de $${Math.round(brechaAbs).toLocaleString('es-AR')} en el cierre`,
+            body: `${t.nombre_empleado} · turno ${t.tipo_turno}${sucParte} — La caja cerró con $${Math.round(brechaAbs).toLocaleString('es-AR')} ${direccion}. ¿Hubo un gasto no registrado?`,
             url: `/dashboard?turno_id=${turno_id}&accion=gasto`,
           }, pool, tipoAlerta);
         } else {
-          // Fix 2: turno limpio → push positivo
+          // Turno limpio → push positivo (CON FILTRO cierres_limpios)
           await notificarUsuario(t.usuario_id, {
-            title: 'Turno cerrado sin novedades',
-            body: `${t.nombre_empleado} · ${t.tipo_turno} · Caja cuadrada`,
+            title: 'Turno cerrado sin diferencias',
+            body: `${t.nombre_empleado} · turno ${t.tipo_turno}${sucParte} — La caja cuadró perfectamente`,
             url: '/dashboard',
-          }, pool);
+          }, pool, 'cierres_limpios');
         }
       } catch (e) {
         console.error('[CIERRE ERM/PUSH]', e.message);

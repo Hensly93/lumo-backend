@@ -242,6 +242,7 @@ router.get('/notificaciones', auth, async (req, res) => {
       alertas_medias:    true,
       conteos_perdidos:  true,
       resumen_diario:    false,
+      cierres_limpios:   false,
     };
     res.json({ ...defaults, ...(r.rows[0]?.notificaciones_config || {}) });
   } catch (e) {
@@ -252,7 +253,7 @@ router.get('/notificaciones', auth, async (req, res) => {
 // ─── PATCH /api/usuario/notificaciones ───────────────────────────────────────
 router.patch('/notificaciones', auth, async (req, res) => {
   try {
-    const allowed = ['alertas_criticas', 'alertas_medias', 'conteos_perdidos', 'resumen_diario'];
+    const allowed = ['alertas_criticas', 'alertas_medias', 'conteos_perdidos', 'resumen_diario', 'cierres_limpios'];
     const patch = {};
     for (const key of allowed) {
       if (req.body[key] !== undefined) patch[key] = Boolean(req.body[key]);

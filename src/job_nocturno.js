@@ -298,9 +298,9 @@ async function snapshotsERM(db) {
           if (usuarioRes.rows.length > 0) {
             const usuario_id = usuarioRes.rows[0].usuario_id;
             await notificarUsuario(usuario_id, {
-              title: 'Alerta ERM',
-              body: 'Un empleado mostró un patrón de riesgo elevado. Tocá para ver el detalle.',
-              url: '/erm',
+              title: 'Patrón de riesgo detectado',
+              body: 'Un empleado mostró señales de riesgo elevado en los últimos turnos. Revisá el detalle en la pantalla de empleados.',
+              url: '/empleados',
             }, db).catch(() => {});
             notificacionesEnviadas++;
           }
@@ -379,7 +379,7 @@ async function snapshotsGoteo(db) {
         if (usuarioRes.rows.length > 0) {
           const usuario_id = usuarioRes.rows[0].usuario_id;
           await notificarUsuario(usuario_id, {
-            title: 'Patrón de goteo detectado',
+            title: 'Diferencias pequeñas y repetidas',
             body: resultado.mensaje,
             url: '/empleados',
           }, db).catch(() => {});

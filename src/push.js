@@ -31,6 +31,7 @@ async function notificarUsuario(usuarioId, payload, db, tipo = null) {
       alertas_medias: true,
       conteos_perdidos: true,
       resumen_diario: false,
+      cierres_limpios: false,
     };
 
     const enabled = config[tipo] ?? defaults[tipo];
