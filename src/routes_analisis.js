@@ -798,23 +798,3 @@ router.post('/erm/:empleado/feedback', auth, async (req, res) => {
 });
 
 module.exports = router;
-
-router.get('/debug/schema/:tabla', auth, async (req, res) => {
-  const result = await pool.query(
-    `SELECT column_name, data_type FROM information_schema.columns
-     WHERE table_name=$1 ORDER BY ordinal_position`,
-    [req.params.tabla]
-  );
-  res.json(result.rows);
-});
-
-router.get('/debug/datos-alertas', auth, async (req, res) => {
-  const result = await pool.query(
-    `SELECT id, tipo_alerta, contexto, datos, feedback_confirmada
-     FROM alertas_gestionadas
-     WHERE negocio_id=$1
-     ORDER BY created_at DESC LIMIT 10`,
-    [req.user.negocio_id]
-  );
-  res.json(result.rows);
-});
