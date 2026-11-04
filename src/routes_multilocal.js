@@ -239,7 +239,7 @@ router.get('/red-vivo', auth, async (req, res) => {
           const ventasDesdeApertura = await pool.query(
             `SELECT
                COALESCE(SUM(monto),0) as total,
-               COALESCE(SUM(CASE WHEN metodo_pago='mp' THEN monto ELSE 0 END),0) as total_mp
+               COALESCE(SUM(CASE WHEN LOWER(REPLACE(REPLACE(COALESCE(metodo_pago,''),' ',''),'_','')) IN ('mp','mercadopago','digital','debito','tarjetadebito','credito','tarjetacredito','tarjeta','transferencia','qr') THEN monto ELSE 0 END),0) as total_mp
              FROM transacciones
              WHERE negocio_id=$1 AND sucursal_id=$2 AND fecha >= $3`,
             [req.user.negocio_id, s.id, turno.hora_apertura]

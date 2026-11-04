@@ -55,12 +55,13 @@ async function analizarCruceTurno(turnoId) {
   const ventasRes = await pool.query(
     `SELECT
        COALESCE(SUM(monto),0) as total_ventas,
-       COALESCE(SUM(CASE WHEN metodo_pago='mp' OR metodo_pago='digital' THEN monto ELSE 0 END),0) as total_mp,
+       COALESCE(SUM(CASE WHEN LOWER(REPLACE(REPLACE(COALESCE(metodo_pago,''),' ',''),'_','')) IN ('mp','mercadopago','digital','debito','tarjetadebito','credito','tarjetacredito','tarjeta','transferencia','qr') THEN monto ELSE 0 END),0) as total_mp,
        COUNT(*) as cantidad_tx,
        COALESCE(AVG(monto),0) as ticket_promedio
      FROM transacciones
-     WHERE negocio_id=$1 AND fecha >= $2 AND fecha <= COALESCE($3, NOW())`,
-    [t.negocio_id, t.hora_apertura, t.hora_cierre]
+     WHERE negocio_id=$1 AND fecha >= $2 AND fecha <= COALESCE($3, NOW())
+     AND ($4::integer IS NULL OR sucursal_id IS NULL OR sucursal_id = $4)`,
+    [t.negocio_id, t.hora_apertura, t.hora_cierre, t.sucursal_id || null]
   );
   const v = ventasRes.rows[0];
   const totalVentas = parseFloat(v.total_ventas);
