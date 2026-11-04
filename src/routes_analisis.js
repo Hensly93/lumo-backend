@@ -668,6 +668,27 @@ router.get('/erm/:empleado', auth, async (req, res) => {
   }
 });
 
+// GET /api/erm/:empleado/turnos — ultimos turnos cerrados del empleado (evidencia del desglose, solo lectura)
+router.get('/erm/:empleado/turnos', auth, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT tc.id, tc.hora_apertura, tc.hora_cierre, tc.tipo_turno, tc.sucursal_id, ms.nombre AS sucursal,
+              tc.caja_apertura, tc.caja_esperada, tc.caja_cierre, tc.brecha,
+              tc.conteo_aleatorio_omitido, tc.conteo_aleatorio2_omitido, tc.gasto_inesperado
+       FROM turnos_caja tc
+       LEFT JOIN mis_sucursales ms ON ms.id = tc.sucursal_id
+       WHERE tc.negocio_id=$1 AND tc.nombre_empleado=$2 AND tc.estado='cerrado'
+         AND tc.hora_apertura >= NOW() - INTERVAL '30 days'
+       ORDER BY tc.hora_apertura DESC
+       LIMIT 20`,
+      [req.user.negocio_id, req.params.empleado]
+    );
+    res.json({ turnos: r.rows });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // POST /api/erm/:empleado/feedback — Registrar feedback sobre el ERM de un empleado
 router.post('/erm/:empleado/feedback', auth, async (req, res) => {
   try {
