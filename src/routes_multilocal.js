@@ -308,6 +308,22 @@ router.patch('/sucursal/:id/capacidad', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// PATCH /sucursal/:id/cajas — body { cajas: entero 1..100 }. Cuantas cajas tiene el local (define el precio del abono).
+router.patch('/sucursal/:id/cajas', auth, async (req, res) => {
+  try {
+    const n = Number(req.body && req.body.cajas);
+    if (!Number.isInteger(n) || n < 1 || n > 100) {
+      return res.status(400).json({ error: 'Las cajas tienen que ser un numero entero entre 1 y 100.' });
+    }
+    const r = await pool.query(
+      'UPDATE mis_sucursales SET cajas=$1 WHERE id=$2 AND negocio_id=$3 RETURNING id, nombre, cajas',
+      [n, req.params.id, req.user.negocio_id]
+    );
+    if (!r.rowCount) return res.status(404).json({ error: 'Local no encontrado' });
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 router.patch('/sucursal/:id', auth, async (req, res) => {
   try {
     const { nombre, calle, numero, localidad, provincia, provincia_id, localidad_id } = req.body;

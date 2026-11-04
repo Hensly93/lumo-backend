@@ -32,6 +32,14 @@ try {
 }
 
 try {
+  const planRoutes = require("./routes_plan");
+  app.use("/api/plan", planRoutes);
+  console.log("Plan OK");
+} catch(e) {
+  console.error("Plan ERROR:", e.message);
+}
+
+try {
   const negocioRoutes = require("./routes_negocio");
   app.use("/api/negocio", negocioRoutes);
   console.log("Negocio OK");
