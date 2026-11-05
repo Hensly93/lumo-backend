@@ -167,6 +167,9 @@ router.patch('/perfil', auth, async (req, res) => {
         return res.status(400).json({ error: `Tipo inválido. Opciones: ${TIPOS_VALIDOS.join(', ')}` });
       }
       await pool.query('UPDATE usuarios SET tipo_negocio=$1 WHERE id=$2', [tipo_negocio, req.user.id]);
+      if (req.user.negocio_id) {
+        await pool.query('UPDATE negocios SET tipo_negocio=$1, updated_at=NOW() WHERE id=$2', [tipo_negocio, req.user.negocio_id]);
+      }
     }
     if (onboarding_done !== undefined) {
       await pool.query('UPDATE usuarios SET onboarding_done=$1 WHERE id=$2', [!!onboarding_done, req.user.id]);
@@ -179,6 +182,9 @@ router.patch('/perfil', auth, async (req, res) => {
       if (zona !== undefined)      { sets.push(`zona=$${sets.length + 1}`);      vals.push(zona); }
       vals.push(req.user.id);
       await pool.query(`UPDATE usuarios SET ${sets.join(',')} WHERE id=$${vals.length}`, vals);
+      if (req.user.negocio_id) {
+        await pool.query(`UPDATE negocios SET ${sets.join(',')}, updated_at=NOW() WHERE id=$${vals.length}`, [...vals.slice(0, -1), req.user.negocio_id]);
+      }
     }
     res.json({ ok: true });
   } catch(e) {
