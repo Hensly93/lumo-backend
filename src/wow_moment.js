@@ -1,296 +1,234 @@
+// wow_moment.js (v2)
+// Patrones del negocio calculados SOLO con sus datos reales, en hora de Argentina.
+// Lee por negocio (no por usuario) y usa los ultimos 30 dias de datos que haya,
+// aunque el historial sea viejo. No usa estadisticas inventadas ni benchmarks escritos a mano.
 const pool = require('./db');
 
-/**
- * Calcula "wow moments" — patrones impactantes del negocio basados en últimos 30 días
- * Devuelve top 3 patrones ordenados por impacto en pesos
- */
+const TZ = 'America/Argentina/Buenos_Aires';
+const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const peso = (n) => '$' + Math.round(n).toLocaleString('es-AR');
+const pct = (n) => Math.round(n);
+
+function sumarDias(dia, n) {
+  const d = new Date(dia + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function diaSemana(dia) {
+  return new Date(dia + 'T12:00:00Z').getUTCDay();
+}
+function ddmm(dia) {
+  const p = dia.split('-');
+  return p[2] + '/' + p[1];
+}
+
+async function negocioDe(db, usuario_id) {
+  try {
+    const r = await db.query('SELECT negocio_id FROM negocio_usuarios WHERE usuario_id=$1 LIMIT 1', [usuario_id]);
+    if (r.rows[0] && r.rows[0].negocio_id) return r.rows[0].negocio_id;
+  } catch (e) { /* tabla o columna distinta: se prueba la otra via */ }
+  try {
+    const r = await db.query('SELECT id FROM negocios WHERE created_by=$1 ORDER BY id LIMIT 1', [usuario_id]);
+    if (r.rows[0]) return r.rows[0].id;
+  } catch (e) { /* sin negocio */ }
+  return null;
+}
+
 async function calculateWowMoment(usuario_id, db = pool) {
   try {
-    // Obtener tipo_negocio para benchmarks
-    const userRes = await db.query('SELECT tipo_negocio FROM usuarios WHERE id=$1', [usuario_id]);
-    const tipo_negocio = userRes.rows[0]?.tipo_negocio || 'otros';
+    const negocio_id = await negocioDe(db, usuario_id);
 
-    // Obtener transacciones últimos 30 días
     const txRes = await db.query(
-      `SELECT monto, metodo_pago, fecha, turno
-       FROM transacciones
-       WHERE usuario_id=$1 AND fecha >= NOW() - INTERVAL '30 days'
-       ORDER BY fecha ASC`,
-      [usuario_id]
+      `SELECT t.monto::float AS monto, t.metodo_pago,
+              to_char((t.fecha AT TIME ZONE 'UTC') AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS dia,
+              EXTRACT(HOUR FROM (t.fecha AT TIME ZONE 'UTC') AT TIME ZONE '${TZ}')::int AS hora
+         FROM transacciones t
+        WHERE (t.negocio_id = $1 OR (t.negocio_id IS NULL AND t.usuario_id = $2))
+          AND COALESCE(t.origin, 'real') IN ('real', 'importado')
+          AND t.monto > 0
+        ORDER BY t.fecha DESC
+        LIMIT 20000`,
+      [negocio_id, usuario_id]
     );
 
-    const transacciones = txRes.rows;
-    if (transacciones.length < 10) {
-      return { patrones: [], mensaje: 'Necesitás al menos 10 transacciones en los últimos 30 días para ver patrones.' };
+    const todas = txRes.rows;
+    if (todas.length === 0) {
+      return { patrones: [], mensaje: 'Todavía no hay ventas cargadas. Subí tus ventas o conectá Mercado Pago.' };
     }
 
+    const hasta = todas[0].dia;
+    const desde = sumarDias(hasta, -29);
+    const filas = todas.filter((r) => r.dia >= desde);
+
+    const totalPorDia = new Map();
+    filas.forEach((r) => totalPorDia.set(r.dia, (totalPorDia.get(r.dia) || 0) + r.monto));
+    const nDias = totalPorDia.size;
+
+    if (filas.length < 10 || nDias < 3) {
+      return {
+        patrones: [],
+        mensaje: 'Necesitamos al menos 10 ventas en 3 días distintos para encontrar patrones. Hoy hay ' + filas.length + ' ventas en ' + nDias + ' día(s).',
+        resumen: { ventas: filas.length, dias: nDias, desde: desde, hasta: hasta },
+      };
+    }
+
+    const totalGeneral = filas.reduce((a, r) => a + r.monto, 0);
+    const ventanaDias = Math.max(1, Math.round((new Date(hasta + 'T12:00:00Z') - new Date(desde + 'T12:00:00Z')) / 86400000) + 1);
+    const confianza = Math.min(90, 40 + nDias * 2);
+    const advertencia = 'Lectura preliminar con ' + nDias + ' días de datos. Con más historial, NICOLE la afina.';
     const patrones = [];
 
-    // ─── PATTERN A: Mejor/peor día de semana ───────────────────────────────────
-    const porDia = {};
-    transacciones.forEach(tx => {
-      const dia = new Date(tx.fecha).getDay(); // 0=Dom, 6=Sáb
-      if (!porDia[dia]) porDia[dia] = [];
-      porDia[dia].push(parseFloat(tx.monto));
+    // A. Dia de la semana: promedio vendido por dia (no ticket promedio)
+    const porDow = {};
+    totalPorDia.forEach((total, dia) => {
+      const d = diaSemana(dia);
+      (porDow[d] = porDow[d] || []).push(total);
     });
-
-    const diasConDatos = Object.keys(porDia).filter(d => porDia[d].length >= 3);
-    if (diasConDatos.length >= 2) {
-      const promedios = diasConDatos.map(d => {
-        const montos = porDia[d];
-        const promedio = montos.reduce((a, b) => a + b, 0) / montos.length;
-        return { dia: parseInt(d), promedio, count: montos.length };
-      });
-
-      promedios.sort((a, b) => b.promedio - a.promedio);
-      const mejor = promedios[0];
-      const peor = promedios[promedios.length - 1];
-      const diferencia = mejor.promedio - peor.promedio;
-      const pctDiff = ((diferencia / peor.promedio) * 100).toFixed(0);
-
-      const DIAS_NOMBRE = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-      const impacto_mensual = diferencia * 4; // ~4 veces al mes
-
-      patrones.push({
-        id: 'dia_semana',
-        icono: '📅',
-        titulo: `${DIAS_NOMBRE[mejor.dia]} vende ${pctDiff}% más que ${DIAS_NOMBRE[peor.dia]}`,
-        descripcion: `En promedio, ${DIAS_NOMBRE[mejor.dia]} genera $${Math.round(mejor.promedio).toLocaleString('es-AR')} mientras que ${DIAS_NOMBRE[peor.dia]} solo $${Math.round(peor.promedio).toLocaleString('es-AR')}. La diferencia por día es de $${Math.round(diferencia).toLocaleString('es-AR')}.`,
-        duele: `Perdés $${Math.round(impacto_mensual).toLocaleString('es-AR')} al mes en días flojos`,
-        recomendacion: `Reforzá el personal o hacé promo los ${DIAS_NOMBRE[peor.dia]} para equiparar ventas.`,
-        advertencia: 'Este es un análisis preliminar. NICOLE está estudiando el comportamiento de tu negocio. Con más datos, la precisión mejora.',
-        impacto_pesos: impacto_mensual,
-        confianza: Math.min(95, 50 + (diasConDatos.length * 8)),
-        detalle: {
-          mejor_dia: DIAS_NOMBRE[mejor.dia],
-          mejor_promedio: Math.round(mejor.promedio),
-          peor_dia: DIAS_NOMBRE[peor.dia],
-          peor_promedio: Math.round(peor.promedio),
-          diferencia_diaria: Math.round(diferencia),
-          transacciones_analizadas: transacciones.length,
-        },
-      });
+    const dows = Object.keys(porDow).filter((d) => porDow[d].length >= 2).map((d) => {
+      const v = porDow[d];
+      return { dia: Number(d), prom: v.reduce((a, b) => a + b, 0) / v.length, n: v.length };
+    });
+    if (dows.length >= 2) {
+      dows.sort((a, b) => b.prom - a.prom);
+      const mejor = dows[0];
+      const peor = dows[dows.length - 1];
+      const dif = mejor.prom - peor.prom;
+      const p = peor.prom > 0 ? (dif / peor.prom) * 100 : 0;
+      if (p >= 10) {
+        patrones.push({
+          id: 'dia_semana',
+          icono: '',
+          titulo: cap(DIAS[mejor.dia]) + ' es tu día más fuerte: vende ' + pct(p) + '% más que ' + DIAS[peor.dia],
+          descripcion: 'En promedio, un ' + DIAS[mejor.dia] + ' vendés ' + peso(mejor.prom) + ' (sobre ' + mejor.n + ' días) y un ' + DIAS[peor.dia] + ' ' + peso(peor.prom) + ' (sobre ' + peor.n + ' días).',
+          duele: 'Cada ' + DIAS[peor.dia] + ' vendés en promedio ' + peso(dif) + ' menos que cada ' + DIAS[mejor.dia] + '.',
+          recomendacion: 'Mirá qué pasa los ' + DIAS[peor.dia] + ': personal, horarios abiertos, stock o promociones. Confirmalo con más semanas antes de cambiar algo grande.',
+          advertencia: advertencia,
+          impacto_pesos: dif,
+          confianza: confianza,
+          detalle: { mejor_dia: DIAS[mejor.dia], mejor_promedio: Math.round(mejor.prom), peor_dia: DIAS[peor.dia], peor_promedio: Math.round(peor.prom), diferencia_diaria: Math.round(dif), ventas_analizadas: filas.length },
+        });
+      }
     }
 
-    // ─── PATTERN B: Mejor/peor turno ───────────────────────────────────────────
-    const porTurno = { manana: [], tarde: [], noche: [] };
-    transacciones.forEach(tx => {
-      const hora = new Date(tx.fecha).getHours();
-      const monto = parseFloat(tx.monto);
-      if (hora >= 6 && hora < 12) porTurno.manana.push(monto);
-      else if (hora >= 12 && hora < 18) porTurno.tarde.push(monto);
-      else if (hora >= 18 && hora < 24) porTurno.noche.push(monto);
+    // B. Franja horaria
+    const FRANJAS = [
+      { id: 'madrugada', nombre: 'la madrugada (0 a 6 h)', desde: 0, hasta: 5 },
+      { id: 'manana', nombre: 'la mañana (6 a 12 h)', desde: 6, hasta: 11 },
+      { id: 'tarde', nombre: 'la tarde (12 a 18 h)', desde: 12, hasta: 17 },
+      { id: 'noche', nombre: 'la noche (18 a 24 h)', desde: 18, hasta: 23 },
+    ].map((f) => ({ ...f, total: 0, n: 0 }));
+    filas.forEach((r) => {
+      const f = FRANJAS.find((x) => r.hora >= x.desde && r.hora <= x.hasta);
+      if (f) { f.total += r.monto; f.n += 1; }
     });
-
-    const turnosConDatos = Object.keys(porTurno).filter(t => porTurno[t].length >= 3);
-    if (turnosConDatos.length >= 2) {
-      const turnos = turnosConDatos.map(t => {
-        const montos = porTurno[t];
-        const total = montos.reduce((a, b) => a + b, 0);
-        const promedio = total / montos.length;
-        return { turno: t, total, promedio, count: montos.length };
-      });
-
-      turnos.sort((a, b) => b.total - a.total);
-      const mejor = turnos[0];
-      const peor = turnos[turnos.length - 1];
-      const gap = mejor.total - peor.total;
-
-      const TURNO_NOMBRE = { manana: 'Mañana', tarde: 'Tarde', noche: 'Noche' };
-      const impacto_mensual = gap; // gap en el período de 30 días
-
+    const franjas = FRANJAS.filter((f) => f.n >= 3).sort((a, b) => b.total - a.total);
+    if (franjas.length >= 2) {
+      const mejor = franjas[0];
+      const peor = franjas[franjas.length - 1];
+      const base = franjas.reduce((a, f) => a + f.total, 0);
+      const pMejor = (mejor.total / base) * 100;
+      const pPeor = (peor.total / base) * 100;
+      const gap = ((mejor.total - peor.total) * 30) / ventanaDias;
       patrones.push({
         id: 'turno_peak',
-        icono: '⏰',
-        titulo: `${TURNO_NOMBRE[mejor.turno]} genera $${Math.round(gap).toLocaleString('es-AR')} más que ${TURNO_NOMBRE[peor.turno]}`,
-        descripcion: `Turno ${TURNO_NOMBRE[mejor.turno]} vendió $${Math.round(mejor.total).toLocaleString('es-AR')} en 30 días (${mejor.count} transacciones) vs ${TURNO_NOMBRE[peor.turno]} con solo $${Math.round(peor.total).toLocaleString('es-AR')} (${peor.count} transacciones). Ticket promedio ${TURNO_NOMBRE[mejor.turno]}: $${Math.round(mejor.promedio).toLocaleString('es-AR')}.`,
-        duele: `El turno ${TURNO_NOMBRE[peor.turno]} está dejando $${Math.round(gap).toLocaleString('es-AR')} en la mesa`,
-        recomendacion: `Optimizá horarios del turno ${TURNO_NOMBRE[peor.turno]} o concentrá recursos en ${TURNO_NOMBRE[mejor.turno]}.`,
-        advertencia: 'Este es un análisis preliminar. NICOLE está estudiando el comportamiento de tu negocio. Con más datos, la precisión mejora.',
-        impacto_pesos: impacto_mensual,
-        confianza: Math.min(90, 45 + (turnosConDatos.length * 15)),
-        detalle: {
-          mejor_turno: TURNO_NOMBRE[mejor.turno],
-          mejor_total: Math.round(mejor.total),
-          mejor_avg_ticket: Math.round(mejor.promedio),
-          peor_turno: TURNO_NOMBRE[peor.turno],
-          peor_total: Math.round(peor.total),
-          gap_pesos: Math.round(gap),
-        },
+        icono: '',
+        titulo: cap(mejor.nombre) + ' concentra el ' + pct(pMejor) + '% de tus ventas',
+        descripcion: franjas.map((f) => cap(f.nombre) + ': ' + peso(f.total) + ' (' + pct((f.total / base) * 100) + '%)').join('. ') + '.',
+        duele: cap(peor.nombre) + ' es la franja más baja: aporta el ' + pct(pPeor) + '% de lo que vendés.',
+        recomendacion: 'Revisá si ' + peor.nombre + ' tiene la dotación y el stock que necesita. NICOLE lo va a seguir midiendo turno a turno.',
+        advertencia: advertencia,
+        impacto_pesos: gap,
+        confianza: confianza,
+        detalle: { franjas: franjas.map((f) => ({ franja: f.id, total: Math.round(f.total), ventas: f.n })) },
       });
     }
 
-    // ─── PATTERN C: Efectivo vs Digital (vs benchmark sector) ──────────────────
-    let totalEfectivo = 0;
-    let totalDigital = 0;
-    transacciones.forEach(tx => {
-      const monto = parseFloat(tx.monto);
-      const metodo = (tx.metodo_pago || '').toLowerCase();
-      if (metodo.includes('efectivo') || metodo === 'cash') {
-        totalEfectivo += monto;
-      } else {
-        totalDigital += monto;
-      }
-    });
-
-    const totalGeneral = totalEfectivo + totalDigital;
-    if (totalGeneral > 0) {
-      const pctEfectivo = (totalEfectivo / totalGeneral) * 100;
-      const pctDigital = (totalDigital / totalGeneral) * 100;
-
-      // Benchmarks sector
-      const benchmarks = {
-        cafeteria: 45,
-        kiosko: 85,
-        restaurante: 40,
-        almacen: 70,
-        otros: 60,
-      };
-      const benchmark = benchmarks[tipo_negocio] || benchmarks.otros;
-      const desviacion = Math.abs(pctEfectivo - benchmark);
-
-      if (desviacion > 15) {
-        const mensaje = pctEfectivo > benchmark
-          ? `Tenés ${pctEfectivo.toFixed(0)}% en efectivo vs ${benchmark}% del sector. Exceso de efectivo aumenta riesgo de hurtos.`
-          : `Solo ${pctEfectivo.toFixed(0)}% efectivo vs ${benchmark}% del sector. Podés estar perdiendo clientes sin medios digitales.`;
-
-        // Estimar impacto: si estás muy arriba, perdida por hurtos ~2% del efectivo excedente
-        // Si estás muy abajo, perdida por rechazo de ventas ~5% de lo que falta
-        const exceso = pctEfectivo - benchmark;
-        const impacto = exceso > 0
-          ? (totalEfectivo * 0.02) // 2% riesgo hurto
-          : (totalGeneral * Math.abs(exceso) / 100 * 0.05); // 5% ventas perdidas
-
-        patrones.push({
-          id: 'efectivo_digital',
-          icono: '💳',
-          titulo: pctEfectivo > benchmark ? 'Demasiado efectivo en caja' : 'Muy poco efectivo aceptado',
-          descripcion: mensaje,
-          duele: pctEfectivo > benchmark
-            ? `El exceso de efectivo te expone a perder $${Math.round(impacto).toLocaleString('es-AR')} al mes por hurtos`
-            : `Rechazás $${Math.round(impacto).toLocaleString('es-AR')} en ventas al mes por falta de efectivo`,
-          recomendacion: pctEfectivo > benchmark
-            ? 'Implementá controles de caja más frecuentes y depositá a diario.'
-            : 'Aceptá efectivo para no perder clientes que solo tienen cash.',
-          advertencia: 'Este es un análisis preliminar. NICOLE está estudiando el comportamiento de tu negocio. Con más datos, la precisión mejora.',
-          impacto_pesos: impacto,
-          confianza: 75,
-          detalle: {
-            pct_efectivo: pctEfectivo.toFixed(1),
-            pct_digital: pctDigital.toFixed(1),
-            benchmark_sector: benchmark,
-            desviacion: desviacion.toFixed(1),
-            total_efectivo: Math.round(totalEfectivo),
-            total_digital: Math.round(totalDigital),
-          },
-        });
-      }
+    // C. Mix de cobro (sin comparar contra valores inventados del sector)
+    if (filas.length >= 20) {
+      let ef = 0;
+      let dig = 0;
+      filas.forEach((r) => {
+        const m = String(r.metodo_pago || '').toLowerCase();
+        if (m.includes('efectivo') || m === 'cash') ef += r.monto; else dig += r.monto;
+      });
+      const pEf = (ef / (ef + dig)) * 100;
+      patrones.push({
+        id: 'efectivo_digital',
+        icono: '',
+        titulo: pct(pEf) + '% de tus ventas se cobra en efectivo',
+        descripcion: 'Efectivo: ' + peso(ef) + '. Digital (Mercado Pago, tarjetas, transferencias): ' + peso(dig) + '.',
+        duele: pEf >= 60 ? 'Con tanto efectivo, controlar la caja de cada turno es lo que más protege tu plata.' : 'Buena parte de tus ventas queda registrada digitalmente, lo que facilita el control.',
+        recomendacion: 'Cerrá cada turno con el conteo de caja: NICOLE compara lo vendido con lo que entra.',
+        advertencia: advertencia,
+        impacto_pesos: 0,
+        confianza: confianza,
+        detalle: { pct_efectivo: Math.round(pEf * 10) / 10, total_efectivo: Math.round(ef), total_digital: Math.round(dig) },
+      });
     }
 
-    // ─── PATTERN D: Tendencia semana a semana ───────────────────────────────────
-    const ahora = new Date();
-    const semanas = [[], [], [], []]; // últimas 4 semanas
-    transacciones.forEach(tx => {
-      const fecha = new Date(tx.fecha);
-      const diasAtras = Math.floor((ahora - fecha) / (1000 * 60 * 60 * 24));
-      const semanaIdx = Math.floor(diasAtras / 7);
-      if (semanaIdx < 4) {
-        semanas[3 - semanaIdx].push(parseFloat(tx.monto)); // 3=más reciente, 0=hace 4 semanas
-      }
+    // D. Ultimos 7 dias contra los 7 anteriores (sobre el tramo final de datos)
+    const ini7 = sumarDias(hasta, -6);
+    const ini14 = sumarDias(hasta, -13);
+    let rec = 0; let ant = 0; const dRec = new Set(); const dAnt = new Set();
+    filas.forEach((r) => {
+      if (r.dia >= ini7) { rec += r.monto; dRec.add(r.dia); }
+      else if (r.dia >= ini14) { ant += r.monto; dAnt.add(r.dia); }
     });
-
-    const semanasConDatos = semanas.filter(s => s.length >= 3);
-    if (semanasConDatos.length >= 3) {
-      const totales = semanas.map(s => s.reduce((a, b) => a + b, 0));
-      // Comparar semana 3 (más reciente) vs semana 0 (hace 4 semanas)
-      const semanaReciente = totales[3];
-      const semanaAnterior = totales[2];
-      const cambio = semanaReciente - semanaAnterior;
-      const pctCambio = semanaAnterior > 0 ? ((cambio / semanaAnterior) * 100).toFixed(0) : 0;
-
-      if (cambio < 0) {
-        // Declinando
-        const perdidaSemanal = Math.abs(cambio);
-        const perdidaMensual = perdidaSemanal * 4;
-
+    if (dRec.size >= 3 && dAnt.size >= 3 && ant > 0) {
+      const cambio = rec - ant;
+      const p = (cambio / ant) * 100;
+      if (Math.abs(p) >= 8) {
+        const baja = cambio < 0;
         patrones.push({
           id: 'tendencia_semanal',
-          icono: '📉',
-          titulo: `Ventas cayeron ${pctCambio}% esta semana`,
-          descripcion: `Semana pasada: $${Math.round(semanaAnterior).toLocaleString('es-AR')}. Esta semana: $${Math.round(semanaReciente).toLocaleString('es-AR')}. Caída de $${Math.round(perdidaSemanal).toLocaleString('es-AR')} en 7 días.`,
-          duele: `Si sigue esta tendencia, perdés $${Math.round(perdidaMensual).toLocaleString('es-AR')} este mes`,
-          recomendacion: 'Analizá qué cambió: personal, horarios, competencia nueva. Activá promociones urgentes.',
-          advertencia: 'Este es un análisis preliminar. NICOLE está estudiando el comportamiento de tu negocio. Con más datos, la precisión mejora.',
-          impacto_pesos: perdidaMensual,
-          confianza: 70,
-          detalle: {
-            semana_anterior: Math.round(semanaAnterior),
-            semana_reciente: Math.round(semanaReciente),
-            cambio_pesos: Math.round(cambio),
-            cambio_porcentual: pctCambio,
-            proyeccion_mensual: Math.round(perdidaMensual),
-          },
+          icono: '',
+          titulo: 'Los últimos 7 días vendiste ' + pct(Math.abs(p)) + '% ' + (baja ? 'menos' : 'más') + ' que los 7 anteriores',
+          descripcion: 'Del ' + ddmm(ini7) + ' al ' + ddmm(hasta) + ': ' + peso(rec) + '. Del ' + ddmm(ini14) + ' al ' + ddmm(sumarDias(ini7, -1)) + ': ' + peso(ant) + '.',
+          duele: baja ? 'Son ' + peso(Math.abs(cambio)) + ' menos en una semana.' : 'Son ' + peso(cambio) + ' más en una semana.',
+          recomendacion: baja
+            ? 'Mirá qué cambió: personal, horarios, stock o clima. Si se repite otra semana, conviene actuar.'
+            : 'Identificá qué funcionó (promoción, horario, producto) para repetirlo.',
+          advertencia: advertencia,
+          impacto_pesos: Math.abs(cambio),
+          confianza: confianza,
+          detalle: { ultimos_7: Math.round(rec), anteriores_7: Math.round(ant), cambio_pesos: Math.round(cambio), hasta: hasta },
         });
       }
     }
 
-    // ─── PATTERN E: Comparación mismo día semana pasada ────────────────────────
-    const hoy = new Date();
-    const estaSemana = {};
-    const semanaPasada = {};
-
-    transacciones.forEach(tx => {
-      const fecha = new Date(tx.fecha);
-      const diasAtras = Math.floor((ahora - fecha) / (1000 * 60 * 60 * 24));
-      const dia = fecha.getDay();
-      const monto = parseFloat(tx.monto);
-
-      if (diasAtras < 7) {
-        if (!estaSemana[dia]) estaSemana[dia] = 0;
-        estaSemana[dia] += monto;
-      } else if (diasAtras >= 7 && diasAtras < 14) {
-        if (!semanaPasada[dia]) semanaPasada[dia] = 0;
-        semanaPasada[dia] += monto;
+    // E. Hora pico (2 horas seguidas), solo si hay horarios reales distintos
+    const porHora = new Array(24).fill(0);
+    const horasVistas = new Set();
+    filas.forEach((r) => { porHora[r.hora] += r.monto; horasVistas.add(r.hora); });
+    if (filas.length >= 30 && horasVistas.size >= 4) {
+      let mejorH = 0; let mejorV = -1;
+      for (let h = 0; h < 23; h++) {
+        const v = porHora[h] + porHora[h + 1];
+        if (v > mejorV) { mejorV = v; mejorH = h; }
       }
-    });
-
-    const DIAS_NOMBRE = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-    let mayorCaida = { dia: null, caida: 0 };
-
-    Object.keys(semanaPasada).forEach(dia => {
-      if (estaSemana[dia] != null) {
-        const caida = semanaPasada[dia] - estaSemana[dia];
-        if (caida > mayorCaida.caida) {
-          mayorCaida = { dia: parseInt(dia), caida };
-        }
+      const p = (mejorV / totalGeneral) * 100;
+      if (p >= 25) {
+        patrones.push({
+          id: 'hora_pico',
+          icono: '',
+          titulo: 'Entre las ' + mejorH + ' y las ' + (mejorH + 2) + ' h se concentra el ' + pct(p) + '% de tus ventas',
+          descripcion: 'Son ' + peso(mejorV) + ' de ' + peso(totalGeneral) + ' en ' + nDias + ' días.',
+          duele: 'Es la franja donde una caja cerrada o un faltante de stock más te cuesta.',
+          recomendacion: 'Asegurate de tener todas las cajas abiertas y la mercadería lista en esa franja.',
+          advertencia: advertencia,
+          impacto_pesos: 0,
+          confianza: confianza,
+          detalle: { desde_hora: mejorH, hasta_hora: mejorH + 2, total: Math.round(mejorV) },
+        });
       }
-    });
-
-    if (mayorCaida.dia !== null && mayorCaida.caida > 500) {
-      const impacto_mensual = mayorCaida.caida * 4;
-      patrones.push({
-        id: 'mismo_dia_caida',
-        icono: '🔻',
-        titulo: `${DIAS_NOMBRE[mayorCaida.dia]} cayó $${Math.round(mayorCaida.caida).toLocaleString('es-AR')} vs semana pasada`,
-        descripcion: `El ${DIAS_NOMBRE[mayorCaida.dia]} de esta semana vendió $${Math.round(mayorCaida.caida).toLocaleString('es-AR')} menos que el ${DIAS_NOMBRE[mayorCaida.dia]} anterior. Algo cambió en ese día específico.`,
-        duele: `Perdés $${Math.round(impacto_mensual).toLocaleString('es-AR')} al mes si esto se repite`,
-        recomendacion: `Investigá qué pasó el ${DIAS_NOMBRE[mayorCaida.dia]}: faltó personal, cambió el clima, hay competencia nueva.`,
-        advertencia: 'Este es un análisis preliminar. NICOLE está estudiando el comportamiento de tu negocio. Con más datos, la precisión mejora.',
-        impacto_pesos: impacto_mensual,
-        confianza: 65,
-        detalle: {
-          dia: DIAS_NOMBRE[mayorCaida.dia],
-          esta_semana: Math.round(estaSemana[mayorCaida.dia]),
-          semana_pasada: Math.round(semanaPasada[mayorCaida.dia]),
-          caida_pesos: Math.round(mayorCaida.caida),
-        },
-      });
     }
 
-    // Ordenar por impacto_pesos descendente y devolver top 3
     patrones.sort((a, b) => b.impacto_pesos - a.impacto_pesos);
-    return { patrones: patrones.slice(0, 3) };
-
+    return {
+      patrones: patrones.slice(0, 3),
+      resumen: { ventas: filas.length, dias: nDias, desde: desde, hasta: hasta, total: Math.round(totalGeneral) },
+    };
   } catch (e) {
     console.error('[WOW_MOMENT ERROR]', e);
     return { patrones: [], error: e.message };

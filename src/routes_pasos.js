@@ -26,7 +26,7 @@ router.get('/estado', auth, async (req, res) => {
       existe('SELECT (tipo_negocio IS NOT NULL AND zona IS NOT NULL) AS ok FROM negocios WHERE id=$1', [negocioId], 'negocio'),
       existe("SELECT EXISTS(SELECT 1 FROM mis_sucursales WHERE negocio_id=$1 AND activo=true AND COALESCE(direccion,'') <> '') AS ok", [negocioId], 'locales'),
       existe('SELECT EXISTS(SELECT 1 FROM empleados_negocio WHERE negocio_id=$1 AND activo=true) AS ok', [negocioId], 'equipo'),
-      existe("SELECT (EXISTS(SELECT 1 FROM integraciones_mp WHERE usuario_id=$2) OR EXISTS(SELECT 1 FROM transacciones WHERE negocio_id=$1 AND COALESCE(origin,'real')='real')) AS ok", [negocioId, usuarioId], 'ventas'),
+      existe("SELECT (EXISTS(SELECT 1 FROM integraciones_mp WHERE usuario_id=$2) OR EXISTS(SELECT 1 FROM transacciones WHERE negocio_id=$1 AND COALESCE(origin,'real') IN ('real','importado'))) AS ok", [negocioId, usuarioId], 'ventas'),
       existe('SELECT EXISTS(SELECT 1 FROM push_subscriptions WHERE usuario_id=$1) AS ok', [usuarioId], 'avisos'),
       existe("SELECT EXISTS(SELECT 1 FROM turnos_caja WHERE negocio_id=$1 AND estado='cerrado') AS ok", [negocioId], 'turno'),
     ]);

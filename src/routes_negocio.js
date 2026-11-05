@@ -35,15 +35,36 @@ function esMetodoPagoValido(metodo) {
 // Normalizar método de pago a efectivo | mercado_pago
 function normalizarMetodoPago(metodo) {
   if (!metodo) return null;
-  const m = String(metodo).toLowerCase().trim();
-  if (m === 'efectivo') return 'efectivo';
-  if (m === 'mp' || m === 'mercadopago' || m === 'mercado_pago') return 'mercado_pago';
+  // sin tildes, espacios ni guiones: "Débito", "mercado pago", "Mercado_Pago" -> debito, mercadopago
+  const m = String(metodo).toLowerCase().normalize('NFD').replace(/[^a-z]/g, '');
+  if (m === 'efectivo' || m === 'cash') return 'efectivo';
+  if (m === 'mp' || m === 'mercadopago') return 'mercado_pago';
+  if (m === 'debito' || m === 'tarjetadebito') return 'debito';
+  if (m === 'credito' || m === 'tarjetacredito') return 'credito';
+  if (m === 'tarjeta') return 'tarjeta';
+  if (m === 'transferencia' || m === 'transf') return 'transferencia';
+  if (m === 'qr') return 'qr';
   return null;
 }
 
 // Parsear Excel / CSV
 function parsearArchivoExcelCSV(buffer) {
-  const workbook = XLSX.read(buffer, { type: 'buffer', cellText: false });
+  // Excel (.xlsx/.xls) viene en binario; el CSV es texto. El CSV se decodifica a mano para no romper
+  // las tildes (UTF-8 o Windows-1252, que es lo que exporta Excel en Argentina) ni convertir "3.500" en 3,5.
+  const esBinario = (buffer[0] === 0x50 && buffer[1] === 0x4b) || (buffer[0] === 0xd0 && buffer[1] === 0xcf);
+  let workbook;
+  if (esBinario) {
+    workbook = XLSX.read(buffer, { type: 'buffer', cellText: false });
+  } else {
+    let texto;
+    try {
+      texto = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+    } catch {
+      texto = new TextDecoder('windows-1252').decode(buffer);
+    }
+    if (texto.charCodeAt(0) === 0xfeff) texto = texto.slice(1);
+    workbook = XLSX.read(texto, { type: 'string', raw: true });
+  }
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
 
@@ -78,19 +99,20 @@ Del archivo/imagen, extraé TODAS las transacciones registradas.
 
 Devolvé ÚNICAMENTE un JSON array con esta estructura, sin texto adicional:
 [
-  { "fecha": "YYYY-MM-DD", "hora": "HH:MM", "monto": número, "metodo_pago": "efectivo" o "mercado_pago", "empleado": "nombre", "descripcion": "string opcional" }
+  { "fecha": "YYYY-MM-DD", "hora": "HH:MM", "monto": número, "metodo_pago": "efectivo", "empleado": "nombre", "descripcion": "string opcional" }
 ]
 
 Reglas CRÍTICAS:
 - fecha: YYYY-MM-DD (requerido)
 - hora: HH:MM formato 24hs (opcional)
 - monto: número positivo, sin símbolo ($). Si está en formato "1.234,50" (pesos argentinos), interpretá como 1234.50
-- metodo_pago: SOLO "efectivo" o "mercado_pago" (si dice "MP", "Mercado Pago", "MP", normalizá a "mercado_pago")
+- metodo_pago: uno de "efectivo", "mercado_pago" (si dice "MP" o "Mercado Pago"), "debito", "credito", "transferencia" o "qr". Si el medio de pago no figura en el archivo, omití ese campo
 - empleado: nombre del operador (opcional)
 - descripcion: detalle de la transacción (opcional)
 
 MUY IMPORTANTE:
-- RECHAZA cualquier otra forma de pago (tarjeta, transferencia, cheque, etc). Si ves otros métodos, NO los incluyas.
+- Si el medio de pago es otro (cheque, cuenta corriente, fiado), NO incluyas esa transacción.
+- Si el archivo trae un total por día y no ventas sueltas, devolvé una transacción por día con ese total.
 - Si el archivo es confuso, incluye SOLO las transacciones que puedas leer con certeza
 - No incluyas encabezados, totales, o líneas de resumen
 - Si no encuentras transacciones claras, devolvé []`;
@@ -107,13 +129,24 @@ async function parsearConClaude(content) {
 
   const msg = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 8192,
+    max_tokens: 16000,
     messages: [{ role: 'user', content }],
   });
 
   const text = msg.content[0].type === 'text' ? msg.content[0].text : '';
-  const match = text.match(/\[[\s\S]*\]/);
-  if (!match) return [];
+  // Si la respuesta se cortó a la mitad, nos quedamos con las transacciones completas que llegaron.
+  const ini = text.indexOf('[');
+  if (ini === -1) return [];
+  let candidato = text.slice(ini);
+  const fin = candidato.lastIndexOf(']');
+  if (fin !== -1) {
+    candidato = candidato.slice(0, fin + 1);
+  } else {
+    const ultimo = candidato.lastIndexOf('}');
+    if (ultimo === -1) return [];
+    candidato = candidato.slice(0, ultimo + 1) + ']';
+  }
+  const match = [candidato];
 
   try {
     const parsed = JSON.parse(match[0]);
@@ -124,20 +157,26 @@ async function parsearConClaude(content) {
 }
 
 async function parsearPDF(buffer) {
-  let pdfParse;
+  let texto = '';
   try {
-    pdfParse = require('pdf-parse');
+    const pdfParse = require('pdf-parse');
+    const data = await pdfParse(buffer);
+    texto = (data.text || '').trim();
   } catch {
-    return [];
+    texto = '';
   }
 
-  const data = await pdfParse(buffer);
-  const texto = data.text?.trim();
-  if (!texto || texto.length < 20) return [];
+  // PDF con texto: mandamos el texto (sale mas barato)
+  if (texto.length >= 200) {
+    return parsearConClaude([
+      { type: 'text', text: PROMPT_TRANSACCIONES + '\n\nTexto del PDF:\n' + texto.slice(0, 60000) },
+    ]);
+  }
 
-  const contenido = texto.slice(0, 12000);
+  // PDF escaneado o sin texto legible: se lo mandamos entero a Claude para que lo lea como imagen
   return parsearConClaude([
-    { type: 'text', text: PROMPT_TRANSACCIONES + '\n\nTexto del PDF:\n' + contenido },
+    { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } },
+    { type: 'text', text: PROMPT_TRANSACCIONES },
   ]);
 }
 
@@ -174,9 +213,10 @@ function normalizarFecha(fechaRaw) {
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
 
   // Intentar parsear DD/MM/YYYY o similar
-  const matches = s.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+  const matches = s.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
   if (matches) {
-    const [_, d, m, y] = matches;
+    const [_, d, m, y0] = matches;
+    const y = y0.length === 2 ? '20' + y0 : y0;
     return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
   }
 
@@ -187,6 +227,12 @@ function normalizarFecha(fechaRaw) {
 function normalizarHora(horaRaw) {
   if (!horaRaw) return null;
   const s = String(horaRaw).trim();
+
+  // Excel guarda la hora como fraccion del dia (0.5 = 12:00)
+  if (/^0?\.\d+$/.test(s)) {
+    const minutos = Math.round(parseFloat(s) * 1440);
+    return String(Math.floor(minutos / 60) % 24).padStart(2, '0') + ':' + String(minutos % 60).padStart(2, '0');
+  }
 
   // Si es HH:MM o HHMM
   const matches = s.match(/(\d{1,2}):?(\d{2})/);
@@ -202,8 +248,22 @@ function normalizarHora(horaRaw) {
 // Normalizar monto a número
 function normalizarMonto(montoRaw) {
   if (!montoRaw) return null;
-  const s = String(montoRaw).trim();
-  const n = parseFloat(s.replace(/[^\d.,]/g, '').replace(',', '.'));
+  let s = String(montoRaw).replace(/[^\d.,]/g, '');
+  if (!s) return null;
+  const ultPunto = s.lastIndexOf('.');
+  const ultComa = s.lastIndexOf(',');
+  if (ultPunto !== -1 && ultComa !== -1) {
+    // los dos separadores: el que va ultimo es el decimal ("1.234,50" o "1,234.50")
+    s = ultComa > ultPunto ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '');
+  } else if (ultComa !== -1) {
+    // solo coma: "1234,50" decimal; "1,234" o "1,234,567" miles
+    s = /,\d{1,2}$/.test(s) && s.indexOf(',') === ultComa ? s.replace(',', '.') : s.replace(/,/g, '');
+  } else if (ultPunto !== -1) {
+    // solo punto: "1234.50" decimal; "1.234" o "12.345.678" miles
+    const miles = /\.\d{3}$/.test(s) && (s.indexOf('.') !== ultPunto || ultPunto <= 3);
+    s = miles ? s.replace(/\./g, '') : s;
+  }
+  const n = parseFloat(s);
   return isNaN(n) || n <= 0 ? null : n;
 }
 
@@ -251,7 +311,7 @@ router.post('/upload-historial', auth, upload.single('archivo'), async (req, res
         continue;
       }
 
-      if (!metodo) {
+      if (!metodo && metodo_raw && String(metodo_raw).trim() !== '') {
         rechazadas.push({ raw: t, razon: `método de pago no válido: "${metodo_raw}"` });
         continue;
       }
@@ -279,21 +339,70 @@ router.post('/upload-historial', auth, upload.single('archivo'), async (req, res
       await client.query('BEGIN');
       let insertadas = 0;
 
+      let duplicadas = 0;
+      const negocioId = req.user.negocio_id;
+      const sucursalId = Number.isInteger(sucursal_id) ? sucursal_id : null;
+
+      // Las horas del archivo son de Argentina (UTC-3). Se guardan en UTC, igual que el resto del sistema.
+      const filasNuevas = [];
       for (const t of validadas) {
+        const instante = new Date(`${t.fecha}T${t.hora || '12:00'}:00-03:00`);
+        if (isNaN(instante.getTime())) {
+          rechazadas.push({ raw: t, razon: 'fecha u hora inválida' });
+          continue;
+        }
+        filasNuevas.push({ ...t, instante, ms: instante.getTime() });
+      }
+
+      if (filasNuevas.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(422).json({ error: 'No se pudo leer ninguna fecha u hora válida del archivo.', rechazadas });
+      }
+
+      // Si ya cargaron estas mismas ventas (por ejemplo, el mismo archivo dos veces) no se repiten.
+      // Las repetidas dentro del mismo archivo se respetan: pueden ser ventas distintas del mismo importe.
+      const clave = (ms, monto, metodo, empleado) => ms + '|' + Number(monto).toFixed(2) + '|' + (metodo || '') + '|' + (empleado || '');
+      const minMs = filasNuevas.reduce((a, f) => Math.min(a, f.ms), Infinity) - 86400000;
+      const maxMs = filasNuevas.reduce((a, f) => Math.max(a, f.ms), -Infinity) + 86400000;
+      const previas = await client.query(
+        `SELECT (EXTRACT(EPOCH FROM (fecha AT TIME ZONE 'UTC')) * 1000)::bigint AS ms, monto, metodo_pago, empleado
+           FROM transacciones
+          WHERE negocio_id = $1 AND origin = 'importado'
+            AND fecha BETWEEN ($2::timestamptz AT TIME ZONE 'UTC') AND ($3::timestamptz AT TIME ZONE 'UTC')`,
+        [negocioId, new Date(minMs).toISOString(), new Date(maxMs).toISOString()]
+      );
+      const yaCargadas = new Map();
+      for (const p of previas.rows) {
+        const k = clave(Number(p.ms), p.monto, p.metodo_pago, p.empleado);
+        yaCargadas.set(k, (yaCargadas.get(k) || 0) + 1);
+      }
+      const vistas = new Map();
+      const paraInsertar = [];
+      for (const f of filasNuevas) {
+        const k = clave(f.ms, f.monto, f.metodo_pago, f.empleado);
+        const n = (vistas.get(k) || 0) + 1;
+        vistas.set(k, n);
+        if (n <= (yaCargadas.get(k) || 0)) { duplicadas++; continue; }
+        paraInsertar.push(f);
+      }
+
+      for (let i = 0; i < paraInsertar.length; i += 500) {
+        const lote = paraInsertar.slice(i, i + 500);
         await client.query(
-          `INSERT INTO transacciones(usuario_id, fecha, monto, metodo_pago, empleado, turno, origen)
-           VALUES($1, $2, $3, $4, $5, $6, $7)`,
+          `INSERT INTO transacciones(negocio_id, usuario_id, fecha, monto, tipo, metodo_pago, empleado, origin, sucursal_id)
+           SELECT $1::int, $2::int, (u.f AT TIME ZONE 'UTC'), u.m, 'venta', u.mp, u.e, 'importado', $7::int
+             FROM unnest($3::timestamptz[], $4::numeric[], $5::text[], $6::text[]) AS u(f, m, mp, e)`,
           [
+            negocioId,
             req.user.id,
-            new Date(`${t.fecha}T${t.hora || '12:00'}:00`),
-            t.monto,
-            t.metodo_pago,
-            t.empleado,
-            null,
-            'importado',
+            lote.map((f) => f.instante.toISOString()),
+            lote.map((f) => f.monto),
+            lote.map((f) => f.metodo_pago),
+            lote.map((f) => f.empleado),
+            sucursalId,
           ]
         );
-        insertadas++;
+        insertadas += lote.length;
       }
 
       await client.query('COMMIT');
@@ -303,12 +412,13 @@ router.post('/upload-historial', auth, upload.single('archivo'), async (req, res
         `SELECT
            COUNT(*) as total,
            COALESCE(SUM(CASE WHEN metodo_pago='efectivo' THEN monto ELSE 0 END), 0) as total_efectivo,
-           COALESCE(SUM(CASE WHEN metodo_pago='mercado_pago' THEN monto ELSE 0 END), 0) as total_mp,
+           COALESCE(SUM(CASE WHEN metodo_pago IS NOT NULL AND metodo_pago<>'efectivo' THEN monto ELSE 0 END), 0) as total_mp,
            COUNT(DISTINCT DATE(fecha)) as dias_datos,
            ROUND(AVG(monto)::numeric, 2) as ticket_promedio
          FROM transacciones
-         WHERE usuario_id=$1`,
-        [req.user.id]
+         WHERE (negocio_id=$1 OR (negocio_id IS NULL AND usuario_id=$2))
+           AND COALESCE(origin,'real') IN ('real','importado')`,
+        [negocioId, req.user.id]
       );
 
       const m = metricas.rows[0];
@@ -324,8 +434,8 @@ router.post('/upload-historial', auth, upload.single('archivo'), async (req, res
 
       try {
         const allTransacciones = await pool.query(
-          `SELECT * FROM transacciones WHERE usuario_id=$1 ORDER BY fecha ASC`,
-          [req.user.id]
+          `SELECT * FROM transacciones WHERE (negocio_id=$1 OR (negocio_id IS NULL AND usuario_id=$2)) ORDER BY fecha ASC`,
+          [negocioId, req.user.id]
         );
 
         await actualizarBaselineNegocio(req.user.negocio_id, sucursal_id, allTransacciones.rows);
@@ -351,6 +461,7 @@ router.post('/upload-historial', auth, upload.single('archivo'), async (req, res
       res.json({
         success: true,
         transacciones_cargadas: insertadas,
+        duplicadas_omitidas: duplicadas,
         dias_datos,
         total_efectivo: Math.round(total_efectivo),
         total_mercado_pago: Math.round(total_mp),
@@ -358,8 +469,8 @@ router.post('/upload-historial', auth, upload.single('archivo'), async (req, res
         ticket_promedio: Math.round(parseFloat(m.ticket_promedio) || 0),
         baseline_status,
         baseline_listo,
-        mensaje: `${insertadas} transacciones: ${Math.round(ratio_efectivo * 100)}% efectivo, ${Math.round((1 - ratio_efectivo) * 100)}% Mercado Pago. ${baseline_status}`,
-        advertencias: rechazadas.length > 0 ? `${rechazadas.length} transacciones rechazadas (métodos de pago no válidos)` : null,
+        mensaje: `${insertadas} ventas cargadas.`,
+        advertencias: rechazadas.length > 0 ? `${rechazadas.length} filas no se pudieron leer (fecha, importe o medio de pago no reconocidos).` : null,
       });
     } catch (e) {
       await client.query('ROLLBACK');
