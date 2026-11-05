@@ -40,6 +40,14 @@ try {
 }
 
 try {
+  const pasosRoutes = require("./routes_pasos");
+  app.use("/api/pasos", pasosRoutes);
+  console.log("Pasos OK");
+} catch(e) {
+  console.error("Pasos ERROR:", e.message);
+}
+
+try {
   const negocioRoutes = require("./routes_negocio");
   app.use("/api/negocio", negocioRoutes);
   console.log("Negocio OK");
