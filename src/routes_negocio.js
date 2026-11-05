@@ -112,7 +112,10 @@ Reglas CRÍTICAS:
 
 MUY IMPORTANTE:
 - Si el medio de pago es otro (cheque, cuenta corriente, fiado), NO incluyas esa transacción.
-- Si el archivo trae un total por día y no ventas sueltas, devolvé una transacción por día con ese total.
+- Si el archivo trae un total por día y no ventas sueltas, devolvé una transacción por día con ese total. Si ese total viene separado por medio de pago, una por día y por medio de pago.
+- Los importes tienen que quedar en pesos. Si el archivo dice "en miles" o "en millones de pesos", multiplicalos.
+- Si el documento es solo un resumen mensual, por rubro o por sucursal (sin ventas por día ni ventas sueltas), devolvé [].
+- Omití los campos que no figuren en el archivo: no los completes con null ni con texto vacío.
 - Si el archivo es confuso, incluye SOLO las transacciones que puedas leer con certeza
 - No incluyas encabezados, totales, o líneas de resumen
 - Si no encuentras transacciones claras, devolvé []`;
@@ -137,11 +140,13 @@ async function parsearConClaude(content) {
   // Si la respuesta se cortó a la mitad, nos quedamos con las transacciones completas que llegaron.
   const ini = text.indexOf('[');
   if (ini === -1) return [];
+  let recortado = false;
   let candidato = text.slice(ini);
   const fin = candidato.lastIndexOf(']');
   if (fin !== -1) {
     candidato = candidato.slice(0, fin + 1);
   } else {
+    recortado = true;
     const ultimo = candidato.lastIndexOf('}');
     if (ultimo === -1) return [];
     candidato = candidato.slice(0, ultimo + 1) + ']';
@@ -150,30 +155,34 @@ async function parsearConClaude(content) {
 
   try {
     const parsed = JSON.parse(match[0]);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    if (recortado || msg.stop_reason === 'max_tokens') parsed.truncado = true;
+    return parsed;
   } catch {
     return [];
   }
 }
 
+const MAX_PAGINAS_PDF = 25;
+
 async function parsearPDF(buffer) {
-  let texto = '';
+  // Cantidad de paginas: con pdf-parse si esta instalado; si no, se cuentan en el archivo.
+  let paginas = 0;
   try {
     const pdfParse = require('pdf-parse');
     const data = await pdfParse(buffer);
-    texto = (data.text || '').trim();
+    paginas = data.numpages || 0;
   } catch {
-    texto = '';
+    paginas = (buffer.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
+  }
+  if (paginas > MAX_PAGINAS_PDF) {
+    const err = new Error(`El PDF tiene ${paginas} páginas y es demasiado largo para leerlo de una vez (máximo ${MAX_PAGINAS_PDF}). Subí el Excel con las ventas, o un PDF solo con las páginas del detalle de ventas.`);
+    err.status = 413;
+    throw err;
   }
 
-  // PDF con texto: mandamos el texto (sale mas barato)
-  if (texto.length >= 200) {
-    return parsearConClaude([
-      { type: 'text', text: PROMPT_TRANSACCIONES + '\n\nTexto del PDF:\n' + texto.slice(0, 60000) },
-    ]);
-  }
-
-  // PDF escaneado o sin texto legible: se lo mandamos entero a Claude para que lo lea como imagen
+  // Siempre se manda el PDF entero para que Claude lo lea como pagina: al sacar solo el texto,
+  // las columnas de las tablas quedan pegadas (01/08/2026sab1.11677116.015.200...) y no se pueden separar.
   return parsearConClaude([
     { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } },
     { type: 'text', text: PROMPT_TRANSACCIONES },
@@ -470,7 +479,10 @@ router.post('/upload-historial', auth, upload.single('archivo'), async (req, res
         baseline_status,
         baseline_listo,
         mensaje: `${insertadas} ventas cargadas.`,
-        advertencias: rechazadas.length > 0 ? `${rechazadas.length} filas no se pudieron leer (fecha, importe o medio de pago no reconocidos).` : null,
+        advertencias: [
+          rechazadas.length > 0 ? `${rechazadas.length} filas no se pudieron leer (fecha, importe o medio de pago no reconocidos).` : null,
+          transacciones.truncado ? 'El archivo era muy largo y solo se leyó una parte. Subí el resto en otro archivo (por ejemplo, por mes).' : null,
+        ].filter(Boolean).join(' ') || null,
       });
     } catch (e) {
       await client.query('ROLLBACK');
@@ -480,6 +492,7 @@ router.post('/upload-historial', auth, upload.single('archivo'), async (req, res
     }
   } catch (e) {
     console.error('upload-historial error:', e.message);
+    if (e.status === 413) return res.status(413).json({ error: e.message });
     res.status(500).json({ error: 'Error cargando historial: ' + e.message });
   }
 });

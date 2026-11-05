@@ -145,10 +145,11 @@ async function calculateWowMoment(usuario_id, db = pool) {
     }
 
     // C. Mix de cobro (sin comparar contra valores inventados del sector)
-    if (filas.length >= 20) {
+    const conMedio = filas.filter((r) => r.metodo_pago && String(r.metodo_pago).trim() !== '');
+    if (conMedio.length >= 20) {
       let ef = 0;
       let dig = 0;
-      filas.forEach((r) => {
+      conMedio.forEach((r) => {
         const m = String(r.metodo_pago || '').toLowerCase();
         if (m.includes('efectivo') || m === 'cash') ef += r.monto; else dig += r.monto;
       });
@@ -227,6 +228,7 @@ async function calculateWowMoment(usuario_id, db = pool) {
     patrones.sort((a, b) => b.impacto_pesos - a.impacto_pesos);
     return {
       patrones: patrones.slice(0, 3),
+      mensaje: patrones.length === 0 ? 'Cargamos tus ventas y todavía no vemos diferencias marcadas. Con más semanas de datos aparecen los patrones.' : undefined,
       resumen: { ventas: filas.length, dias: nDias, desde: desde, hasta: hasta, total: Math.round(totalGeneral) },
     };
   } catch (e) {
