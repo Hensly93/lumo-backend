@@ -95,4 +95,20 @@ function calcularPrecio(cajasPorLocal, empleados) {
   };
 }
 
-module.exports = { calcularPrecio, BASE, EMPRESARIAL };
+// Combina lo REAL (locales/cajas/empleados cargados en el sistema) con lo DECLARADO al registrarse.
+// Manda el mayor de los dos: asi nadie paga de menos declarando menos, y el que declara de mas empieza con ese piso.
+function efectivo(cajasReales, empleadosReales, declarado) {
+  const d = declarado || {};
+  const reales = Array.isArray(cajasReales) ? cajasReales : [];
+  const nLocales = Math.max(reales.length, Math.floor(Number(d.locales) || 0), 1);
+  const cajasDecl = Math.floor(Number(d.cajas) || 0);
+  const cajas = [];
+  for (let i = 0; i < nLocales; i++) {
+    const real = i < reales.length ? Math.floor(Number(reales[i]) || 1) : 1;
+    cajas.push(Math.max(real, cajasDecl, 1));
+  }
+  const empleados = Math.max(Math.floor(Number(empleadosReales) || 0), Math.floor(Number(d.empleados) || 0));
+  return { cajas: cajas, empleados: empleados };
+}
+
+module.exports = { calcularPrecio, efectivo, BASE, EMPRESARIAL };
