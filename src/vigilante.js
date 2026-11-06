@@ -51,6 +51,11 @@ function mediana(v) {
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
+// Cuentas de prueba (test@test.com, example.com): no se les escribe, para no dañar la reputacion del correo.
+function esCorreoDePrueba(email) {
+  return /@(test\.com|example\.com|example\.org|test\.test)$/i.test(String(email || '').trim());
+}
+
 function pesos(n) {
   return '$' + Math.round(n).toLocaleString('es-AR');
 }
@@ -503,6 +508,22 @@ async function detRitmo(db, p) {
 
 // ── Lo que NICOLE detecta (mismos calculos que muestran las pantallas) ──
 
+// Las señales de NICOLE traen el mensaje como objeto { descripcion, contexto, accion_recomendada }
+// (a veces como texto). Se arma un texto corto y nunca se deja pasar "[object Object]".
+function textoDe(x) {
+  if (!x) return '';
+  if (typeof x === 'string') return x;
+  if (typeof x === 'object') return String(x.descripcion || x.texto_completo || x.mensaje || x.titulo || '');
+  return '';
+}
+function textoSenal(s) {
+  const base = textoDe(s.mensaje) || textoDe(s.insight);
+  if (!base) return '';
+  const accion = textoDe(s.accion) || textoDe(s.mensaje && s.mensaje.accion_recomendada) || textoDe(s.insight && s.insight.accion_recomendada);
+  const t = [base, accion].filter(Boolean).join(' ');
+  return t.includes('[object') ? '' : t;
+}
+
 async function detNicole(db, p) {
   const { reloj } = p;
   if (reloj.hora < 8 || reloj.hora >= HORA_HASTA || p.totalVentas < 10) return [];
@@ -518,7 +539,7 @@ async function detNicole(db, p) {
   const out = [];
   for (const s of a.señales) {
     const m = MAPA[s.prioridad];
-    const texto = recorte([s.mensaje || s.insight, s.accion].filter(Boolean).join(' '));
+    const texto = recorte(textoSenal(s));
     if (!m || !texto) continue;
     out.push({
       tipo: 'nicole_senal', contexto: recorte(`${s.tipo || 'senal'}-${s.contexto || s.turno || ''}-${reloj.hoy}`, 110),
@@ -686,6 +707,7 @@ async function correrVigilante(db = pool, opts = {}) {
      ORDER BY n.id`
   );
   for (const u of ng.rows) {
+    if (esCorreoDePrueba(u.email)) { resumen.omitidos_prueba = (resumen.omitidos_prueba || 0) + 1; continue; }
     resumen.negocios++;
     try {
       const r = await procesarNegocio(db, u, ahora, reloj, o);
