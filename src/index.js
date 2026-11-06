@@ -154,7 +154,7 @@ try {
 try {
   const { triggerManual } = require("./job_nocturno");
   app.post("/api/job/trigger", async (req, res) => {
-    if (req.headers['x-internal-key'] !== process.env.INTERNAL_KEY) {
+    if (!process.env.INTERNAL_KEY || req.headers['x-internal-key'] !== process.env.INTERNAL_KEY) {
       return res.status(401).json({ error: 'No autorizado' });
     }
     try {
@@ -167,6 +167,31 @@ try {
   console.log("Job nocturno OK");
 } catch(e) {
   console.error("Job nocturno ERROR:", e.message);
+}
+
+try {
+  const { correrVigilante } = require("./vigilante");
+  // Lo llama un servicio externo cada hora. ?dry=1 solo muestra que avisaria (no envia nada);
+  // con dry=1 tambien se puede simular la hora: ?dry=1&ahora=2026-11-06T15:00:00-03:00
+  app.post("/api/job/vigilante", async (req, res) => {
+    if (!process.env.INTERNAL_KEY || req.headers['x-internal-key'] !== process.env.INTERNAL_KEY) {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+    try {
+      const dry = req.query.dry === '1';
+      const opts = { dry };
+      if (dry && req.query.ahora) {
+        const d = new Date(req.query.ahora);
+        if (!isNaN(d.getTime())) opts.ahora = d;
+      }
+      res.json(await correrVigilante(undefined, opts));
+    } catch(e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+  console.log("Vigilante OK");
+} catch(e) {
+  console.error("Vigilante ERROR:", e.message);
 }
 
 app.get("/api/health", (req, res) => res.json({ status: "ok", app: "Lumo", version: "2.0" }));

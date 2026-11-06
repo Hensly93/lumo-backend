@@ -233,4 +233,41 @@ async function enviarConfirmacionReset({ nombre, email }) {
   });
 }
 
-module.exports = { enviarBienvenida, enviarRecupero, enviarConfirmacionReset };
+// ─── Aviso del Vigilante (avisos proactivos al dueño) ─────────────────────────
+
+function escHtml(s) {
+  return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+async function enviarAvisoVigilante({ nombre, email, negocio, titulo, mensaje, url, boton }) {
+  if (!process.env.SMTP_USER || !email) return false;
+
+  const html = wrapper(`
+    ${logoBlock()}
+
+    <p style="color:#1E3A5F;font-size:10px;font-family:monospace;letter-spacing:3px;text-transform:uppercase;margin:0 0 12px;">${escHtml(negocio || "Tu negocio")}</p>
+    <h1 style="color:#E8F4FF;font-size:21px;font-weight:700;margin:0 0 14px;line-height:1.3;">
+      ${escHtml(titulo)}
+    </h1>
+    <p style="color:#4A7A9B;font-size:15px;line-height:1.75;margin:0 0 28px;">
+      ${escHtml(mensaje)}
+    </p>
+
+    <a href="${escHtml(url)}"
+       style="display:inline-block;padding:14px 28px;background:rgba(56,189,248,0.10);border:1px solid #38BDF8;border-radius:12px;color:#38BDF8;text-decoration:none;font-size:14px;font-weight:600;">
+      ${escHtml(boton || "Abrir LumoBi")}
+    </a>
+
+    ${footerBlock("Estos avisos los genera NICOLE mirando lo habitual de tu negocio. Podés ajustarlos desde Ajustes.")}
+  `);
+
+  await transporter.sendMail({
+    from: FROM,
+    to: email,
+    subject: titulo,
+    html,
+  });
+  return true;
+}
+
+module.exports = { enviarBienvenida, enviarRecupero, enviarConfirmacionReset, enviarAvisoVigilante };
