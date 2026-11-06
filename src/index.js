@@ -174,7 +174,8 @@ try {
   // Lo llama un servicio externo cada hora. ?dry=1 solo muestra que avisaria (no envia nada);
   // con dry=1 tambien se puede simular la hora: ?dry=1&ahora=2026-11-06T15:00:00-03:00
   app.post("/api/job/vigilante", async (req, res) => {
-    const claveEsperada = String(process.env.INTERNAL_KEY || '').trim();
+    // Variable propia del Vigilante (VIGILANTE_KEY); si no existe, usa INTERNAL_KEY como antes
+    const claveEsperada = String(process.env.VIGILANTE_KEY || process.env.INTERNAL_KEY || '').trim();
     const claveRecibida = String(req.headers['x-internal-key'] || '').trim();
     if (!claveEsperada || claveRecibida !== claveEsperada) {
       // Solo largos, nunca la clave: sirve para ver en el log de Render si hay un espacio o caracteres de mas
