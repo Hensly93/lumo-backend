@@ -174,7 +174,11 @@ try {
   // Lo llama un servicio externo cada hora. ?dry=1 solo muestra que avisaria (no envia nada);
   // con dry=1 tambien se puede simular la hora: ?dry=1&ahora=2026-11-06T15:00:00-03:00
   app.post("/api/job/vigilante", async (req, res) => {
-    if (!process.env.INTERNAL_KEY || req.headers['x-internal-key'] !== process.env.INTERNAL_KEY) {
+    const claveEsperada = String(process.env.INTERNAL_KEY || '').trim();
+    const claveRecibida = String(req.headers['x-internal-key'] || '').trim();
+    if (!claveEsperada || claveRecibida !== claveEsperada) {
+      // Solo largos, nunca la clave: sirve para ver en el log de Render si hay un espacio o caracteres de mas
+      console.error('[VIGILANTE] clave rechazada: recibida de', claveRecibida.length, 'caracteres, esperada de', claveEsperada.length);
       return res.status(401).json({ error: 'No autorizado' });
     }
     try {
