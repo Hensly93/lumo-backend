@@ -25,7 +25,7 @@ function mapMetodoPago(paymentTypeId) {
 }
 
 function calcularTurno(fechaStr) {
-  const hora = new Date(fechaStr).getHours();
+  const hora = (new Date(fechaStr).getUTCHours() + 21) % 24; // hora de Argentina (UTC-3); el servidor corre en UTC
   if (hora >= 6  && hora < 12) return 'MANANA';
   if (hora >= 12 && hora < 18) return 'TARDE';
   return 'NOCHE';

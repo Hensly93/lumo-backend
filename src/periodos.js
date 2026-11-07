@@ -202,7 +202,7 @@ function comparar(act, base) {
 
 const MEDIO = `CASE
   WHEN metodo_pago IS NULL OR TRIM(metodo_pago) = '' THEN 'Sin dato'
-  WHEN LOWER(REPLACE(REPLACE(metodo_pago,' ',''),'_','')) IN ('mp','mercadopago') THEN 'Mercado Pago'
+  WHEN LOWER(REPLACE(REPLACE(metodo_pago,' ',''),'_','')) IN ('mp','mercadopago','cuentamp') THEN 'Mercado Pago'
   WHEN LOWER(metodo_pago) = 'efectivo' THEN 'Efectivo'
   WHEN LOWER(metodo_pago) IN ('debito','débito','tarjeta_debito') THEN 'Débito'
   WHEN LOWER(metodo_pago) IN ('credito','crédito','tarjeta_credito') THEN 'Crédito'

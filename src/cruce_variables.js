@@ -55,7 +55,7 @@ async function analizarCruceTurno(turnoId) {
   const ventasRes = await pool.query(
     `SELECT
        COALESCE(SUM(monto),0) as total_ventas,
-       COALESCE(SUM(CASE WHEN LOWER(REPLACE(REPLACE(COALESCE(metodo_pago,''),' ',''),'_','')) IN ('mp','mercadopago','digital','debito','tarjetadebito','credito','tarjetacredito','tarjeta','transferencia','qr') THEN monto ELSE 0 END),0) as total_mp,
+       COALESCE(SUM(CASE WHEN LOWER(REPLACE(REPLACE(COALESCE(metodo_pago,''),' ',''),'_','')) IN ('mp','mercadopago','digital','debito','tarjetadebito','credito','tarjetacredito','tarjeta','transferencia','qr','cuentamp') THEN monto ELSE 0 END),0) as total_mp,
        COUNT(*) as cantidad_tx,
        COALESCE(AVG(monto),0) as ticket_promedio
      FROM transacciones

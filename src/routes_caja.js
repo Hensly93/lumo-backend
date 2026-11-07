@@ -451,7 +451,7 @@ router.post('/cierre', authTurno, async (req, res) => {
     const ventas = await pool.query(
       `SELECT
          COALESCE(SUM(monto),0) as total_ventas,
-         COALESCE(SUM(CASE WHEN LOWER(REPLACE(REPLACE(COALESCE(metodo_pago,''),' ',''),'_','')) IN ('mp','mercadopago','digital','debito','tarjetadebito','credito','tarjetacredito','tarjeta','transferencia','qr') THEN monto ELSE 0 END),0) as total_mp,
+         COALESCE(SUM(CASE WHEN LOWER(REPLACE(REPLACE(COALESCE(metodo_pago,''),' ',''),'_','')) IN ('mp','mercadopago','digital','debito','tarjetadebito','credito','tarjetacredito','tarjeta','transferencia','qr','cuentamp') THEN monto ELSE 0 END),0) as total_mp,
          COUNT(*) as cantidad_tx
        FROM transacciones
        WHERE negocio_id=$1 AND fecha >= $2 AND fecha <= NOW()
