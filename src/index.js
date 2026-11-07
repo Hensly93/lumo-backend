@@ -72,6 +72,22 @@ try {
 }
 
 try {
+  const { correrSyncMP } = require("./mp_sync");
+  app.post("/api/job/sync-mp", async (req, res) => {
+    // Misma clave que el Vigilante (VIGILANTE_KEY; si no existe, INTERNAL_KEY)
+    const claveEsperada = String(process.env.VIGILANTE_KEY || process.env.INTERNAL_KEY || '').trim();
+    const claveRecibida = String(req.headers['x-internal-key'] || '').trim();
+    if (!claveEsperada || claveRecibida !== claveEsperada) {
+      return res.status(401).json({ error: 'No autorizado' });
+    }
+    try { res.json(await correrSyncMP()); } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+  console.log("Sync MP OK");
+} catch(e) {
+  console.error("Sync MP ERROR:", e.message);
+}
+
+try {
   const fugasRoutes = require("./routes_fugas");
   app.use("/api/fugas", fugasRoutes);
   console.log("Fugas OK");
