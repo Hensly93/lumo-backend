@@ -594,6 +594,8 @@ async function detRentabilidad(db, p) {
   for (const rec of (rr.recomendaciones || [])) {
     const m = TIPO[rec.tipo];
     if (!m || !rec.id || !rec.titulo) continue;
+    // Lo que cuesta plata ya sale como FUGA (detFugas): aca solo quedan las buenas noticias y lo que no tiene monto
+    if (rec.tipo !== 'positiva' && Number(rec.impacto_pesos) > 0) continue;
     out.push({
       tipo: 'rentabilidad', contexto: recorte(rec.id, 110), pref: m.pref, prioridad: m.prioridad,
       titulo: recorte(rec.titulo, 110), mensaje: recorte([rec.detalle, rec.accion].filter(Boolean).join(' ')),
@@ -603,7 +605,36 @@ async function detRentabilidad(db, p) {
   return out.slice(0, 2);
 }
 
-const DETECTORES = [detTurnoSinAbrir, detCajaAbierta, detSinVentasHoy, detRitmo, detNicole, detERM, detLluvia, detRentabilidad, detBriefing, detDatosViejos, detSinDatos, detResumenDiario];
+// Fugas de plata (caja + rentabilidad): cada fuga ACTIVA llega como aviso y abre esa fuga en /fugas.
+// No avisa las que ya estan "en seguimiento", "resueltas" o "descartadas", ni las que estan incluidas en otra
+// fuga (ej. la suba de mercaderia ya esta dentro de "precios atrasados"): asi no se repite lo mismo dos veces.
+async function detFugas(db, p) {
+  const { reloj } = p;
+  if (reloj.hora < 9 || reloj.hora >= 20) return [];
+  let r = null;
+  try {
+    const fn = (p.opts.fuentes && p.opts.fuentes.fugas) || (() => require('./fugas').calcularFugas(p.negocioId, db, {
+      ahora: p.opts.ahora,
+      fuentes: { rentabilidad: () => fuente(p, 'rentabilidad') },
+    }));
+    r = await fn(p.negocioId);
+  } catch (e) { console.error('[VIGILANTE] fugas negocio', p.negocioId, e.message); return []; }
+  if (!r || !Array.isArray(r.fugas)) return [];
+  const out = [];
+  for (const f of r.fugas.filter((x) => x.estado === 'activa' && x.incluida_en !== 'precios' && x.monto > 0).sort((a, b) => b.monto - a.monto)) {
+    const caja = f.fuente === 'caja';
+    out.push({
+      tipo: 'fuga', contexto: recorte(f.id + (caja ? '|s' + semanaDe(reloj.hoy) : ''), 110),
+      pref: caja ? 'alertas_criticas' : 'alertas_medias', prioridad: caja ? 2 : 3,
+      titulo: recorte(f.titulo, 110),
+      mensaje: recorte(pesos(f.monto) + ' en los ' + String(f.periodo || '').replace(/^últimos /, 'últimos ') + '. ' + (f.evidencia[0] || '') + ' Cómo cerrarla: ' + (f.como_corregir[0] || '')),
+      url: '/fugas?id=' + encodeURIComponent(f.id), boton: 'Ver la fuga',
+    });
+  }
+  return out.slice(0, 2);
+}
+
+const DETECTORES = [detTurnoSinAbrir, detCajaAbierta, detSinVentasHoy, detRitmo, detNicole, detERM, detLluvia, detFugas, detRentabilidad, detBriefing, detDatosViejos, detSinDatos, detResumenDiario];
 
 // ─── Un negocio ─────────────────────────────────────────────────────────────
 
