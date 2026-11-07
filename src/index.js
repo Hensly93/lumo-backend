@@ -72,6 +72,14 @@ try {
 }
 
 try {
+  const fugasRoutes = require("./routes_fugas");
+  app.use("/api/fugas", fugasRoutes);
+  console.log("Fugas OK");
+} catch(e) {
+  console.error("Fugas ERROR:", e.message);
+}
+
+try {
   const mpRoutes = require("./routes_mp");
   app.use("/api/mp", mpRoutes);
   console.log("MP OAuth OK");
