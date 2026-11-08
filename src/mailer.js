@@ -10,7 +10,7 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-const FROM = process.env.SMTP_FROM || "LUMO <noreply@lumo.app>";
+const FROM = process.env.SMTP_FROM || "LumoBi <lumobusinessintel@gmail.com>";
 const BASE_URL = process.env.FRONTEND_URL || "https://lumo-psi.vercel.app";
 const AÑO = new Date().getFullYear();
 
@@ -19,7 +19,7 @@ const AÑO = new Date().getFullYear();
 function logoBlock() {
   return `
   <div style="margin-bottom:36px;">
-    <span style="font-size:26px;font-weight:800;color:#E8F4FF;letter-spacing:-1px;font-family:system-ui,sans-serif;">LUMO</span><span style="display:inline-block;width:5px;height:5px;background:#38BDF8;border-radius:50%;margin-left:3px;margin-bottom:6px;vertical-align:middle;"></span>
+    <span style="font-size:26px;font-weight:800;color:#E8F4FF;letter-spacing:-1px;font-family:system-ui,sans-serif;">LumoBi</span><span style="display:inline-block;width:5px;height:5px;background:#38BDF8;border-radius:50%;margin-left:3px;margin-bottom:6px;vertical-align:middle;"></span>
     <div style="width:80px;height:1px;background:linear-gradient(90deg,transparent,#38BDF8,transparent);margin-top:6px;"></div>
   </div>`;
 }
@@ -28,9 +28,9 @@ function footerBlock(extra = "") {
   return `
   <div style="margin-top:48px;padding-top:20px;border-top:1px solid #0E2340;">
     ${extra ? `<p style="color:#4A7A9B;font-size:13px;line-height:1.6;margin:0 0 16px;">${extra}</p>` : ""}
-    <p style="color:#4A7A9B;font-size:13px;margin:0 0 4px;font-weight:600;">El equipo de Lumo</p>
+    <p style="color:#4A7A9B;font-size:13px;margin:0 0 4px;font-weight:600;">El equipo de LumoBi</p>
     <p style="color:#1E3A5F;font-size:11px;font-family:monospace;letter-spacing:1px;margin:0;">
-      LUMO · BETA · ${AÑO}
+      LumoBi · BETA · ${AÑO}
     </p>
   </div>`;
 }

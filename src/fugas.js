@@ -70,10 +70,10 @@ async function fugasDeCaja(negocioId, db, ahora) {
     const donde = (nGrupos > 1 && g.sucursal ? g.sucursal + ' · ' : '') + 'turno ' + g.turno;
     const sinFalta = fa.filter((x, i) => x === 0 && !g.act[i].gasto_inesperado).length;
     const evidencia = [
-      conFalta.length + ' de ' + g.act.length + ' cierres del turno ' + g.turno + ' terminaron con plata de menos en la caja (últimos ' + DIAS + ' días).',
+      conFalta.length + ' de ' + g.act.length + ' cierres del turno ' + g.turno + ' terminaron con plata de menos en la caja.',
       'Faltante típico por cierre: ' + fmt(mediana(conFalta)) + '. El peor: ' + fmt(Math.max.apply(null, conFalta)) + '.',
     ];
-    if (sinFalta > 0) evidencia.push('Los otros ' + sinFalta + ' cierres del mismo turno cerraron sin diferencia relevante: el problema no es general, es de este turno.');
+    if (sinFalta > 0) evidencia.push('Los otros ' + sinFalta + ' cierres del mismo turno cerraron sin diferencia relevante.');
     if (g.prev.length >= MIN_TURNOS_CON_FALTANTE) {
       evidencia.push('En los ' + DIAS + ' días anteriores el faltante de este turno fue ' + fmt(totalPrev) + '.');
     }
@@ -82,7 +82,7 @@ async function fugasDeCaja(negocioId, db, ahora) {
       categoria: 'caja',
       categoria_label: 'Caja',
       donde,
-      titulo: 'Faltan ' + fmt(total) + ' en la caja del turno ' + g.turno,
+      titulo: 'Faltaron ' + fmt(total) + ' en la caja del turno ' + g.turno + ' en ' + DIAS + ' días',
       monto: Math.round(total),
       monto_rango: null, // es la suma real de las diferencias de cierre, no una estimacion
       monto_tipo: 'medido',

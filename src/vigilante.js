@@ -627,7 +627,7 @@ async function detFugas(db, p) {
       tipo: 'fuga', contexto: recorte(f.id + (caja ? '|s' + semanaDe(reloj.hoy) : ''), 110),
       pref: caja ? 'alertas_criticas' : 'alertas_medias', prioridad: caja ? 2 : 3,
       titulo: recorte(f.titulo, 110),
-      mensaje: recorte(pesos(f.monto) + ' en los ' + String(f.periodo || '').replace(/^últimos /, 'últimos ') + '. ' + (f.evidencia[0] || '') + ' Cómo cerrarla: ' + (f.como_corregir[0] || '')),
+      mensaje: recorte((String(f.titulo).includes(pesos(f.monto)) ? '' : pesos(f.monto) + ' en los ' + String(f.periodo || '') + '. ') + (f.evidencia[0] || '') + ' Cómo cerrarla: ' + (f.como_corregir[0] || '')),
       url: '/fugas?id=' + encodeURIComponent(f.id), boton: 'Ver la fuga',
     });
   }

@@ -4,7 +4,7 @@ const ACCIONES = {
   METRICA_BAJA_ticket_promedio: 'Comparar el ticket promedio del período con el historial del turno. Verificar si se aplicaron descuentos no autorizados.',
   METRICA_ALTA_ticket_promedio: 'Verificar que el alza refleje precios actualizados. Si hay discrepancias, revisar el proceso de registro.',
   METRICA_BAJA_ventas_por_turno: 'Cruzar el total del turno con el dinero en caja. Verificar si existen operaciones no registradas.',
-  METRICA_ALTA_ventas_por_turno: 'Confirmar que el volumen corresponde a actividad real. Comparar con el stock consumido en el período.',
+  METRICA_ALTA_ventas_por_turno: 'Confirmar si hubo un evento, una promoción o un pedido grande en ese turno. Si no hubo, revisar que no haya ventas cargadas dos veces.',
   METRICA_BAJA_ratio_efectivo: 'Auditar el arqueo de efectivo del período. Verificar que la clasificación de métodos de pago sea correcta.',
   METRICA_ALTA_ratio_efectivo: 'Revisar la tipificación de pagos electrónicos. Verificar que no exista efectivo sin registrar.',
 };
@@ -69,14 +69,29 @@ function generarInsightMetrica(alerta) {
     : metrica === 'ratio_efectivo' ? 'proporción de pagos en efectivo'
     : metrica.replace(/_/g, ' ');
 
-  const direccion = desvio_porcentaje < 0 ? 'por debajo' : 'por encima';
-  const referenciaTexto = capa_origen === 'CAPA1_SECTOR' ? 'el benchmark del sector'
-    : capa_origen === 'CAPA2_PROPIO' ? 'el historial propio del negocio'
-    : 'la referencia combinada del sector e historial propio';
+  const act = Number(valor_actual), esp = Number(valor_esperado);
+  const hayNumeros = isFinite(act) && isFinite(esp) && esp !== 0;
+  const bajo = hayNumeros ? act < esp : desvio_porcentaje < 0;
+  const direccion = bajo ? 'por debajo' : 'por encima';
+  const referenciaTexto = capa_origen === 'CAPA1_SECTOR' ? 'del benchmark del sector'
+    : capa_origen === 'CAPA2_PROPIO' ? 'del historial propio del negocio'
+    : 'de la referencia combinada del sector y el historial propio';
 
-  const descripcion = `Inconsistencia operativa en ${metricaTexto}: el valor actual (${valor_actual}) está ${Math.abs(desvio_porcentaje)}% ${direccion} de ${referenciaTexto} (${valor_esperado}).`;
+  const esPesos = metrica === 'ticket_promedio' || metrica === 'ventas_por_turno';
+  const esPct = metrica === 'ratio_efectivo';
+  const pesos = (n) => '$' + Math.round(Number(n)).toLocaleString('es-AR');
+  const fmtVal = (n) => {
+    if (n === null || n === undefined || n === '') return 'sin dato';
+    const x = Number(n);
+    if (!isFinite(x)) return String(n);
+    if (esPesos) return pesos(x);
+    if (esPct) return Math.round(x <= 1 ? x * 100 : x) + '%';
+    return String(Math.round(x * 100) / 100);
+  };
+  const difPesos = esPesos && hayNumeros ? ` Son ${pesos(Math.abs(esp - act))} ${bajo ? 'menos' : 'más'}.` : '';
+  const descripcion = `Inconsistencia operativa en ${metricaTexto}: el valor actual (${fmtVal(valor_actual)}) está ${Math.round(Math.abs(desvio_porcentaje))}% ${direccion} ${referenciaTexto} (${fmtVal(valor_esperado)}).${difPesos}`;
   const contexto = `Esta señal fue corroborada por al menos dos indicadores simultáneos.`;
-  const accion_recomendada = getAccion(tipo, metrica);
+  const accion_recomendada = ACCIONES[`METRICA_${bajo ? 'BAJA' : 'ALTA'}_${metrica}`] || getAccion(tipo, metrica);
 
   return {
     descripcion,
