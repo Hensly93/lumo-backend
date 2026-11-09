@@ -1,0 +1,58 @@
+// plan_gate.js — Estado del plan (prueba / activo / vencido) y bloqueo de lo que no es la vista resumida.
+// El plan es del DUEÑO del negocio: socios y empleados siguen el plan del negocio.
+// Si algo falla al consultar, NO se bloquea a nadie (mejor dejar pasar que dejar a un cliente afuera por un error nuestro).
+
+const PERMITIDAS = ['/api/auth', '/api/plan', '/api/usuario'];   // con el plan vencido solo se puede entrar, ver el plan y manejar la cuenta
+const TTL_MS = 30000;
+const cache = new Map();
+
+function bd() { return require('./db'); }
+
+async function estadoPlan(db, negocioId, opts) {
+  const o = opts || {};
+  const k = String(negocioId);
+  const c = cache.get(k);
+  if (!o.sinCache && c && Date.now() - c.t < TTL_MS) return c.v;
+  const r = await (db || bd()).query(
+    `SELECT u.subscription_status AS st,
+            u.trial_fin::text AS trial_fin,
+            (u.trial_fin IS NOT NULL AND u.trial_fin <= NOW()) AS trial_vencido,
+            CASE WHEN u.trial_fin IS NULL THEN NULL
+                 ELSE CEIL(EXTRACT(EPOCH FROM (u.trial_fin - NOW())) / 86400.0)::int END AS dias
+     FROM negocio_usuarios nu JOIN usuarios u ON u.id = nu.usuario_id
+     WHERE nu.negocio_id = $1 AND nu.rol = 'owner' AND nu.activo = true
+     LIMIT 1`, [negocioId]);
+  let v;
+  const f = r.rows[0];
+  if (!f) v = { estado: 'activa', dias_restantes: null, trial_fin: null, sin_vencimiento: true };
+  else if (f.st === 'expired') v = { estado: 'vencida', dias_restantes: 0, trial_fin: f.trial_fin, sin_vencimiento: false };
+  else if (f.st === 'trial') {
+    if (f.trial_fin === null) v = { estado: 'trial', dias_restantes: null, trial_fin: null, sin_vencimiento: true };
+    else if (f.trial_vencido) v = { estado: 'vencida', dias_restantes: 0, trial_fin: f.trial_fin, sin_vencimiento: false };
+    else v = { estado: 'trial', dias_restantes: Math.max(1, f.dias), trial_fin: f.trial_fin, sin_vencimiento: false };
+  } else v = { estado: 'activa', dias_restantes: null, trial_fin: null, sin_vencimiento: true };   // activa y cualquier otro estado: no se bloquea
+  cache.set(k, { t: Date.now(), v });
+  return v;
+}
+
+function invalidar(negocioId) { if (negocioId === undefined) cache.clear(); else cache.delete(String(negocioId)); }
+
+async function verificarPlan(req, res, next) {
+  try {
+    const url = String(req.originalUrl || req.url || '').split('?')[0];
+    if (PERMITIDAS.some((p) => url === p || url.startsWith(p + '/'))) return next();
+    const est = await estadoPlan(null, req.user && req.user.negocio_id);
+    if (est.estado === 'vencida') {
+      return res.status(402).json({
+        error: 'plan_vencido',
+        mensaje: 'Tu prueba terminó. Activá tu plan para seguir usando LumoBi. Tus datos están guardados.',
+        plan: est,
+      });
+    }
+  } catch (e) {
+    console.error('[PLAN] no se pudo verificar el plan:', e.message);
+  }
+  next();
+}
+
+module.exports = { estadoPlan, verificarPlan, invalidar, PERMITIDAS };

@@ -51,4 +51,16 @@ function authWithQuery(req, res, next) {
   }
 }
 
-module.exports = { auth, authWithQuery };
+// Con el plan vencido solo se puede entrar, ver el plan y manejar la cuenta (ver plan_gate.js)
+const { verificarPlan } = require('./plan_gate');
+function conPlan(fn) {
+  return function (req, res, next) {
+    fn(req, res, function (err) {
+      if (err) return next(err);
+      if (!req.user) return next();
+      verificarPlan(req, res, next);
+    });
+  };
+}
+
+module.exports = { auth: conPlan(auth), authWithQuery: conPlan(authWithQuery) };

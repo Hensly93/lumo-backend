@@ -33,6 +33,7 @@ try {
 
 try {
   const planRoutes = require("./routes_plan");
+  app.use("/api/plan", require("./routes_plan_estado"));
   app.use("/api/plan", planRoutes);
   console.log("Plan OK");
 } catch(e) {
