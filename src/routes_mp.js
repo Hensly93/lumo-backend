@@ -207,6 +207,14 @@ router.get('/importar', authWithQuery, async (req, res) => {
         const turno  = calcularTurno(fecha);
         const metodo = mapMetodoPago(pago.payment_type_id);
 
+        // Evita duplicar: el indice unico es por (usuario_id, mp_payment_id) y aca no se guarda usuario_id,
+        // asi que se controla por negocio antes de insertar.
+        const yaEsta = await pool.query(
+          'SELECT 1 FROM transacciones WHERE negocio_id = $1 AND mp_payment_id = $2 LIMIT 1',
+          [req.user.negocio_id, pago.id]
+        );
+        if (yaEsta.rowCount > 0) { omitidos++; continue; }
+
         const ins = await pool.query(
           `INSERT INTO transacciones(negocio_id, monto, tipo, empleado, turno, fecha, metodo_pago, mp_payment_id)
            VALUES($1,$2,$3,$4,$5,$6,$7,$8)
