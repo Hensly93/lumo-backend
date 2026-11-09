@@ -258,6 +258,18 @@ async function setup() {
       reason VARCHAR(255)
     )`);
 
+    // Prueba gratis: huellas anti-reingreso (solo hashes) y fechas de la prueba
+    await pool.query(`CREATE TABLE IF NOT EXISTS trial_huellas (
+      id SERIAL PRIMARY KEY,
+      tipo VARCHAR(10) NOT NULL,
+      hash VARCHAR(64) NOT NULL,
+      creado TIMESTAMP DEFAULT NOW(),
+      UNIQUE(tipo, hash)
+    )`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS trial_inicio TIMESTAMP`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS trial_fin TIMESTAMP`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS celular VARCHAR(20)`);
+
     // Poblar contexto_pais con eventos Argentina 2026 (idempotente)
     await pool.query(`
       INSERT INTO contexto_pais (fecha, tipo, intensidad, descripcion) VALUES

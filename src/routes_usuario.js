@@ -445,6 +445,9 @@ router.delete('/me', auth, async (req, res) => {
       [usuarioId, userData.email, restorationDate, 'user_requested']
     );
 
+    // La huella anti-reingreso queda guardada (solo hashes) para que no pueda volver a pedir la prueba gratis
+    await require('./trial').guardarHuella(client, { email: userData.email, celular: userData.celular, cuit: userData.cuit });
+
     // PASO 4: Borrar todos los negocios donde el usuario es owner
     // (CASCADE borrará automáticamente todo lo asociado a esos negocios)
     const rolesResult = await client.query(

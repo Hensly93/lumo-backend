@@ -10,7 +10,7 @@ const { enviarBienvenida, enviarRecupero, enviarConfirmacionReset } = require(".
 router.post("/register", async (req, res) => {
   const client = await pool.connect();
   try {
-    const { nombre, email, password, negocio, tipo_negocio, provincia, ciudad, zona } = req.body;
+    const { nombre, email, password, negocio, tipo_negocio, provincia, ciudad, zona, celular, cuit } = req.body;
     if (!nombre || !email || !password || !negocio) {
       return res.status(400).json({ error: "Campos obligatorios: nombre, email, password, negocio" });
     }
@@ -24,11 +24,15 @@ router.post("/register", async (req, res) => {
 
     await client.query('BEGIN');
 
+    // 0. ¿Este email, celular o CUIT ya uso la prueba gratis? (aunque haya borrado la cuenta)
+    const trial = require("./trial");
+    const yaUsoPrueba = await trial.yaUsoPrueba(client, { email, celular, cuit });
+
     // 1. Crear usuario
     const hash = await bcrypt.hash(password, 10);
     const userResult = await client.query(
-      "INSERT INTO usuarios(nombre,email,password,negocio) VALUES($1,$2,$3,$4) RETURNING id,nombre,email,onboarding_done",
-      [nombre, email, hash, negocio]
+      "INSERT INTO usuarios(nombre,email,password,negocio,subscription_status,trial_inicio,trial_fin,celular,cuit) VALUES($1,$2,$3,$4,$5,NOW(),$6,$7,$8) RETURNING id,nombre,email,onboarding_done,subscription_status,trial_fin",
+      [nombre, email, hash, negocio, yaUsoPrueba ? 'expired' : 'trial', yaUsoPrueba ? new Date() : trial.finDePrueba(), trial.normCelular(celular) ? String(celular).replace(/[^0-9+ ()-]/g, '').slice(0, 20) : null, trial.normCuit(cuit)]
     );
     const usuario = userResult.rows[0];
 
@@ -47,6 +51,9 @@ router.post("/register", async (req, res) => {
 
     await client.query('COMMIT');
 
+    // La huella queda guardada para siempre (solo hashes), aunque despues borre la cuenta
+    await trial.guardarHuella(pool, { email, celular, cuit }).catch(() => {});
+
     // 4. Generar JWT minimalista
     const token = jwt.sign(
       { id: usuario.id, negocio_id, rol: 'owner' },
@@ -57,7 +64,7 @@ router.post("/register", async (req, res) => {
     // Mail de bienvenida — fire-and-forget
     enviarBienvenida({ nombre, email, negocio, tipo_negocio }).catch(() => {});
 
-    res.json({ token, usuario: { ...usuario, negocio, tipo_negocio, negocio_id, rol: 'owner' } });
+    res.json({ token, usuario: { ...usuario, negocio, tipo_negocio, negocio_id, rol: 'owner' }, plan: { estado: usuario.subscription_status, trial_fin: usuario.trial_fin, ya_uso_prueba: yaUsoPrueba } });
   } catch (e) {
     await client.query('ROLLBACK');
     res.status(500).json({ error: e.message });
