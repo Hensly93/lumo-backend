@@ -9,6 +9,7 @@ const { actualizarBaselineNegocio } = require('./baseline_negocio');
 const { cruzarCatalogoConTicket } = require('./cruce_catalogo');
 const { auth } = require('./authMiddleware');
 const { calcularIndiceInflacion } = require('./indice_inflacion');
+const { listarCambios } = require('./cambios_precios');
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -275,7 +276,7 @@ router.post('/confirmar', auth, async (req, res) => {
 router.get('/', auth, async (req, res) => {
   try {
     const { categoria, q } = req.query;
-    let query = `SELECT id, nombre, categoria, precio_venta, precio_costo, unidad, updated_at
+    let query = `SELECT id, nombre, categoria, precio_venta, precio_costo, unidad, updated_at, codigo_barras
                  FROM productos WHERE negocio_id=$1 AND activo=true`;
     const params = [req.user.negocio_id];
 
@@ -291,6 +292,17 @@ router.get('/', auth, async (req, res) => {
 });
 
 // ─── GET /api/productos/categorias ───────────────────────────────────────────
+// ─── GET /api/productos/cambios-precios ───────────────────────────────────────
+// Cambios de precio y costo hechos por el equipo (ultimos 30 dias por defecto)
+router.get('/cambios-precios', auth, async (req, res) => {
+  try {
+    const dias = Math.min(Math.max(parseInt(req.query.dias) || 30, 1), 90);
+    res.json(await listarCambios(req.user.negocio_id, dias));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/categorias', auth, async (req, res) => {
   try {
     const r = await pool.query(
@@ -455,7 +467,7 @@ router.post('/', auth, async (req, res) => {
       `INSERT INTO productos(negocio_id, nombre, categoria, precio_venta, precio_costo, unidad, codigo_barras)
        VALUES($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT(negocio_id, nombre) WHERE activo=true
-       DO UPDATE SET precio_venta=EXCLUDED.precio_venta, codigo_barras=COALESCE(EXCLUDED.codigo_barras, productos.codigo_barras), activo=true, updated_at=NOW()
+       DO UPDATE SET precio_venta=COALESCE(EXCLUDED.precio_venta, productos.precio_venta), precio_costo=COALESCE(EXCLUDED.precio_costo, productos.precio_costo), categoria=COALESCE(EXCLUDED.categoria, productos.categoria), codigo_barras=COALESCE(EXCLUDED.codigo_barras, productos.codigo_barras), activo=true, updated_at=NOW()
        RETURNING *, (xmax = 0) AS insertado`,
       [req.user.negocio_id, nombre.trim(), categoria || null, precio_venta || null, precio_costo || null, unidad || 'unidad', codigo_barras || null]
     );

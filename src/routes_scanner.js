@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('./db');
 const { authTurno, crearSesionTurno, verificarBloqueoPin, registrarIntentoPin } = require('./sesion_empleado');
+const { registrarCambio } = require('./cambios_precios');
 
 // ─────────────────────────────────────────────────────────────────────
 // GET /api/scanner/producto?turno_id=X&codigo=Y
@@ -395,6 +396,74 @@ router.post('/producto', authTurno, async (req, res) => {
     if (e.code === '23505') {
       return res.status(409).json({ error: 'Ya existe un producto con ese nombre o código de barras en este negocio' });
     }
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// POST /api/scanner/producto/:id/precio
+// El empleado cambia el precio de venta o el costo de un producto.
+// Se aplica al instante y queda registrado con su nombre. Necesita el mismo permiso que cargar productos.
+// Body: { precio_venta?, precio_costo? }
+// ─────────────────────────────────────────────────────────────────────
+router.post('/producto/:id/precio', authTurno, async (req, res) => {
+  try {
+    const turno_id = req.turno.id;
+    const num = (v) => (v === undefined || v === null || v === '' ? null : Number(v));
+    const nuevoV = num(req.body.precio_venta);
+    const nuevoC = num(req.body.precio_costo);
+    if (nuevoV == null && nuevoC == null) return res.status(400).json({ error: 'Indicá el precio o el costo' });
+    if ((nuevoV != null && !(nuevoV > 0)) || (nuevoC != null && !(nuevoC > 0))) {
+      return res.status(400).json({ error: 'El precio tiene que ser un número mayor a cero' });
+    }
+
+    const turno = await pool.query(
+      `SELECT negocio_id, nombre_empleado FROM turnos_caja WHERE id=$1 AND estado='activo'`,
+      [turno_id]
+    );
+    if (turno.rows.length === 0) return res.status(400).json({ error: 'Turno no activo' });
+    const { negocio_id, nombre_empleado } = turno.rows[0];
+
+    const permiso = await pool.query(
+      `SELECT puede_cargar_productos FROM empleados_negocio WHERE negocio_id=$1 AND nombre=$2 AND activo=true`,
+      [negocio_id, nombre_empleado]
+    );
+    if (permiso.rows.length === 0 || !permiso.rows[0].puede_cargar_productos) {
+      return res.status(403).json({ error: 'No tenés permiso para cambiar precios. Pedile al dueño que te lo habilite.' });
+    }
+
+    const prod = await pool.query(
+      'SELECT id, nombre, precio_venta, precio_costo FROM productos WHERE id=$1 AND negocio_id=$2 AND activo=true',
+      [req.params.id, negocio_id]
+    );
+    if (prod.rows.length === 0) return res.status(404).json({ error: 'Producto no encontrado' });
+    const antes = prod.rows[0];
+
+    const upd = await pool.query(
+      `UPDATE productos SET precio_venta = COALESCE($1, precio_venta), precio_costo = COALESCE($2, precio_costo), updated_at = NOW()
+       WHERE id=$3 AND negocio_id=$4 RETURNING id, nombre, precio_venta`,
+      [nuevoV, nuevoC, antes.id, negocio_id]
+    );
+
+    const cambios = [];
+    if (nuevoV != null && Number(antes.precio_venta) !== nuevoV) cambios.push(['precio_venta', antes.precio_venta, nuevoV]);
+    if (nuevoC != null && Number(antes.precio_costo) !== nuevoC) cambios.push(['precio_costo', antes.precio_costo, nuevoC]);
+    for (const [campo, ant, nue] of cambios) {
+      await registrarCambio({
+        negocio_id, producto_id: antes.id, producto_nombre: antes.nombre, campo,
+        valor_anterior: ant, valor_nuevo: nue, empleado: nombre_empleado, turno_id, origen: 'empleado',
+      });
+    }
+    if (nuevoV != null && antes.precio_venta != null && Number(antes.precio_venta) !== nuevoV) {
+      await pool.query(
+        `INSERT INTO productos_historico_precios(producto_id, negocio_id, precio_anterior, precio_nuevo, origen)
+         VALUES($1,$2,$3,$4,'manual')`,
+        [antes.id, negocio_id, antes.precio_venta, nuevoV]
+      );
+    }
+
+    res.json({ producto: upd.rows[0], cambios: cambios.length });
+  } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
