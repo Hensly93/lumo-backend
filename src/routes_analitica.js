@@ -137,7 +137,8 @@ async function resumen(dias) {
       COUNT(DISTINCT visitante) FILTER (WHERE tipo='registro_envio')::int envio,
       COUNT(DISTINCT visitante) FILTER (WHERE tipo='registro_ok')::int registrados,
       COUNT(DISTINCT visitante) FILTER (WHERE tipo='pantalla' AND ruta IN ('/dashboard','/'))::int dashboard,
-      COUNT(DISTINCT visitante) FILTER (WHERE tipo='pantalla' AND ruta='/fugas')::int fugas
+      COUNT(DISTINCT visitante) FILTER (WHERE tipo='pantalla' AND ruta='/fugas')::int fugas,
+      COUNT(DISTINCT visitante) FILTER (WHERE tipo='click' AND d->>'t' ILIKE 'activar%')::int activar
     FROM analitica_eventos WHERE creado >= $1`);
   const [vuelven] = await q(`SELECT COUNT(*)::int n FROM (
       SELECT usuario_id FROM analitica_eventos WHERE creado >= $1 AND usuario_id IS NOT NULL
@@ -152,6 +153,7 @@ async function resumen(dias) {
     { paso: 'Vieron el dashboard', n: f.dashboard },
     { paso: 'Vieron Fugas', n: f.fugas },
     { paso: 'Volvieron otro día (usuarios)', n: vuelven.n },
+    { paso: 'Tocaron "Activar plan"', n: f.activar },
   ];
 
   const pantallas = await q(`
@@ -206,7 +208,21 @@ async function resumen(dias) {
     }
   } catch (_) { /* si la tabla no tiene esa columna, se muestran los ids */ }
 
-  return { dias, desde, totales: tot, embudo, pantallas, acciones, por_dia: porDia, origen, dispositivos, errores, scroll_landing: scroll, negocios };
+  // Cuentas y planes: se leen de la base de usuarios (el cobro automatico todavia no existe)
+  let cuentas = null;
+  const SQL_E = (filtro) => `SELECT COALESCE(subscription_status,'sin_estado') AS estado, COUNT(*)::int AS n,
+      COUNT(*) FILTER (WHERE trial_inicio >= $1)::int AS nuevas FROM usuarios ${filtro} GROUP BY 1 ORDER BY n DESC`;
+  const SQL_V = (filtro) => `SELECT COUNT(*)::int AS n FROM usuarios WHERE subscription_status='trial' AND trial_fin IS NOT NULL AND trial_fin < NOW() ${filtro}`;
+  for (const filtro of ["(rol IS NULL OR rol='owner')", null]) {
+    try {
+      const g = await pool.query(SQL_E(filtro ? 'WHERE ' + filtro : ''), [desde]);
+      const v = await pool.query(SQL_V(filtro ? 'AND ' + filtro : ''));
+      cuentas = { por_estado: g.rows, trial_vencido_sin_pagar: v.rows[0].n };
+      break;
+    } catch (_) { /* prueba sin el filtro de rol */ }
+  }
+
+  return { dias, desde, totales: tot, embudo, cuentas, pantallas, acciones, por_dia: porDia, origen, dispositivos, errores, scroll_landing: scroll, negocios };
 }
 
 router.get('/resumen', async (req, res) => {
