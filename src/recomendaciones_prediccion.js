@@ -73,7 +73,7 @@ async function recomendacionesDePrediccion(negocioId, sucursalId = null, db = po
   }
 
   // 3. Calendario: quincena / aguinaldo (suben) y feriados (bajan)
-  for (const tipo of ['quincena', 'aguinaldo', 'feriado']) {
+  for (const tipo of ['inicio_mes', 'aguinaldo', 'feriado']) {
     const dias = preds.filter(p => Math.abs(efectoDe(p, [tipo])) >= 0.03 * p.valor_predicho);
     if (!dias.length) continue;
     const efecto = dias.reduce((a, p) => a + efectoDe(p, [tipo]), 0);
@@ -81,16 +81,31 @@ async function recomendacionesDePrediccion(negocioId, sucursalId = null, db = po
     const pct = c ? Math.round(Math.abs(c.factor - 1) * 100) : null;
     const origen = c && c.fuente === 'aprendido' ? ' (aprendido de tus ventas)' : '';
     const sube = efecto > 0;
-    const nombre = tipo === 'quincena' ? 'cae quincena' : tipo === 'aguinaldo' ? 'se cobra aguinaldo' : 'es feriado';
+    const nombre = tipo === 'inicio_mes' ? 'es inicio de mes (se cobran los sueldos)' : tipo === 'aguinaldo' ? 'se cobra aguinaldo' : 'es feriado';
     recs.push({
       id: `PREDICCION_${tipo.toUpperCase()}`,
       categoria: 'prediccion',
       prioridad: 'media',
-      mensaje: `${listaDias(dias)} ${nombre}: en esos días tu negocio vende ${pct != null ? `un ${pct}% ` : ''}${sube ? 'más' : 'menos'}${origen}. NICOLE ya lo sumó a la predicción (${sube ? '+' : '−'}${fmt(efecto)}).`,
+      mensaje: `${dias.length > 3 ? nombreDia(dias[0]) + ' al ' + nombreDia(dias[dias.length - 1]) : listaDias(dias)} ${nombre}: en esos días tu negocio vende ${pct != null ? `un ${pct}% ` : ''}${sube ? 'más' : 'menos'}${origen}. NICOLE ya lo sumó a la predicción (${sube ? '+' : '−'}${fmt(efecto)}).`,
       accion: sube
         ? `Prepará caja, cambio y mercadería para ${dias.length > 1 ? 'esos días' : 'ese día'}.`
         : 'Revisá si conviene abrir con horario reducido o con menos personal.',
       datos: { fechas: dias.map(p => p.fecha_target), efecto_pesos: Math.round(efecto), factor: c?.factor ?? null },
+    });
+  }
+
+  // 3b. Fechas especiales (Dia de la Madre, etc.): referencia general de Argentina, todavia no aprendida de tus ventas
+  const especiales = new Map();
+  preds.forEach(p => (p.efectos || []).filter(e => String(e.variable).startsWith('especial:')).forEach(e => especiales.set(e.variable + p.fecha_target, { p, efecto: e.efecto_pesos, nombre: e.descripcion })));
+  for (const { p, efecto, nombre } of especiales.values()) {
+    const sube = efecto > 0;
+    recs.push({
+      id: 'PREDICCION_ESPECIAL_' + p.fecha_target,
+      categoria: 'prediccion',
+      prioridad: 'media',
+      mensaje: `${nombreDia(p)} es ${nombre}: NICOLE suma ${fmt(efecto)} ${sube ? 'más' : 'menos'} a la predicción. Es una referencia general de Argentina para esa fecha, todavía no aprendida de tus ventas.`,
+      accion: sube ? 'Prepará caja, cambio y mercadería para ese día, y fijate cómo te va para ajustar el año que viene.' : 'Revisá si conviene abrir con horario reducido o con menos personal.',
+      datos: { fecha: p.fecha_target, efecto_pesos: Math.round(efecto), nombre },
     });
   }
 

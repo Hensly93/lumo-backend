@@ -39,7 +39,12 @@ const MIN_DIAS_MODELO = 14;          // por debajo → modelo simple
 const Z_RANGO = 1.28;                // rango 80%
 
 const FACTORES_CLIMA = ['lluvia', 'calor_extremo', 'frio_extremo'];
-const FACTORES_CALENDARIO = ['quincena', 'feriado', 'aguinaldo'];
+const FACTORES_CALENDARIO = ['inicio_mes', 'feriado', 'aguinaldo'];
+// Argentina: el pico de consumo es a principio de mes (cobro de sueldos), no a mitad. Dias 1 a 7.
+const DIAS_INICIO_MES = 7;
+// Un factor solo se muestra como 'aprendido de tus ventas' si hay al menos este numero de dias observados
+const MIN_OBS_APRENDIDO = 5;
+const diaDelMes = (iso) => parseInt(iso.slice(8, 10), 10);
 
 const LAMBDA = {
   intercepto: 0,
@@ -55,7 +60,7 @@ const DESCRIPCION = {
   lluvia: 'Lluvia',
   calor_extremo: 'Calor extremo',
   frio_extremo: 'Frío extremo',
-  quincena: 'Quincena',
+  inicio_mes: 'Inicio de mes (cobro de sueldos)',
   feriado: 'Feriado',
   aguinaldo: 'Aguinaldo',
   tendencia: 'Tendencia de las últimas semanas',
@@ -319,12 +324,16 @@ async function calcularPrediccion(negocio_id, sucursal_id = null, db = pool, rie
       if (w !== 0) x[iDow[w]] = 1;
       if (FACTORES_CLIMA.includes(climaDia)) x[iFac[climaDia]] = 1;
       (calendario[dia] || []).forEach(e => { if (iFac[e.tipo] !== undefined) x[iFac[e.tipo]] = 1; });
+      if (diaDelMes(dia) <= DIAS_INICIO_MES) x[iFac.inicio_mes] = 1;
       x[iTen] = difDias(dia, hoy) / 30;
       return x;
     }
 
     const X = obs.map(o => fila(o.suc, o.dia, climaHist[`${o.suc}|${o.dia}`] || 'normal'));
-    const y = obs.map(o => Math.log(o.total));
+    // Fechas especiales (Dia de la Madre, etc.): ocurren una vez por ano, no se pueden aprender en 60 dias.
+    // Se usan como referencia general y se sacan de los datos de entrenamiento para no distorsionar el resto.
+    const especialDe = (dia) => (calendario[dia] || []).filter(e => e.tipo === 'fecha_especial').reduce((a, e) => a * (e.intensidad > 0 ? e.intensidad : 1), 1);
+    const y = obs.map(o => Math.log(o.total) - Math.log(especialDe(o.dia)));
 
     const A = Array.from({ length: P }, () => new Array(P).fill(0));
     const b = new Array(P).fill(0);
@@ -360,7 +369,7 @@ async function calcularPrediccion(negocio_id, sucursal_id = null, db = pool, rie
             factor: Math.round(Math.exp(beta[iFac[f]]) * 1000) / 1000,
             prior: Math.round(Math.exp(params[iFac[f]].prior) * 1000) / 1000,
             dias_observados: nCond[f],
-            fuente: nCond[f] === 0 ? 'prior' : 'aprendido',
+            fuente: nCond[f] < MIN_OBS_APRENDIDO ? 'prior' : 'aprendido',
           })),
           {
             variable: 'tendencia',
@@ -395,6 +404,8 @@ async function calcularPrediccion(negocio_id, sucursal_id = null, db = pool, rie
           climaPorSuc[sk] = pr ? pr : { clima: 'desconocido' };
           if (pr && FACTORES_CLIMA.includes(pr.clima)) pasos.push([pr.clima, beta[iFac[pr.clima]]]);
           eventos.forEach(e => { if (iFac[e.tipo] !== undefined) pasos.push([e.tipo, beta[iFac[e.tipo]]]); });
+          if (diaDelMes(f) <= DIAS_INICIO_MES) pasos.push(['inicio_mes', beta[iFac.inicio_mes]]);
+          eventos.filter(e => e.tipo === 'fecha_especial').forEach(e => pasos.push(['especial:' + (e.descripcion || 'Fecha especial'), Math.log(e.intensidad > 0 ? e.intensidad : 1)]));
           pasos.push(['tendencia', beta[iTen] * t]);
 
           pasos.forEach(([nombre, b]) => {
@@ -415,7 +426,7 @@ async function calcularPrediccion(negocio_id, sucursal_id = null, db = pool, rie
         Object.keys(efectos).forEach(n => { if (Math.abs(efectos[n]) < umbral) base += efectos[n]; });
         const listaEfectos = Object.keys(efectos)
           .filter(n => Math.abs(efectos[n]) >= umbral)
-          .map(n => ({ variable: n, descripcion: DESCRIPCION[n] || n, efecto_pesos: r0(efectos[n]) }));
+          .map(n => ({ variable: n, descripcion: n.startsWith('especial:') ? n.slice(9) : (DESCRIPCION[n] || n), efecto_pesos: r0(efectos[n]) }));
 
         predicciones.push({
           fecha_target: f,
