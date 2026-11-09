@@ -426,7 +426,7 @@ async function calcularPrediccion(negocio_id, sucursal_id = null, db = pool, rie
         Object.keys(efectos).forEach(n => { if (Math.abs(efectos[n]) < umbral) base += efectos[n]; });
         const listaEfectos = Object.keys(efectos)
           .filter(n => Math.abs(efectos[n]) >= umbral)
-          .map(n => ({ variable: n, descripcion: n.startsWith('especial:') ? n.slice(9) : (DESCRIPCION[n] || n), efecto_pesos: r0(efectos[n]) }));
+          .map(n => ({ variable: n, descripcion: n.startsWith('especial:') ? n.slice(9) + ' (referencia general)' : (DESCRIPCION[n] || n), efecto_pesos: r0(efectos[n]) }));
 
         predicciones.push({
           fecha_target: f,
