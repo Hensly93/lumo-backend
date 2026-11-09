@@ -26,7 +26,7 @@ router.get('/producto', authTurno, async (req, res) => {
 
     const negocio_id = turno.rows[0].negocio_id;
     const producto = await pool.query(
-      'SELECT * FROM productos WHERE negocio_id=$1 AND codigo_barras=$2',
+      'SELECT id, nombre, categoria, precio_venta, unidad, codigo_barras FROM productos WHERE negocio_id=$1 AND codigo_barras=$2',
       [negocio_id, codigo]
     );
 
@@ -444,6 +444,10 @@ router.post('/producto/:id/precio', authTurno, async (req, res) => {
        WHERE id=$3 AND negocio_id=$4 RETURNING id, nombre, precio_venta`,
       [nuevoV, nuevoC, antes.id, negocio_id]
     );
+
+    if (nuevoV != null) {
+      await pool.query('UPDATE carrito_items SET precio_unitario = $1 WHERE turno_id = $2 AND producto_id = $3', [nuevoV, turno_id, antes.id]);
+    }
 
     const cambios = [];
     if (nuevoV != null && Number(antes.precio_venta) !== nuevoV) cambios.push(['precio_venta', antes.precio_venta, nuevoV]);
