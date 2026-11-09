@@ -10,7 +10,8 @@ async function calcularAciertos(pool, negocio_id, sucursal_id = null, dias = 30)
   const r = await pool.query(
     `WITH pred AS (
        SELECT DISTINCT ON (fecha_target::date)
-              fecha_target::date AS dia, valor_predicho::float AS predicho, fecha_prediccion::date AS hecha
+              fecha_target::date AS dia, valor_predicho::float AS predicho, fecha_prediccion::date AS hecha,
+              (senales_usadas::jsonb ->> 'rango_min')::float AS rmin, (senales_usadas::jsonb ->> 'rango_max')::float AS rmax
        FROM predicciones_negocio
        WHERE negocio_id = $1
          AND sucursal_id IS NOT DISTINCT FROM $2::integer
@@ -26,7 +27,7 @@ async function calcularAciertos(pool, negocio_id, sucursal_id = null, dias = 30)
          AND (fecha - INTERVAL '3 hours')::date >= (NOW() - INTERVAL '3 hours')::date - $3::integer
        GROUP BY 1
      )
-     SELECT to_char(p.dia, 'YYYY-MM-DD') AS fecha, p.predicho, v.vendido, (p.dia - p.hecha) AS anticipacion
+     SELECT to_char(p.dia, 'YYYY-MM-DD') AS fecha, p.predicho, v.vendido, (p.dia - p.hecha) AS anticipacion, p.rmin, p.rmax
      FROM pred p JOIN vr v ON v.dia = p.dia
      WHERE v.vendido > 0
      ORDER BY p.dia DESC`,
@@ -35,7 +36,7 @@ async function calcularAciertos(pool, negocio_id, sucursal_id = null, dias = 30)
   const detalle = r.rows.map(x => {
     const predicho = Math.round(Number(x.predicho));
     const vendido = Math.round(Number(x.vendido));
-    return { fecha: x.fecha, predicho, vendido, error_pct: Math.round(((predicho - vendido) / vendido) * 1000) / 10, anticipacion: Number(x.anticipacion) };
+    return { fecha: x.fecha, predicho, vendido, error_pct: Math.round(((predicho - vendido) / vendido) * 1000) / 10, anticipacion: Number(x.anticipacion), dentro_rango: (x.rmin == null || x.rmax == null) ? null : (vendido >= Number(x.rmin) && vendido <= Number(x.rmax)) };
   });
   const n = detalle.length;
   if (n < MIN_DIAS) return { dias: n, minimo: MIN_DIAS, detalle };
@@ -48,6 +49,8 @@ async function calcularAciertos(pool, negocio_id, sucursal_id = null, dias = 30)
     error_medio_pct: prom(abs),
     sesgo_pct: prom(detalle.map(x => x.error_pct)),
     acertados: detalle.filter(x => Math.abs(x.error_pct) <= TOLERANCIA * 100).length,
+    con_rango: detalle.filter(x => x.dentro_rango !== null).length,
+    en_rango: detalle.filter(x => x.dentro_rango === true).length,
     detalle,
   };
 }

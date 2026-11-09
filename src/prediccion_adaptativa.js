@@ -529,7 +529,7 @@ async function calcularPrediccion(negocio_id, sucursal_id = null, db = pool, rie
           `INSERT INTO predicciones_negocio
              (negocio_id, sucursal_id, fecha_prediccion, fecha_target, valor_predicho, confianza, senales_usadas, horizonte)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [negocio_id, sucursal_id, hoy, p.fecha_target, p.valor_predicho, p.confianza, JSON.stringify(p.senales_usadas), p.horizonte]
+          [negocio_id, sucursal_id, hoy, p.fecha_target, p.valor_predicho, p.confianza, JSON.stringify({ ...p.senales_usadas, rango_min: p.rango_min, rango_max: p.rango_max }), p.horizonte]
         );
       }
     }
