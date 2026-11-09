@@ -176,6 +176,12 @@ async function calcularFugas(negocioId, db = pool, opts = {}) {
   const avisos = [];
   try { fugas = fugas.concat(await fugasDeCaja(negocioId, db, ahora)); }
   catch (e) { avisos.push('caja: ' + e.message); }
+  let mpEvaluado = false;
+  try {
+    const mp = await require('./fugas_mp').fugasDeMercadoPago(negocioId, db, ahora);
+    mpEvaluado = mp.evaluado;
+    fugas = fugas.concat(mp.fugas);
+  } catch (e) { avisos.push('mercadopago: ' + e.message); }
   try { fugas = fugas.concat(fugasDeRentabilidad(await fuentes.rentabilidad(negocioId))); }
   catch (e) { avisos.push('rentabilidad: ' + e.message); }
 
@@ -207,7 +213,7 @@ async function calcularFugas(negocioId, db = pool, opts = {}) {
     periodo: 'últimos ' + DIAS + ' días',
     nota: 'El total no suma dos veces lo mismo: lo que ya está incluido en otra fuga o es consecuencia de otras se muestra pero no se suma.',
   };
-  return { generado: ahora.toISOString(), resumen, fugas, avisos, pendientes_de_datos: pendientes() };
+  return { generado: ahora.toISOString(), resumen, fugas, avisos, pendientes_de_datos: pendientes().filter((p) => !(p.id === 'mp_vs_caja' && mpEvaluado)) };
 }
 
 function pendientes() {
