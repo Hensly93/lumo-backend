@@ -6,6 +6,7 @@ const { actualizarBaselineNegocio, getBaselineNegocio } = require('./baseline_ne
 const { getBenchmarkSector, normalizarTipoNegocio, TIPOS_VALIDOS } = require('./benchmarks_sector');
 const { calcularPesos } = require('./benchmark_hibrido');
 const { calcularPrediccion } = require('./prediccion_adaptativa');
+const { calcularAciertos } = require('./aciertos_prediccion');
 const { generarMensajePrediccion } = require('./prediccion_mensaje');
 const { generarRecomendaciones } = require('./recomendaciones');
 const { gestionarAlertas, registrarFeedback } = require('./alert_manager');
@@ -193,6 +194,17 @@ router.patch('/perfil', auth, async (req, res) => {
 });
 
 // GET /api/predicciones — S9: motor adaptativo W1/W2/W3 + mensaje NICOLE
+// GET /api/predicciones/aciertos - historial: lo que NICOLE predijo contra lo que se vendio
+router.get('/predicciones/aciertos', auth, async (req, res) => {
+  try {
+    const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
+    const r = await calcularAciertos(pool, req.user.negocio_id, sucursalId, req.query.dias);
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/predicciones', auth, async (req, res) => {
   try {
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
