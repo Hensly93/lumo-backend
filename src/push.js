@@ -38,7 +38,7 @@ async function notificarUsuario(usuarioId, payload, db, tipo = null) {
 
     // Si está desactivado, salir sin enviar
     if (!enabled) {
-      return;
+      return 0;
     }
   }
 
@@ -49,6 +49,7 @@ async function notificarUsuario(usuarioId, payload, db, tipo = null) {
     [usuarioId]
   );
 
+  let entregados = 0;
   for (const row of subsRes.rows) {
     const subscription = {
       endpoint: row.endpoint,
@@ -56,6 +57,7 @@ async function notificarUsuario(usuarioId, payload, db, tipo = null) {
     };
     try {
       await webpush.sendNotification(subscription, JSON.stringify(payload));
+      entregados++;
     } catch (e) {
       if (e.statusCode === 410 || e.statusCode === 404) {
         // Suscripción expirada o inválida — eliminar
@@ -65,6 +67,7 @@ async function notificarUsuario(usuarioId, payload, db, tipo = null) {
       }
     }
   }
+  return entregados;
 }
 
 async function notificarTodos(usuarioIds, payload, db) {

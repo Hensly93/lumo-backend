@@ -685,17 +685,23 @@ async function procesarNegocio(db, u, ahora, reloj, opts) {
     if (cupo <= 0 || enEstaCorrida >= MAX_AVISOS_CORRIDA) break;
     if (opts.dry) { resultado.enviados.push({ tipo: a.tipo, contexto: a.contexto, titulo: a.titulo, mensaje: a.mensaje, url: a.url, simulado: true }); cupo--; enEstaCorrida++; continue; }
     const canales = [];
+    let estadoPush = 'sin_entregar', estadoMail = 'no_enviado';
     try {
-      await opts.notificar(usuarioId, { title: a.titulo, body: a.mensaje, url: a.url }, db, a.pref);
-      canales.push('push');
-    } catch (e) { /* sin suscripcion o sin claves: seguimos con el email */ }
+      const n = await opts.notificar(usuarioId, { title: a.titulo, body: a.mensaje, url: a.url }, db, a.pref);
+      // Solo cuenta como entregado si al menos un celular lo recibio (n indefinido = notificador de prueba)
+      if (n === undefined || n > 0) { canales.push('push'); estadoPush = 'entregado'; }
+      else estadoPush = 'sin_suscripcion_o_apagado';
+    } catch (e) { estadoPush = 'error: ' + e.message; }
     try {
       const ok = await opts.email({
         nombre: u.nombre, email: u.email, negocio: u.negocio_nombre,
         titulo: a.titulo, mensaje: a.mensaje, url: BASE_URL + a.url, boton: a.boton,
       });
-      if (ok) canales.push('email');
-    } catch (e) { console.error('[VIGILANTE] email', e.message); }
+      if (ok) { canales.push('email'); estadoMail = 'enviado'; }
+      else estadoMail = 'no_enviado (falta SMTP_USER o el email del dueño esta vacio)';
+    } catch (e) { estadoMail = 'ERROR: ' + e.message; console.error('[VIGILANTE] email', e.message); }
+    // Una linea por aviso: sirve para ver en los logs de Render que paso con cada canal
+    console.log('[VIGILANTE] aviso negocio=' + negocioId + ' tipo=' + a.tipo + ' push=' + estadoPush + ' mail=' + estadoMail);
     if (!canales.length) continue;                    // no llego por ningun lado: se reintenta en la proxima corrida
     await db.query(
       `INSERT INTO vigilante_envios(negocio_id, usuario_id, tipo, contexto, titulo, canales) VALUES($1,$2,$3,$4,$5,$6)`,
@@ -737,6 +743,7 @@ async function correrVigilante(db = pool, opts = {}) {
      WHERE n.deletion_scheduled_at IS NULL AND u.deletion_scheduled_at IS NULL
      ORDER BY n.id`
   );
+  console.log('[VIGILANTE] corrida ' + reloj.hoy + ' ' + Math.floor(reloj.hora) + 'h: ' + ng.rows.length + ' negocios');
   for (const u of ng.rows) {
     if (esCorreoDePrueba(u.email)) { resumen.omitidos_prueba = (resumen.omitidos_prueba || 0) + 1; continue; }
     resumen.negocios++;
@@ -749,6 +756,7 @@ async function correrVigilante(db = pool, opts = {}) {
       resumen.detalle.push({ negocio_id: u.negocio_id, error: e.message });
     }
   }
+  console.log('[VIGILANTE] fin de corrida: avisos enviados=' + resumen.enviados + ' negocios revisados=' + resumen.negocios);
   return resumen;
 }
 
