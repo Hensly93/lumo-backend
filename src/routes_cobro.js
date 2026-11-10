@@ -144,17 +144,23 @@ async function sincronizar(preId) {
   try { require('./plan_gate').invalidar(nid); } catch (e) { /* sin cache */ }
 }
 
+// Estado que se guarda: un cobro de la cuota que Mercado Pago rechazo queda como 'rechazado' (con reintento o sin el)
+function estadoDe(ap) {
+  if (ap.payment && ap.payment.status === 'rejected') return 'rechazado';
+  return String(ap.status || '');
+}
+
 async function registrarPago(ap) {
   const idPago = String(ap.id);
   const ya = await pool.query('SELECT id FROM cobros_lumobi WHERE mp_pago_id=$1', [idPago]);
   if (ya.rows.length) {
-    await pool.query('UPDATE cobros_lumobi SET estado=$1 WHERE mp_pago_id=$2', [String(ap.status || ''), idPago]);
+    await pool.query('UPDATE cobros_lumobi SET estado=$1 WHERE mp_pago_id=$2', [estadoDe(ap), idPago]);
     return;
   }
   const n = await pool.query('SELECT id FROM negocios WHERE mp_subscription_id=$1', [String(ap.preapproval_id || '')]);
   await pool.query(
     'INSERT INTO cobros_lumobi(negocio_id, mp_preapproval_id, mp_pago_id, monto, estado) VALUES($1,$2,$3,$4,$5)',
-    [n.rows[0] ? n.rows[0].id : null, String(ap.preapproval_id || ''), idPago, ap.transaction_amount || null, String(ap.status || '')]
+    [n.rows[0] ? n.rows[0].id : null, String(ap.preapproval_id || ''), idPago, ap.transaction_amount || null, estadoDe(ap)]
   );
 }
 

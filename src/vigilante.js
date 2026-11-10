@@ -634,7 +634,125 @@ async function detFugas(db, p) {
   return out.slice(0, 2);
 }
 
-const DETECTORES = [detTurnoSinAbrir, detCajaAbierta, detSinVentasHoy, detRitmo, detNicole, detERM, detLluvia, detFugas, detRentabilidad, detBriefing, detDatosViejos, detSinDatos, detResumenDiario];
+// ── Avisos del negocio con LumoBi: prueba, plan, cobro y Mercado Pago ──
+// Todos salen de datos reales: fechas del plan, cobros registrados por el webhook y el estado de la sincronizacion.
+
+async function detPrueba(db, p) {
+  const { u, reloj, ahora } = p;
+  if ((u.subscription_status !== 'trial' && u.subscription_status !== 'expired') || !u.trial_fin) return [];
+  if (reloj.hora < 9 || reloj.hora >= 21) return [];
+  const fin = new Date(u.trial_fin).getTime();
+  if (isNaN(fin)) return [];
+  const diaFin = new Date(fin).toISOString().slice(0, 10);
+  const resto = fin - ahora.getTime();
+  const url = '/ajustes', boton = 'Activar mi plan';
+  if (resto > 0 && u.subscription_status === 'trial') {
+    const dias = Math.ceil(resto / 86400000);
+    if (dias > 2) return [];
+    return [{
+      tipo: 'prueba_por_vencer', contexto: dias + 'd-' + diaFin, pref: 'alertas_medias', prioridad: 2,
+      titulo: dias === 1 ? 'Tu prueba gratuita termina en menos de 24 horas' : 'Te quedan 2 días de prueba gratuita',
+      mensaje: 'Para seguir viendo el detalle de tus fugas, tu caja y tus predicciones, activá tu plan desde Ajustes. Tus datos quedan guardados.',
+      url, boton,
+    }];
+  }
+  const pasaron = -resto / 86400000;
+  if (resto <= 0 && pasaron < 7) {
+    const tarde = pasaron >= 3;
+    return [{
+      tipo: 'prueba_terminada', contexto: (tarde ? '3d-' : 'fin-') + diaFin, pref: 'alertas_criticas', prioridad: tarde ? 4 : 1,
+      titulo: tarde ? 'Tus datos siguen guardados en LumoBi' : 'Tu prueba gratuita terminó',
+      mensaje: tarde
+        ? 'Pasaron unos días desde que terminó tu prueba. Activá tu plan desde Ajustes y volvés a ver el detalle de tus fugas, tu caja y tus predicciones.'
+        : 'Tus datos están guardados. Activá tu plan desde Ajustes para volver a ver el detalle de tus fugas, tu caja y tus predicciones.',
+      url, boton,
+    }];
+  }
+  return [];
+}
+
+async function detCancelacion(db, p) {
+  const { u, reloj } = p;
+  if (u.subscription_status !== 'cancelada' || !u.plan_fin) return [];
+  if (reloj.hora < 9 || reloj.hora >= 21) return [];
+  const dias = diasEntre(reloj.hoy, u.plan_fin);
+  const fecha = u.plan_fin.split('-').reverse().join('/');
+  if (dias >= 0 && dias <= 3) {
+    return [{
+      tipo: 'plan_por_terminar', contexto: u.plan_fin + '-' + dias, pref: 'alertas_medias', prioridad: 2,
+      titulo: dias === 0 ? 'Hoy es tu último día en LumoBi' : `Tu suscripción termina en ${dias} ${dias === 1 ? 'día' : 'días'}`,
+      mensaje: `Cancelaste tu suscripción: seguís usando LumoBi hasta el ${fecha}. Si querés seguir, reactivala desde Ajustes. Tus datos quedan guardados.`,
+      url: '/ajustes', boton: 'Reactivar',
+    }];
+  }
+  if (dias < 0 && dias >= -7) {
+    return [{
+      tipo: 'plan_terminado', contexto: u.plan_fin, pref: 'alertas_criticas', prioridad: 1,
+      titulo: 'Tu suscripción terminó',
+      mensaje: `Tu suscripción terminó el ${fecha}. Tus datos están guardados: reactivala desde Ajustes para volver a ver todo el detalle.`,
+      url: '/ajustes', boton: 'Reactivar',
+    }];
+  }
+  return [];
+}
+
+// Cobro rechazado: la cuota mas reciente quedo 'rechazado' (o 'recycling': Mercado Pago va a reintentar) en la ultima semana
+async function detPago(db, p) {
+  const { negocioId, u } = p;
+  const r = await db.query(
+    `SELECT mp_pago_id, estado FROM cobros_lumobi
+     WHERE negocio_id = $1 AND mp_pago_id IS NOT NULL
+     ORDER BY creado DESC LIMIT 1`, [negocioId]);
+  const c = r.rows[0];
+  if (!c || (c.estado !== 'rechazado' && c.estado !== 'recycling')) return [];
+  const reciente = await db.query(
+    `SELECT 1 FROM cobros_lumobi WHERE mp_pago_id = $1 AND creado > NOW() - INTERVAL '7 days'`, [c.mp_pago_id]);
+  if (!reciente.rows.length) return [];
+  const baja = u.subscription_status === 'expired';
+  return [{
+    tipo: 'cobro_rechazado', contexto: `${c.mp_pago_id}-${c.estado}-${u.subscription_status}`, pref: 'alertas_criticas', prioridad: 0,
+    titulo: baja ? 'Tu suscripción se dio de baja por falta de pago' : 'No pudimos cobrar tu suscripción',
+    mensaje: baja
+      ? 'Mercado Pago no pudo cobrar varias veces y dio de baja el débito automático. Tus datos están guardados: reactivá tu plan desde Ajustes.'
+      : 'Mercado Pago no pudo cobrar tu suscripción de LumoBi y va a reintentar en los próximos días. Revisá que tu tarjeta tenga saldo o cambiá el medio de pago en Mercado Pago para no perder el acceso.',
+    url: '/ajustes', boton: 'Ver mi suscripción',
+  }];
+}
+
+// Mercado Pago del negocio (la cuenta que conecto para ver sus ventas): token vencido o pagos sin actualizarse
+async function detMP(db, p) {
+  const { negocioId, reloj } = p;
+  if (reloj.hora < 9 || reloj.hora >= 21) return [];
+  const r = await db.query(
+    `SELECT s.ultimo_error,
+            (s.ultimo_ok IS NULL OR s.ultimo_ok < NOW() - INTERVAL '3 hours') AS sin_ok_reciente,
+            (s.ultimo_ok IS NULL OR s.ultimo_ok < NOW() - INTERVAL '24 hours') AS sin_ok_un_dia
+     FROM integraciones_mp i
+     JOIN sync_mp_estado s ON s.negocio_id = i.negocio_id
+     WHERE i.negocio_id = $1 LIMIT 1`, [negocioId]);
+  const f = r.rows[0];
+  if (!f) return [];                                    // sin Mercado Pago conectado o nunca sincronizo: no hay nada que avisar
+  const sem = semanaDe(reloj.hoy);
+  if (f.ultimo_error && f.sin_ok_reciente && /volver a conectar/i.test(f.ultimo_error)) {
+    return [{
+      tipo: 'mp_reconectar', contexto: 'sem-' + sem, pref: 'alertas_criticas', prioridad: 1,
+      titulo: 'Volvé a conectar tu Mercado Pago',
+      mensaje: 'Mercado Pago pidió que vuelvas a autorizar la conexión. Mientras tanto NICOLE no ve tus cobros nuevos y no puede compararlos con tu caja. Reconectalo desde Ajustes.',
+      url: '/ajustes', boton: 'Ir a Ajustes',
+    }];
+  }
+  if (f.sin_ok_un_dia) {
+    return [{
+      tipo: 'mp_sin_actualizar', contexto: 'sem-' + sem, pref: 'alertas_medias', prioridad: 3,
+      titulo: 'Tus pagos de Mercado Pago no se están actualizando',
+      mensaje: 'Hace más de un día que no llegan cobros nuevos de tu Mercado Pago. Si el problema sigue, volvé a conectar tu cuenta desde Ajustes.',
+      url: '/ajustes', boton: 'Ir a Ajustes',
+    }];
+  }
+  return [];
+}
+
+const DETECTORES = [detTurnoSinAbrir, detCajaAbierta, detSinVentasHoy, detRitmo, detNicole, detERM, detLluvia, detFugas, detRentabilidad, detBriefing, detDatosViejos, detSinDatos, detResumenDiario, detPago, detPrueba, detCancelacion, detMP];
 
 // ─── Un negocio ─────────────────────────────────────────────────────────────
 
@@ -736,7 +854,8 @@ async function correrVigilante(db = pool, opts = {}) {
   await asegurarTabla(db);
   const ng = await db.query(
     `SELECT n.id AS negocio_id, u.id AS usuario_id, u.nombre, u.email, u.negocio AS negocio_nombre,
-            u.notificaciones_config, u.created_at
+            u.notificaciones_config, u.created_at,
+            u.subscription_status, u.trial_fin, u.subscription_end_date::date::text AS plan_fin
      FROM negocios n
      JOIN negocio_usuarios nu ON nu.negocio_id = n.id AND nu.rol = 'owner' AND nu.activo = true
      JOIN usuarios u ON u.id = nu.usuario_id
@@ -760,4 +879,4 @@ async function correrVigilante(db = pool, opts = {}) {
   return resumen;
 }
 
-module.exports = { correrVigilante, relojAR, mediana, preferenciaActiva };
+module.exports = { correrVigilante, relojAR, mediana, preferenciaActiva, detPrueba, detCancelacion, detPago, detMP };
