@@ -16,6 +16,8 @@ const app = express();
 app.use(cors({
   origin: [
     "https://lumo-psi.vercel.app",
+    "https://lumobi.com.ar",
+    "https://www.lumobi.com.ar",
     "http://localhost:3000",
   ],
   credentials: true,
@@ -227,4 +229,9 @@ try {
 
 app.get("/api/health", (req, res) => res.json({ status: "ok", app: "Lumo", version: "2.0" }));
 const PORT = process.env.PORT || 5000;
+// Cambios chicos de base de datos ("si no existe"): se aplican solos al arrancar, sin frenar el servidor
+require('./migraciones_arranque').ejecutar()
+  .then(() => console.log('[migraciones] al dia'))
+  .catch(e => console.error('[migraciones] error:', e.message));
+
 app.listen(PORT, () => console.log("Lumo backend corriendo en puerto " + PORT));
