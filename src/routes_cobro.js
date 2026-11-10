@@ -51,7 +51,8 @@ router.get('/cobro', auth, async (req, res) => {
   try {
     const p = await precioDelNegocio(req.user.negocio_id);
     const est = await estadoPlan(pool, req.user.negocio_id);
-    res.json(Object.assign({}, p, { estado: est.estado, interna: !!est.interna }));
+    const u = await pool.query('SELECT email FROM usuarios WHERE id=$1', [req.user.id]);
+    res.json(Object.assign({}, p, { estado: est.estado, interna: !!est.interna, email: (u.rows[0] && u.rows[0].email) || '' }));
   } catch (e) {
     console.error('[COBRO] cobro:', e.message);
     res.status(500).json({ error: 'No se pudo calcular el precio' });
@@ -69,7 +70,13 @@ router.post('/checkout', auth, async (req, res) => {
     if (est.estado === 'activa') return res.status(400).json({ error: 'ya_activa' });
     const p = await precioDelNegocio(nid);
     if (p.plan === 'empresarial') return res.status(400).json({ error: 'empresarial' });
+    // emailMP: Mercado Pago solo acepta el email de una cuenta de Mercado Pago (un alias de Gmail, por ejemplo, devuelve "User bad request")
     const u = await pool.query('SELECT email FROM usuarios WHERE id=$1', [uid]);
+    const pedido = String((req.body && req.body.email) || '').trim().toLowerCase();
+    if (pedido && !(pedido.length <= 120 && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(pedido))) {
+      return res.status(400).json({ error: 'Ese email no parece válido. Revisalo y probá de nuevo.' });
+    }
+    const payerEmail = pedido || (u.rows[0] && u.rows[0].email);
     const origen = ORIGENES.includes(req.body && req.body.origen) ? req.body.origen : ORIGENES[0];
     const r = await fetch(MP_API + '/preapproval', {
       method: 'POST',
@@ -77,7 +84,7 @@ router.post('/checkout', auth, async (req, res) => {
       body: JSON.stringify({
         reason: 'LumoBi - abono mensual',
         external_reference: uid + ':' + nid,
-        payer_email: u.rows[0] && u.rows[0].email,
+        payer_email: payerEmail,
         back_url: origen + '/?pago=ok',
         status: 'pending',
         auto_recurring: { frequency: 1, frequency_type: 'months', transaction_amount: p.total, currency_id: 'ARS' },
@@ -85,6 +92,10 @@ router.post('/checkout', auth, async (req, res) => {
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.init_point) {
+      if (r.status === 400 && j && j.message === 'User bad request') {
+        console.error('[COBRO] checkout MP: email rechazado por Mercado Pago');
+        return res.status(400).json({ error: 'Mercado Pago no aceptó el email ' + payerEmail + '. Tiene que ser el email de tu cuenta de Mercado Pago, la misma con la que vas a pagar.' });
+      }
       console.error('[COBRO] checkout MP:', r.status, JSON.stringify(j).slice(0, 300));
       return res.status(502).json({ error: 'No pudimos abrir Mercado Pago. Probá de nuevo en un rato.' });
     }
