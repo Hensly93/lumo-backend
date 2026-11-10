@@ -30,7 +30,7 @@ async function estadoPlan(db, negocioId, opts) {
     if (f.trial_fin === null) v = { estado: 'trial', dias_restantes: null, trial_fin: null, sin_vencimiento: true };
     else if (f.trial_vencido) v = { estado: 'vencida', dias_restantes: 0, trial_fin: f.trial_fin, sin_vencimiento: false };
     else v = { estado: 'trial', dias_restantes: Math.max(1, f.dias), trial_fin: f.trial_fin, sin_vencimiento: false };
-  } else v = { estado: 'activa', dias_restantes: null, trial_fin: null, sin_vencimiento: true };   // activa y cualquier otro estado: no se bloquea
+  } else v = { interna: f.st === 'interna', estado: 'activa', dias_restantes: null, trial_fin: null, sin_vencimiento: true };   // activa y cualquier otro estado: no se bloquea
   cache.set(k, { t: Date.now(), v });
   return v;
 }

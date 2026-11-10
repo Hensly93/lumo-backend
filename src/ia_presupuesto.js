@@ -9,6 +9,11 @@
 //   IA_PRECIO_PLAN_ARS   precio mensual de referencia en pesos (por defecto 45000)
 //   IA_PRESUPUESTO_PCT   porcentaje del abono para IA (por defecto 0.10)
 //   IA_DOLAR_ARS         dolar tarjeta de referencia (por defecto 2000)
+//   IA_TRIAL_PRESUPUESTO_USD  presupuesto de IA de toda la prueba gratis (por defecto 0.60)
+//   IA_TRIAL_TOPE_USD         tope duro de la prueba gratis: pasado esto el chat avisa que hay que activar el plan (por defecto 1.00)
+//
+// Cuentas "internas" (subscription_status = 'interna'): sin limite de IA, nunca se bloquean ni se cobran.
+// Prueba gratis de 5 dias: presupuesto propio y tope duro, porque ese cliente todavia no paga.
 const { AsyncLocalStorage } = require('async_hooks');
 const pool = require('./db');
 
@@ -19,6 +24,8 @@ const PRECIO_PLAN_ARS = Number(process.env.IA_PRECIO_PLAN_ARS) || 45000;
 const PCT = Number(process.env.IA_PRESUPUESTO_PCT) || 0.10;
 const DOLAR = Number(process.env.IA_DOLAR_ARS) || 2000;
 const PRESUPUESTO_USD = (PRECIO_PLAN_ARS * PCT) / DOLAR; // por negocio y por mes
+const TRIAL_USD = Number(process.env.IA_TRIAL_PRESUPUESTO_USD) || 0.60;   // toda la prueba gratis
+const TRIAL_TOPE_USD = Number(process.env.IA_TRIAL_TOPE_USD) || 1.00;     // tope duro de la prueba
 
 // Dolares por millon de tokens [entrada, salida]. Lo que no se reconoce se cuenta como Sonnet (conservador).
 function preciosDe(modelo) {
@@ -68,31 +75,51 @@ const cache = new Map(); // negocio_id -> { valor, ts }
 const TTL_MS = 60 * 1000;
 const avisados = new Set();
 
-async function gastoMes(negocioId) {
-  const c = cache.get(negocioId);
+async function condicion(negocioId) {
+  try {
+    const est = await require('./plan_gate').estadoPlan(null, negocioId);
+    return { interna: !!est.interna, esTrial: est.estado === 'trial' && !est.sin_vencimiento };
+  } catch (e) {
+    return { interna: false, esTrial: false };
+  }
+}
+
+// En la prueba gratis se cuenta todo lo gastado; en un plan, lo del mes.
+async function gasto(negocioId, esTrial) {
+  const k = negocioId + ':' + (esTrial ? 't' : 'm');
+  const c = cache.get(k);
   if (c && Date.now() - c.ts < TTL_MS) return c.valor;
   await asegurarTabla();
   const r = await pool.query(
-    "SELECT COALESCE(SUM(costo_usd), 0) AS g FROM ia_uso WHERE negocio_id = $1 AND creado >= date_trunc('month', NOW())",
+    esTrial
+      ? 'SELECT COALESCE(SUM(costo_usd), 0) AS g FROM ia_uso WHERE negocio_id = $1'
+      : "SELECT COALESCE(SUM(costo_usd), 0) AS g FROM ia_uso WHERE negocio_id = $1 AND creado >= date_trunc('month', NOW())",
     [negocioId]
   );
   const valor = Number(r.rows[0].g);
-  cache.set(negocioId, { valor, ts: Date.now() });
+  cache.set(k, { valor, ts: Date.now() });
   return valor;
 }
 
-// Devuelve el modelo a usar: el preferido, o el economico si el negocio ya llego a su presupuesto del mes.
+// Devuelve el modelo a usar: el preferido, o el economico si el negocio ya llego a su presupuesto.
+//   - cuenta interna: siempre el preferido
+//   - prueba gratis: con opciones.bloquearSiTope devuelve null al llegar al tope duro (el que llama avisa que hay que activar el plan)
 // Si algo falla, devuelve el preferido (nunca frena una respuesta por un problema de este modulo).
-async function modeloPara(preferido, negocioId) {
+async function modeloPara(preferido, negocioId, opciones) {
   try {
     const id = negocioId || negocioActual();
-    if (!id || preferido === ECONOMICO) return preferido;
-    const g = await gastoMes(id);
-    if (g >= PRESUPUESTO_USD) {
-      const clave = id + ':' + new Date().toISOString().slice(0, 7);
+    if (!id) return preferido;
+    const { interna, esTrial } = await condicion(id);
+    if (interna) return preferido;
+    const g = await gasto(id, esTrial);
+    if (esTrial && opciones && opciones.bloquearSiTope && g >= TRIAL_TOPE_USD) return null;
+    if (preferido === ECONOMICO) return preferido;
+    const presupuesto = esTrial ? TRIAL_USD : PRESUPUESTO_USD;
+    if (g >= presupuesto) {
+      const clave = id + ':' + (esTrial ? 't' : new Date().toISOString().slice(0, 7));
       if (!avisados.has(clave)) {
         avisados.add(clave);
-        console.warn(`[ia] negocio ${id} llego a su presupuesto de IA del mes (USD ${g.toFixed(2)} de ${PRESUPUESTO_USD.toFixed(2)}): pasa al modelo economico`);
+        console.warn(`[ia] negocio ${id} llego a su presupuesto de IA (USD ${g.toFixed(2)} de ${presupuesto.toFixed(2)}${esTrial ? ', prueba gratis' : ''}): pasa al modelo economico`);
       }
       return ECONOMICO;
     }
@@ -115,8 +142,10 @@ function registrarUso({ funcion, modelo, usage, negocioId }) {
         [id, funcion || null, modelo || null, tin, tout, costo]
       ))
       .then(() => {
-        const c = id ? cache.get(id) : null;
-        if (c) c.valor += costo;
+        for (const suf of [':t', ':m']) {
+          const c = id ? cache.get(id + suf) : null;
+          if (c) c.valor += costo;
+        }
       })
       .catch(e => console.error('[ia] registrarUso:', e.message));
   } catch (e) {
@@ -141,4 +170,4 @@ async function resumenMes() {
   }));
 }
 
-module.exports = { correrConNegocio, negocioActual, modeloPara, registrarUso, resumenMes, costoUsd, PRESUPUESTO_USD, ECONOMICO };
+module.exports = { correrConNegocio, negocioActual, modeloPara, registrarUso, resumenMes, costoUsd, PRESUPUESTO_USD, TRIAL_USD, TRIAL_TOPE_USD, ECONOMICO };

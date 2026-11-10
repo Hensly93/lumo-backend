@@ -586,7 +586,11 @@ Predicción: ${predStr}`;
 
     while (finalText === null && iteraciones < MAX_ITERACIONES) {
       iteraciones++;
-      const modeloIA = await require('./ia_presupuesto').modeloPara('claude-sonnet-5');
+      const modeloIA = await require('./ia_presupuesto').modeloPara('claude-sonnet-5', null, { bloquearSiTope: true });
+      if (modeloIA === null) {
+        finalText = 'Llegaste al límite de consultas de la prueba gratis. Activá tu plan para seguir hablando con NICOLE.';
+        break;
+      }
 
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
