@@ -135,6 +135,7 @@ async function parsearConClaude(content) {
     max_tokens: 16000,
     messages: [{ role: 'user', content }],
   });
+  require('./ia_presupuesto').registrarUso({ funcion: 'importar_ventas', modelo: msg.model, usage: msg.usage });
 
   const text = msg.content[0].type === 'text' ? msg.content[0].text : '';
   // Si la respuesta se cortó a la mitad, nos quedamos con las transacciones completas que llegaron.
@@ -613,12 +614,13 @@ IMPORTANTE: Devolvé SOLO el JSON, sin markdown ni texto adicional.`;
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
     const msg = await anthropic.messages.create({
-      model: 'claude-sonnet-4-5',
+      model: await require('./ia_presupuesto').modeloPara('claude-sonnet-4-5'),
       max_tokens: 2048,
       messages: [{ role: 'user', content: prompt }],
     });
 
     const text = msg.content[0].type === 'text' ? msg.content[0].text : '';
+    require('./ia_presupuesto').registrarUso({ funcion: 'wow_moment', modelo: msg.model, usage: msg.usage });
     const match = text.match(/\{[\s\S]*\}/);
 
     if (!match) {

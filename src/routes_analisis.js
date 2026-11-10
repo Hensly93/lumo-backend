@@ -586,6 +586,7 @@ Predicción: ${predStr}`;
 
     while (finalText === null && iteraciones < MAX_ITERACIONES) {
       iteraciones++;
+      const modeloIA = await require('./ia_presupuesto').modeloPara('claude-sonnet-5');
 
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -595,7 +596,7 @@ Predicción: ${predStr}`;
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-5',
+          model: modeloIA,
           max_tokens: 400,
           system: systemPrompt,
           messages: currentMessages,
@@ -609,6 +610,8 @@ Predicción: ${predStr}`;
       }
 
       const data = await response.json();
+
+      require('./ia_presupuesto').registrarUso({ funcion: 'nicole_chat', modelo: data.model || modeloIA, usage: data.usage });
 
       if (data.stop_reason === 'tool_use') {
         const toolUseBlock = data.content.find(b => b.type === 'tool_use');

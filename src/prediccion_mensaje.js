@@ -58,6 +58,7 @@ function mensajeFallback(prediccion, negocio) {
 // ─── Llamada a Claude API ─────────────────────────────────────────────────────
 
 async function llamarClaude(userPrompt) {
+  const modeloIA = await require('./ia_presupuesto').modeloPara('claude-sonnet-5');
   const response = await fetch(ANTHROPIC_API_URL, {
     method: 'POST',
     headers: {
@@ -66,7 +67,7 @@ async function llamarClaude(userPrompt) {
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-5',
+      model: modeloIA,
       max_tokens: 300,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userPrompt }],
@@ -79,6 +80,7 @@ async function llamarClaude(userPrompt) {
   }
 
   const data = await response.json();
+  require('./ia_presupuesto').registrarUso({ funcion: 'prediccion_mensaje', modelo: data.model || modeloIA, usage: data.usage });
   return data.content?.find(b => b.type === 'text')?.text?.trim() ?? null;
 }
 
