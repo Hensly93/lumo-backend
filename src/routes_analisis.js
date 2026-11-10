@@ -516,7 +516,7 @@ router.post('/nicole/chat', auth, async (req, res) => {
 
       // Predicción activa más reciente
       pool.query(
-        `SELECT fecha_target, valor_predicho, confianza, horizonte, mensaje_nicole
+        `SELECT fecha_target, valor_predicho, confianza, horizonte, mensaje_nicole, senales_usadas
          FROM predicciones_negocio
          WHERE negocio_id=$1
            AND fecha_target >= CURRENT_DATE
@@ -553,11 +553,17 @@ router.post('/nicole/chat', auth, async (req, res) => {
 
     // Predicción activa
     const pred = predRes.rows[0];
+    let diasPred = null;
+    try {
+      const su = pred && (typeof pred.senales_usadas === 'string' ? JSON.parse(pred.senales_usadas) : pred.senales_usadas);
+      diasPred = su && su.dias_datos ? Number(su.dias_datos) : null;
+    } catch (e) { diasPred = null; }
+    const baseStr = diasPred ? `estimación basada en ${diasPred} días de ventas${diasPred < 14 ? ', todavía preliminar' : ''}` : 'estimación';
     const predStr = pred
-      ? `Próxima predicción: $${Math.round(pred.valor_predicho).toLocaleString('es-AR')} para ${pred.fecha_target} (confianza ${Math.round(pred.confianza * 100)}%, horizonte ${pred.horizonte})${pred.mensaje_nicole ? '. ' + pred.mensaje_nicole : ''}`
+      ? `Próxima predicción: $${Math.round(pred.valor_predicho).toLocaleString('es-AR')} para ${pred.fecha_target} (${baseStr}, horizonte ${pred.horizonte})${pred.mensaje_nicole ? '. ' + pred.mensaje_nicole : ''}`
       : 'sin predicción activa';
 
-    const systemPrompt = `Sos NICOLE, la IA de Lumo. Tu nombre es NICOLE, no sos ChatGPT ni Claude. Solo hablás sobre el negocio del dueño usando los datos reales que te paso. Español rioplatense informal, tono de socia de confianza, nunca decís fraude, siempre en pesos argentinos, máximo 5 líneas por respuesta. No sabés cómo se llama el dueño: nunca lo llames por un nombre ni inventes nombres de personas; los únicos nombres que podés usar son los de los empleados que aparecen en los datos. No uses emojis.
+    const systemPrompt = `Sos NICOLE, la IA de Lumo. Tu nombre es NICOLE, no sos ChatGPT ni Claude. Solo hablás sobre el negocio del dueño usando los datos reales que te paso. Español rioplatense informal, tono de socia de confianza, nunca decís fraude, siempre en pesos argentinos, máximo 5 líneas por respuesta. No sabés cómo se llama el dueño: nunca lo llames por un nombre ni inventes nombres de personas; los únicos nombres que podés usar son los de los empleados que aparecen en los datos. No uses emojis. Nunca sugieras que una persona robó, mintió o es culpable de algo: hablás de diferencias en la caja, turnos y días, no de culpables. Si los datos no alcanzan para afirmar algo, decilo con claridad (por ejemplo 'con lo que cargaste todavía no alcanza para saberlo') y no inventes números.
 
 DATOS DEL NEGOCIO (hoy ${new Date().toLocaleDateString('es-AR')}):
 Perfil: ${u.negocio || 'sin nombre'} · ${u.tipo_negocio || 'tipo desconocido'} · ${u.ciudad || 'sin ciudad'}${u.zona ? ` zona ${u.zona}` : ''}

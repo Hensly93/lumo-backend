@@ -28,9 +28,11 @@ function agregarPorTurno(transacciones) {
   const turnos = {};
 
   for (const tx of transacciones) {
-    const fecha = tx.fecha_hora
-      ? new Date(tx.fecha_hora).toISOString().slice(0, 10)
-      : "sin_fecha";
+    // La tabla transacciones guarda el instante en la columna "fecha" (UTC); se pasa al día argentino (UTC-3).
+    const instante = new Date(tx.fecha_hora || tx.fecha);
+    const fecha = isNaN(instante.getTime())
+      ? "sin_fecha"
+      : new Date(instante.getTime() - 3 * 3600 * 1000).toISOString().slice(0, 10);
     const turno = tx.turno || "sin_turno";
     const clave = `${fecha}_${turno}`;
 
@@ -76,18 +78,34 @@ function detectarAnomalias(turnosAgregados, umbralZScore = 2.0) {
   const metricas = ["ticket_promedio", "ratio_efectivo", "ventas_por_turno"];
   const resultados = [];
 
-  for (const metrica of metricas) {
-    const valores = turnosAgregados
-      .map((t) => t[metrica])
-      .filter((v) => !isNaN(v) && v !== null);
+  // Cada turno (mañana, tarde, noche) se compara contra SU propio historial, no contra los otros turnos.
+  // Si un turno tiene menos de MIN_TURNOS_BASE registros no se lo juzga: sin historial no hay "anormal".
+  const MIN_TURNOS_BASE = 5;
+  const porNombreTurno = {};
+  for (const t of turnosAgregados) {
+    const k = t.turno || "sin_turno";
+    (porNombreTurno[k] = porNombreTurno[k] || []).push(t);
+  }
 
-    const mediana = calcularMediana(valores);
-    const mad = calcularMAD(valores, mediana);
+  for (const metrica of metricas) {
+    const base = {};
+    for (const k of Object.keys(porNombreTurno)) {
+      const valores = porNombreTurno[k]
+        .map((t) => t[metrica])
+        .filter((v) => v !== null && v !== undefined && !isNaN(v));
+      if (valores.length < MIN_TURNOS_BASE) continue;
+      const med = calcularMediana(valores);
+      base[k] = { mediana: med, mad: calcularMAD(valores, med) };
+    }
 
     for (const turno of turnosAgregados) {
+      const b = base[turno.turno || "sin_turno"];
+      if (!b) continue;
       const valor = turno[metrica];
-      if (valor === null || isNaN(valor)) continue;
+      if (valor === null || valor === undefined || isNaN(valor)) continue;
 
+      const mediana = b.mediana;
+      const mad = b.mad;
       const zscore = robustZScore(valor, mediana, mad);
       const esAnomalia = Math.abs(zscore) > umbralZScore;
 

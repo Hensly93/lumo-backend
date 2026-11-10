@@ -20,22 +20,48 @@ const TOTAL_MODULOS = 6;
 // 60 pts por cobertura de métricas anómalas (0-3 métricas distintas),
 // 40 pts por magnitud del z-score más alto (normalizado a z=4 como techo).
 
-function calcularRiskScoreMotor(deteccion) {
-  if (!deteccion || deteccion.length === 0) return 0;
+// Solo se mira lo reciente (hoy y los 2 días anteriores, hora Argentina): un desvío de hace 3 semanas
+// no puede seguir abriendo la puerta de las alertas.
+const DIAS_RECIENTES = 3;
 
-  // Extraer z-scores por métrica
-  const getZ = (metrica) => {
-    const a = deteccion.find(d => d.metrica === metrica);
-    return a ? Math.abs(a.zscore || 0) : 0;
+function soloRecientes(deteccion) {
+  const hoy = new Date(Date.now() - 3 * 3600 * 1000);
+  const corte = new Date(hoy.getTime() - (DIAS_RECIENTES - 1) * 86400000).toISOString().slice(0, 10);
+  return (deteccion || []).filter(d => d.fecha && d.fecha !== 'sin_fecha' && d.fecha >= corte);
+}
+
+// Una señal "de pérdida": ventas o ticket que BAJAN (una venta alta no es una fuga) o efectivo que se desvía.
+function esSeñalDePerdida(d) {
+  return !!d.es_anomalia && (d.metrica === 'ratio_efectivo' || d.direccion === 'bajo');
+}
+
+// true si en un mismo turno hay al menos 2 métricas distintas con señal de pérdida
+function hayTurnoConDosSeñales(lista) {
+  const porTurno = {};
+  for (const d of (lista || []).filter(esSeñalDePerdida)) {
+    (porTurno[d.clave] = porTurno[d.clave] || new Set()).add(d.metrica);
+  }
+  return Object.values(porTurno).some(s => s.size >= 2);
+}
+
+function calcularRiskScoreMotor(deteccion) {
+  const recientes = soloRecientes(deteccion);
+  if (recientes.length === 0) return 0;
+
+  // Mayor desvío reciente por métrica, solo si pasó el umbral de anomalía. Ventas y ticket solo cuentan si bajan.
+  const getZ = (metrica, soloBajas) => {
+    const zs = recientes
+      .filter(d => d.es_anomalia && d.metrica === metrica && (!soloBajas || d.direccion === 'bajo'))
+      .map(d => Math.abs(d.zscore || 0));
+    return zs.length ? Math.max(...zs) : 0;
   };
 
-  const z_ticket = getZ('ticket_promedio');
-  const z_ratio  = getZ('ratio_efectivo');
-  const z_ventas = getZ('ventas_turno');
+  const z_ticket = getZ('ticket_promedio', true);
+  const z_ratio  = getZ('ratio_efectivo', false);
+  const z_ventas = getZ('ventas_por_turno', true);
 
-  // Consistencia: 1 si hay al menos 2 señales anómalas simultáneas, 0 si no
-  const anomalias = deteccion.filter(d => d.es_anomalia);
-  const consistencia = anomalias.length >= 2 ? 1 : 0;
+  // Consistencia: 1 si en un mismo turno hay al menos 2 señales distintas, 0 si no
+  const consistencia = hayTurnoConDosSeñales(recientes) ? 1 : 0;
 
   // Fórmula inamovible Lumo
   const loss_score = (z_ticket * 0.3) + (z_ratio * 0.4) + (z_ventas * 0.2) + (consistencia * 0.1);
@@ -138,9 +164,9 @@ async function orchestrate({ negocio_id, uid = null, turno_actual = null }) {
   // Cruce 1 — CUSUM + Detección
   // Confirma cuando la deriva sostenida (CUSUM) coincide con anomalías
   // simultáneas en al menos 2 métricas distintas de deteccion.js.
-  const anomalias            = (deteccion || []).filter(a => a.es_anomalia);
+  const anomalias            = soloRecientes(deteccion).filter(esSeñalDePerdida);
   const cusum_en_alarma      = cusum?.tiene_alarma ?? false;
-  const confirmacion_cruzada = cusum_en_alarma && anomalias.length >= 2;
+  const confirmacion_cruzada = cusum_en_alarma && hayTurnoConDosSeñales(anomalias);
 
   // Scores parciales y final
   const risk_score_motor = calcularRiskScoreMotor(deteccion);
