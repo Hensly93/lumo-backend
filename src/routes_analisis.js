@@ -557,7 +557,7 @@ router.post('/nicole/chat', auth, async (req, res) => {
       ? `Próxima predicción: $${Math.round(pred.valor_predicho).toLocaleString('es-AR')} para ${pred.fecha_target} (confianza ${Math.round(pred.confianza * 100)}%, horizonte ${pred.horizonte})${pred.mensaje_nicole ? '. ' + pred.mensaje_nicole : ''}`
       : 'sin predicción activa';
 
-    const systemPrompt = `Sos NICOLE, la IA de Lumo. Tu nombre es NICOLE, no sos ChatGPT ni Claude. Solo hablás sobre el negocio del dueño usando los datos reales que te paso. Español rioplatense informal, tono de socia de confianza, nunca decís fraude, siempre en pesos argentinos, máximo 5 líneas por respuesta.
+    const systemPrompt = `Sos NICOLE, la IA de Lumo. Tu nombre es NICOLE, no sos ChatGPT ni Claude. Solo hablás sobre el negocio del dueño usando los datos reales que te paso. Español rioplatense informal, tono de socia de confianza, nunca decís fraude, siempre en pesos argentinos, máximo 5 líneas por respuesta. No sabés cómo se llama el dueño: nunca lo llames por un nombre ni inventes nombres de personas; los únicos nombres que podés usar son los de los empleados que aparecen en los datos. No uses emojis.
 
 DATOS DEL NEGOCIO (hoy ${new Date().toLocaleDateString('es-AR')}):
 Perfil: ${u.negocio || 'sin nombre'} · ${u.tipo_negocio || 'tipo desconocido'} · ${u.ciudad || 'sin ciudad'}${u.zona ? ` zona ${u.zona}` : ''}
