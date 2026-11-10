@@ -22,36 +22,40 @@ async function logAudit(usuarioId, accion, detalles = null, req = null) {
 }
 
 // Helper: Cancelar suscripción en Mercado Pago
+// Mercado Pago da de baja una suscripción con PUT /preapproval/{id} y { status: 'cancelled' } (DELETE no existe).
 async function cancelarSuscripcionMP(mp_subscription_id) {
   const MP_ACCESS_TOKEN = process.env.MP_ACCESS_TOKEN;
 
   if (!mp_subscription_id || !MP_ACCESS_TOKEN) {
-    console.warn('⚠️ No se puede cancelar en MP: falta ID o token');
+    console.warn('No se puede cancelar en MP: falta ID o token');
     return { success: false, mensaje: 'No se pudo contactar a Mercado Pago' };
   }
 
+  const url = `https://api.mercadopago.com/preapproval/${encodeURIComponent(mp_subscription_id)}`;
+  const headers = {
+    'Authorization': `Bearer ${MP_ACCESS_TOKEN}`,
+    'Content-Type': 'application/json',
+  };
+
   try {
-    const response = await fetch(
-      `https://api.mercadopago.com/v1/preapproval/${mp_subscription_id}`,
-      {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${MP_ACCESS_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
+    const response = await fetch(url, { method: 'PUT', headers, body: JSON.stringify({ status: 'cancelled' }) });
 
     if (response.ok) {
-      console.log('✅ Suscripción cancelada en MP:', mp_subscription_id);
+      console.log('[COBRO] suscripcion cancelada en MP:', mp_subscription_id);
       return { success: true, mensaje: 'Suscripción cancelada en Mercado Pago' };
-    } else {
-      const errorData = await response.json().catch(() => ({}));
-      console.error('❌ Error MP:', response.status, errorData);
-      return { success: false, mensaje: `Error al cancelar en Mercado Pago (${response.status})` };
     }
+
+    const errorData = await response.json().catch(() => ({}));
+    console.error('[COBRO] error MP al cancelar:', response.status, JSON.stringify(errorData).slice(0, 300));
+
+    // Si ya estaba cancelada del lado de Mercado Pago, cuenta como cancelada
+    const actual = await fetch(url, { headers }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    if (actual && actual.status === 'cancelled') {
+      return { success: true, mensaje: 'Ya estaba cancelada en Mercado Pago' };
+    }
+    return { success: false, mensaje: `Error al cancelar en Mercado Pago (${response.status})` };
   } catch (error) {
-    console.error('❌ Error cancelarSuscripcionMP:', error.message);
+    console.error('[COBRO] error de conexion al cancelar en MP:', error.message);
     return { success: false, mensaje: 'Error de conexión con Mercado Pago' };
   }
 }
@@ -269,56 +273,83 @@ router.patch('/notificaciones', auth, async (req, res) => {
 });
 
 // ─── PATCH /api/usuario/me/subscription/cancel ─────────────────────────────
+// Estados que maneja el plan: trial, active (paga), cancelada (cancelo pero tiene acceso hasta subscription_end_date),
+// expired (vencida) e interna (nunca se toca).
 router.patch('/me/subscription/cancel', auth, async (req, res) => {
   try {
     const usuarioId = req.user.id;
+    const negocioId = req.user.negocio_id;
 
-    // Verificar que existe y obtener estado actual
+    if (req.user.rol && req.user.rol !== 'owner') {
+      return res.status(403).json({ success: false, error: 'Solo el dueño del negocio puede cancelar la suscripción.' });
+    }
+
     const user = await pool.query(
-      `SELECT id, subscription_status, cancelled_at, mp_subscription_id FROM usuarios WHERE id=$1`,
+      `SELECT id, subscription_status, subscription_end_date, cancelled_at, mp_subscription_id FROM usuarios WHERE id=$1`,
       [usuarioId]
     );
     if (user.rows.length === 0) {
-      return res.status(404).json({ error: 'Usuario no encontrado' });
+      return res.status(404).json({ success: false, error: 'Usuario no encontrado' });
     }
-
     const userData = user.rows[0];
+    const st = userData.subscription_status;
 
-    // Si ya está cancelada, no hacer nada
-    if (userData.subscription_status === 'cancelled') {
+    if (st === 'interna') {
+      return res.status(400).json({ success: false, error: 'Tu cuenta es interna: no tiene una suscripción para cancelar.' });
+    }
+    if (st === 'cancelada' || st === 'cancelled') {
       return res.status(400).json({
         success: false,
         error: 'La suscripción ya está cancelada',
-        datos: { subscription_status: 'cancelled', cancelled_at: userData.cancelled_at },
+        datos: { subscription_status: 'cancelada', cancelled_at: userData.cancelled_at },
       });
     }
+    if (st !== 'active' && st !== 'activa') {
+      return res.status(400).json({ success: false, error: 'No tenés una suscripción activa para cancelar.' });
+    }
 
-    // PASO 1: Si existe suscripción en MP, cancelarla primero
-    let mpResult = { success: true, mensaje: 'N/A' };
-    if (userData.mp_subscription_id) {
-      mpResult = await cancelarSuscripcionMP(userData.mp_subscription_id);
+    // El ID de la suscripcion de Mercado Pago se guarda en el negocio (lo escribe el cobro)
+    const neg = await pool.query('SELECT mp_subscription_id FROM negocios WHERE id=$1', [negocioId]);
+    const subId = userData.mp_subscription_id || (neg.rows[0] && neg.rows[0].mp_subscription_id) || null;
+
+    // PASO 1: dar de baja el debito automatico en Mercado Pago. Si falla NO se marca como cancelada:
+    // seguiria cobrando mientras la pantalla dice "cancelada".
+    let mpResult = { success: true, mensaje: 'Sin suscripción en Mercado Pago' };
+    if (subId) {
+      mpResult = await cancelarSuscripcionMP(subId);
       if (!mpResult.success) {
-        console.warn('⚠️ MP cancelation failed pero continuamos:', mpResult.mensaje);
-        // No bloqueamos por error en MP, solo log
+        await logAudit(usuarioId, 'subscription_cancel_failed', { mp_result: mpResult }, req);
+        return res.status(502).json({
+          success: false,
+          error: 'No pudimos dar de baja el débito en Mercado Pago, así que no cancelamos nada. Probá de nuevo en unos minutos.',
+        });
       }
     }
 
-    // Calcular fecha de fin (hoy + 30 días = período de gracia)
-    const endDate = new Date();
-    endDate.setDate(endDate.getDate() + 30);
+    // PASO 2: el acceso sigue hasta el fin del periodo que ya pago (proximo cobro). Si no hay fecha, 30 dias.
+    let endDate = userData.subscription_end_date ? new Date(userData.subscription_end_date) : null;
+    if (!endDate || isNaN(endDate.getTime()) || endDate.getTime() < Date.now()) {
+      endDate = new Date();
+      endDate.setDate(endDate.getDate() + 30);
+    }
 
-    // Actualizar usuario: marcar como cancelado
     const result = await pool.query(
       `UPDATE usuarios SET
         subscription_status = 'cancelada',
         subscription_end_date = $1,
         cancelled_at = NOW()
        WHERE id=$2
-       RETURNING id, email, subscription_status, subscription_end_date, cancelled_at, mp_subscription_id`,
+       RETURNING id, email, subscription_status, subscription_end_date, cancelled_at`,
       [endDate, usuarioId]
     );
+    try {
+      await pool.query(
+        "UPDATE negocios SET subscription_status='cancelada', subscription_end_date=$1, updated_at=NOW() WHERE id=$2",
+        [endDate, negocioId]
+      );
+    } catch (e) { console.error('[COBRO] no se pudo marcar el negocio como cancelado:', e.message); }
+    try { require('./plan_gate').invalidar(negocioId); } catch (e) { /* sin cache */ }
 
-    // Loguear acción
     await logAudit(usuarioId, 'subscription_cancelled', {
       subscription_status: 'cancelada',
       subscription_end_date: endDate,
@@ -327,7 +358,7 @@ router.patch('/me/subscription/cancel', auth, async (req, res) => {
 
     res.json({
       success: true,
-      mensaje: `Suscripción cancelada. Acceso disponible hasta ${endDate.toLocaleDateString('es-AR')}.`,
+      mensaje: `Suscripción cancelada. Seguís usando LumoBi hasta el ${endDate.toLocaleDateString('es-AR')}.`,
       mercado_pago: mpResult,
       datos: result.rows[0],
     });
@@ -335,7 +366,7 @@ router.patch('/me/subscription/cancel', auth, async (req, res) => {
     console.error('cancel-subscription error:', e.message);
     res.status(500).json({
       success: false,
-      error: 'Error cancelando suscripción: ' + e.message,
+      error: 'No pudimos cancelar la suscripción. Probá de nuevo en un rato.',
     });
   }
 });
@@ -368,6 +399,9 @@ router.delete('/me', auth, async (req, res) => {
     }
 
     const userData = userResult.rows[0];
+    // El ID de la suscripcion de Mercado Pago vive en el negocio
+    const negSub = await client.query('SELECT mp_subscription_id FROM negocios WHERE id=$1', [req.user.negocio_id]);
+    const mpSubId = userData.mp_subscription_id || (negSub.rows[0] && negSub.rows[0].mp_subscription_id) || null;
 
     // Verificar contraseña
     const passwordValid = await bcrypt.compare(password, userData.password);
@@ -390,7 +424,7 @@ router.delete('/me', auth, async (req, res) => {
     }
 
     // VALIDACIÓN 2: No permitir si tiene suscripción activa sin cancelar
-    if (userData.subscription_status === 'activa') {
+    if (userData.subscription_status === 'active' || userData.subscription_status === 'activa') {
       return res.status(403).json({
         success: false,
         error: 'Debes cancelar tu suscripción antes de borrar la cuenta. Usa PATCH /api/usuario/me/subscription/cancel',
@@ -399,13 +433,13 @@ router.delete('/me', auth, async (req, res) => {
 
     // VALIDACIÓN 3: Si existe suscripción en MP, cancelarla primero
     let mpDeletionResult = { success: true, mensaje: 'N/A' };
-    if (userData.mp_subscription_id) {
-      mpDeletionResult = await cancelarSuscripcionMP(userData.mp_subscription_id);
+    if (mpSubId) {
+      mpDeletionResult = await cancelarSuscripcionMP(mpSubId);
       if (!mpDeletionResult.success) {
         // No bloqueamos pero log la falla
         console.warn('⚠️ No se pudo cancelar suscripción en MP, pero continuamos con borrado local:', mpDeletionResult.mensaje);
         await logAudit(usuarioId, 'delete_mp_cancellation_failed', {
-          mp_subscription_id: userData.mp_subscription_id,
+          mp_subscription_id: mpSubId,
           error: mpDeletionResult.mensaje,
         }, req);
       }
@@ -415,7 +449,7 @@ router.delete('/me', auth, async (req, res) => {
     await client.query('BEGIN');
 
     // PASO 1: Si tiene suscripción cancelada, marcarla como expirada
-    if (userData.subscription_status === 'cancelled') {
+    if (userData.subscription_status === 'cancelled' || userData.subscription_status === 'cancelada') {
       await client.query(
         `UPDATE usuarios SET subscription_status='expired' WHERE id=$1`,
         [usuarioId]

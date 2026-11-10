@@ -67,7 +67,7 @@ router.post('/checkout', auth, async (req, res) => {
     const nid = req.user.negocio_id, uid = req.user.id;
     const est = await estadoPlan(pool, nid);
     if (est.interna) return res.status(400).json({ error: 'Tu cuenta es interna: no se cobra.' });
-    if (est.estado === 'activa') return res.status(400).json({ error: 'ya_activa' });
+    if (est.estado === 'activa' && !est.cancelada) return res.status(400).json({ error: 'ya_activa' });
     const p = await precioDelNegocio(nid);
     if (p.plan === 'empresarial') return res.status(400).json({ error: 'empresarial' });
     // emailMP: Mercado Pago solo acepta el email de una cuenta de Mercado Pago (un alias de Gmail, por ejemplo, devuelve "User bad request")
@@ -133,10 +133,15 @@ async function sincronizar(preId) {
     console.log('[COBRO] plan activado: negocio', nid);
   } else if (p.status === 'cancelled' || p.status === 'paused') {
     // Solo baja a quien estaba pagando; si el dueño canceló desde la app, ese flujo ya marcó su estado.
-    await pool.query("UPDATE usuarios SET subscription_status='expired' WHERE id=$1 AND subscription_status='active'", [uid]);
-    await pool.query("UPDATE negocios SET subscription_status='expired', updated_at=NOW() WHERE id=$1 AND subscription_status='active'", [nid]);
+    // Si todavia queda periodo pagado (fecha de fin en el futuro) pasa a "cancelada" y sigue hasta esa fecha; si no, vence ya.
+    const hoyAR = "(NOW() AT TIME ZONE 'America/Argentina/Buenos_Aires')::date";
+    await pool.query(
+      "UPDATE usuarios SET subscription_status = CASE WHEN subscription_end_date IS NOT NULL AND subscription_end_date::date >= " + hoyAR + " THEN 'cancelada' ELSE 'expired' END WHERE id=$1 AND subscription_status='active'", [uid]);
+    await pool.query(
+      "UPDATE negocios SET subscription_status = CASE WHEN subscription_end_date IS NOT NULL AND subscription_end_date::date >= " + hoyAR + " THEN 'cancelada' ELSE 'expired' END, updated_at=NOW() WHERE id=$1 AND subscription_status='active'", [nid]);
     console.log('[COBRO] plan dado de baja (' + p.status + '): negocio', nid);
   }
+  try { require('./plan_gate').invalidar(nid); } catch (e) { /* sin cache */ }
 }
 
 async function registrarPago(ap) {
