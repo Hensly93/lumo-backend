@@ -8,6 +8,7 @@
 
 const express = require('express');
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 const router = express.Router();
 const pool = require('./db');
 
@@ -115,6 +116,25 @@ function claveOk(req) {
   const a = crypto.createHash('sha256').update(h).digest();
   const b = crypto.createHash('sha256').update(esperada).digest();
   return crypto.timingSafeEqual(a, b) ? 'ok' : 'mal';
+}
+
+// Entrar con tu propia cuenta de LumoBi (email y contrasena de siempre).
+// Solo pasan los mails que estan en ADMIN_EMAILS (variable de Render, separados por coma).
+// Si no, se prueba con la clave tecnica de antes (ANALITICA_KEY / VIGILANTE_KEY / INTERNAL_KEY).
+async function accesoOk(req) {
+  const t = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  const admins = String(process.env.ADMIN_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  if (admins.length && process.env.JWT_SECRET && t.split('.').length === 3) {
+    try {
+      const p = jwt.verify(t, process.env.JWT_SECRET);
+      if (p && p.id && !p.purpose) {
+        const r = await pool.query('SELECT email FROM usuarios WHERE id=$1', [p.id]);
+        const em = String((r.rows[0] && r.rows[0].email) || '').trim().toLowerCase();
+        if (em && admins.includes(em)) return 'ok';
+      }
+    } catch { /* no es un token valido: se prueba con la clave tecnica */ }
+  }
+  return claveOk(req);
 }
 
 async function resumen(dias) {
@@ -263,7 +283,7 @@ async function resumen(dias) {
 router.get('/resumen', async (req, res) => {
   try {
     if (!pasaFreno('r:' + ipDe(req), 30, 60000)) return res.status(429).json({ error: 'Demasiados intentos' });
-    const c = claveOk(req);
+    const c = await accesoOk(req);
     if (c === 'sin_clave') return res.status(503).json({ error: 'Falta configurar ANALITICA_KEY en el servidor' });
     if (c !== 'ok') return res.status(401).json({ error: 'Clave incorrecta' });
     const dias = Math.min(90, Math.max(1, parseInt(req.query.dias, 10) || 7));
