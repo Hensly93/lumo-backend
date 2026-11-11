@@ -375,6 +375,16 @@ router.get('/inicio', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /radiografia — hallazgos mas valiosos del negocio (con plata y evidencia). Ver radiografia.js
+router.get('/radiografia', auth, async (req, res) => {
+  try {
+    res.json(await require('./radiografia').calcularRadiografia(req.user.negocio_id));
+  } catch (e) {
+    console.error('radiografia:', e.message);
+    res.status(500).json({ error: 'No se pudo calcular la radiografia' });
+  }
+});
+
 // GET /zonas — "Tu negocio en vivo": una linea por zona del negocio, con semaforo y una frase.
 // estado: ok | atencion | alerta | sin_datos. Reutiliza lo que ya calcula LumoBi (fugas, equipo, rentabilidad, ventas por producto).
 router.get('/zonas', auth, async (req, res) => {
