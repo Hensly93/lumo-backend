@@ -375,6 +375,95 @@ router.get('/inicio', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /zonas — "Tu negocio en vivo": una linea por zona del negocio, con semaforo y una frase.
+// estado: ok | atencion | alerta | sin_datos. Reutiliza lo que ya calcula LumoBi (fugas, equipo, rentabilidad, ventas por producto).
+router.get('/zonas', auth, async (req, res) => {
+  try {
+    const negocioId = req.user.negocio_id;
+    const fmt = (n) => '$' + Math.round(Math.abs(n)).toLocaleString('es-AR');
+    const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+    const [fgR, ermR, rentR, cierresR, prodR] = await Promise.allSettled([
+      require('./fugas').calcularFugas(negocioId),
+      calcularERMNegocio(negocioId),
+      require('./rentabilidad').calcularRentabilidad(negocioId),
+      pool.query(`SELECT COUNT(*)::int AS n FROM turnos_caja WHERE negocio_id=$1 AND estado='cerrado' AND hora_cierre >= NOW() - INTERVAL '30 days'`, [negocioId]),
+      pool.query(`SELECT p.nombre, SUM(d.cantidad)::float AS unidades
+                    FROM transacciones_detalle d
+                    JOIN transacciones t ON t.id = d.transaccion_id
+                    JOIN productos p ON p.id = d.producto_id
+                   WHERE t.negocio_id = $1 AND t.fecha >= NOW() - INTERVAL '7 days'
+                   GROUP BY p.nombre ORDER BY unidades DESC LIMIT 3`, [negocioId]),
+    ]);
+    for (const [n, r] of [['fugas', fgR], ['erm', ermR], ['rentabilidad', rentR], ['cierres', cierresR], ['productos', prodR]]) {
+      if (r.status === 'rejected') console.error('zonas/' + n + ':', r.reason && r.reason.message);
+    }
+    const zonas = [];
+
+    // Caja
+    if (fgR.status === 'fulfilled' && cierresR.status === 'fulfilled') {
+      const deCaja = (fgR.value.fugas || []).filter((f) => f.categoria === 'caja' && f.estado === 'activa');
+      const nCierres = cierresR.value.rows[0].n;
+      if (deCaja.length) zonas.push({ id: 'caja', nombre: 'Caja', estado: 'alerta', texto: deCaja[0].titulo, url: '/fugas' });
+      else if (!nCierres) zonas.push({ id: 'caja', nombre: 'Caja', estado: 'sin_datos', texto: 'Todavía no cerraste turnos de caja. Abrí uno desde la pantalla del empleado.', url: '/empleados' });
+      else zonas.push({ id: 'caja', nombre: 'Caja', estado: 'ok', texto: (nCierres === 1 ? 'Tu único cierre de los últimos 30 días cerró' : 'Tus ' + nCierres + ' cierres de los últimos 30 días cerraron') + ' sin diferencias relevantes.', url: '/empleados' });
+    }
+
+    // Equipo
+    if (ermR.status === 'fulfilled') {
+      const e = ermR.value;
+      const rs = e.resumen || {};
+      if (!e.empleados || !e.empleados.length) zonas.push({ id: 'equipo', nombre: 'Equipo', estado: 'sin_datos', texto: 'Cuando tus empleados cierren turnos, acá ves quién necesita atención.', url: '/empleados' });
+      else if (rs.rojos > 0) zonas.push({ id: 'equipo', nombre: 'Equipo', estado: 'alerta', texto: rs.rojos + (rs.rojos === 1 ? ' empleado con señales fuertes para revisar.' : ' empleados con señales fuertes para revisar.'), url: '/empleados' });
+      else if (rs.amarillos > 0) zonas.push({ id: 'equipo', nombre: 'Equipo', estado: 'atencion', texto: rs.amarillos + (rs.amarillos === 1 ? ' empleado con algo para mirar.' : ' empleados con algo para mirar.'), url: '/empleados' });
+      else zonas.push({ id: 'equipo', nombre: 'Equipo', estado: 'ok', texto: 'Sin señales raras en tu equipo (' + rs.total + ').', url: '/empleados' });
+    }
+
+    // Fugas (sin repetir las de caja)
+    if (fgR.status === 'fulfilled') {
+      const fg = fgR.value;
+      const otras = (fg.fugas || []).filter((f) => f.estado === 'activa' && f.categoria !== 'caja' && !f.incluida_en);
+      const total = otras.reduce((s, f) => s + (f.monto || 0), 0);
+      if (otras.length && total > 0) zonas.push({ id: 'fugas', nombre: 'Fugas de plata', estado: 'atencion', texto: 'Se te van ~' + fmt(total) + ' en ' + otras.length + (otras.length === 1 ? ' fuga' : ' fugas') + ' (' + fg.resumen.periodo + ').', url: '/fugas' });
+      else if (fg.resumen && fg.resumen.recuperado > 0) zonas.push({ id: 'fugas', nombre: 'Fugas de plata', estado: 'ok', texto: 'Ya recuperaste ~' + fmt(fg.resumen.recuperado) + ' y no hay fugas activas.', url: '/fugas' });
+      else zonas.push({ id: 'fugas', nombre: 'Fugas de plata', estado: 'ok', texto: 'No detectamos fugas activas con los datos que cargaste.', url: '/fugas' });
+    }
+
+    // Ganancia (ultimo mes cerrado) y punto de equilibrio (mes en curso)
+    if (rentR.status === 'fulfilled') {
+      const r = rentR.value;
+      const u = r.ultimo_mes_cerrado;
+      if (!r.hay_gastos || !u) {
+        zonas.push({ id: 'ganancia', nombre: 'Ganancia', estado: 'sin_datos', texto: 'Cargá tus gastos del mes y te digo cuánto ganás de verdad.', url: '/rentabilidad' });
+      } else {
+        const g = u.ganancia_operativa;
+        const nombreMes = MESES[Number(u.mes.slice(5, 7)) - 1];
+        const est = g < 0 ? 'alerta' : (u.margen != null && u.margen < 5 ? 'atencion' : 'ok');
+        zonas.push({ id: 'ganancia', nombre: 'Ganancia', estado: est, texto: 'Ganancia de ' + nombreMes + ': ' + (g < 0 ? '-' : '') + fmt(g) + (u.margen != null ? ' (margen ' + u.margen + '%)' : '') + '.', url: '/rentabilidad' });
+      }
+      const mc = r.equilibrio && r.equilibrio.mes_en_curso;
+      if (mc && mc.necesario_a_la_fecha > 0) {
+        const d = mc.diferencia;
+        const est = d >= 0 ? 'ok' : (d < -0.2 * mc.necesario_a_la_fecha ? 'alerta' : 'atencion');
+        zonas.push({ id: 'equilibrio', nombre: 'Punto de equilibrio', estado: est, texto: d >= 0 ? 'Este mes vas ' + fmt(d) + ' por encima de lo que necesitás vender a esta fecha.' : 'Este mes vas ' + fmt(d) + ' por debajo de lo que necesitás vender a esta fecha.', url: '/rentabilidad' });
+      }
+    }
+
+    // Productos
+    if (prodR.status === 'fulfilled') {
+      const ps = prodR.value.rows;
+      if (!ps.length) zonas.push({ id: 'productos', nombre: 'Productos', estado: 'sin_datos', texto: 'Escaneá tus ventas con la pistola o el celu y te digo qué se mueve y qué no.', url: '/catalogo' });
+      else zonas.push({ id: 'productos', nombre: 'Productos', estado: 'ok', texto: 'Lo que más sale (7 días): ' + ps.map((p) => p.nombre + ' (' + Math.round(p.unidades) + ')').join(', ') + '.', url: '/catalogo' });
+    }
+
+    // Online (todavia no existe la integracion)
+    zonas.push({ id: 'online', nombre: 'Ventas online', estado: 'sin_datos', texto: 'Conectá tu tienda online o Mercado Libre para verlas junto al resto (próximamente).', url: null });
+
+    const orden = { alerta: 0, atencion: 1 };
+    const f = zonas.filter((z) => z.estado in orden).sort((a, b) => orden[a.estado] - orden[b.estado])[0];
+    res.json({ zonas, foco: f ? { zona: f.nombre, texto: f.texto, url: f.url } : null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /periodos?periodo=hoy|semana|mes|anio&sucursal_id= — comparativas justas + valor real (IPC)
 router.get('/periodos', auth, async (req, res) => {
   try {
