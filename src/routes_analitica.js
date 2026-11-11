@@ -38,6 +38,20 @@ function asegurarTabla() {
       )`);
       await pool.query('CREATE INDEX IF NOT EXISTS analitica_eventos_creado ON analitica_eventos (creado)');
       await pool.query('CREATE INDEX IF NOT EXISTS analitica_eventos_tipo ON analitica_eventos (tipo, creado)');
+      try {
+        await pool.query('ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS es_prueba BOOLEAN NOT NULL DEFAULT false');
+        // Eventos "reales": sin los de navegadores que alguna vez iniciaron sesion con una cuenta de prueba o interna
+        await pool.query(`CREATE OR REPLACE VIEW analitica_eventos_reales AS
+          SELECT e.* FROM analitica_eventos e
+          WHERE e.visitante NOT IN (
+            SELECT a.visitante FROM analitica_eventos a
+            JOIN usuarios u ON u.id::text = a.usuario_id
+            WHERE u.es_prueba IS TRUE OR COALESCE(u.subscription_status,'') = 'interna'
+               OR u.email ILIKE '%@test.%' OR u.email ILIKE '%@example.%')`);
+      } catch (e) {
+        console.error('[ANALITICA] vista de eventos reales:', e.message);
+        await pool.query('CREATE OR REPLACE VIEW analitica_eventos_reales AS SELECT * FROM analitica_eventos');
+      }
     })().catch((e) => { listo = null; throw e; });
   }
   return listo;
@@ -141,7 +155,7 @@ async function resumen(dias) {
   await asegurarTabla();
   const desde = new Date(Date.now() - dias * 86400000);
   const P = [desde];
-  const q = async (sql, p) => (await pool.query(sql, p || P)).rows;
+  const q = async (sql, p) => (await pool.query(sql.replace(/FROM analitica_eventos/g, 'FROM analitica_eventos_reales'), p || P)).rows;
   const DIA = `(creado AT TIME ZONE '${TZ}')::date`;
   const quien = 'COALESCE(usuario_id, visitante)';
 
@@ -230,9 +244,10 @@ async function resumen(dias) {
 
   // Cuentas y planes: se leen de la base de usuarios (el cobro automatico todavia no existe)
   let cuentas = null;
-  const SQL_E = (filtro) => `SELECT COALESCE(subscription_status,'sin_estado') AS estado, COUNT(*)::int AS n,
+  const SQL_E = (filtro) => `SELECT CASE WHEN es_prueba IS TRUE OR email ILIKE '%@test.%' OR email ILIKE '%@example.%' THEN 'prueba'
+      ELSE COALESCE(subscription_status,'sin_estado') END AS estado, COUNT(*)::int AS n,
       COUNT(*) FILTER (WHERE trial_inicio >= $1)::int AS nuevas FROM usuarios ${filtro} GROUP BY 1 ORDER BY n DESC`;
-  const SQL_V = (filtro) => `SELECT COUNT(*)::int AS n FROM usuarios WHERE subscription_status='trial' AND trial_fin IS NOT NULL AND trial_fin < NOW() ${filtro}`;
+  const SQL_V = (filtro) => `SELECT COUNT(*)::int AS n FROM usuarios WHERE subscription_status='trial' AND trial_fin IS NOT NULL AND trial_fin < NOW() AND es_prueba IS NOT TRUE AND email NOT ILIKE '%@test.%' AND email NOT ILIKE '%@example.%' ${filtro}`;
   for (const filtro of ["(rol IS NULL OR rol='owner')", null]) {
     try {
       const g = await pool.query(SQL_E(filtro ? 'WHERE ' + filtro : ''), [desde]);
@@ -277,7 +292,22 @@ async function resumen(dias) {
     cuentas_detalle = (await pool.query(base + `SELECT nombre AS negocio, registro, mp, dias_ventas, vio_analisis, estado FROM d ORDER BY registro DESC LIMIT 25`, P)).rows;
   } catch (e) { console.error('[ANALITICA] activacion:', e.message); }
 
-  return { dias, desde, totales: tot, embudo, activacion, cuentas_detalle, cuentas, pantallas, acciones, por_dia: porDia, origen, dispositivos, errores, scroll_landing: scroll, negocios };
+  // Todas las cuentas (para marcar las de prueba desde el panel)
+  let cuentas_lista = null;
+  try {
+    cuentas_lista = (await pool.query(`
+      SELECT u.id AS usuario_id, u.negocio AS nombre, u.email, u.trial_inicio AS registro,
+        (u.es_prueba IS TRUE OR COALESCE(u.subscription_status,'') = 'interna' OR u.email ILIKE '%@test.%' OR u.email ILIKE '%@example.%') AS prueba,
+        (u.es_prueba IS TRUE) AS marcada,
+        COALESCE(u.subscription_status,'sin_estado') AS estado,
+        EXISTS (SELECT 1 FROM integraciones_mp i WHERE i.negocio_id = nu.negocio_id) AS mp,
+        (SELECT COUNT(DISTINCT (t.fecha - INTERVAL '3 hours')::date)::int FROM transacciones t WHERE t.negocio_id = nu.negocio_id) AS dias_ventas
+      FROM usuarios u
+      JOIN negocio_usuarios nu ON nu.usuario_id = u.id AND nu.rol = 'owner' AND nu.activo = true
+      ORDER BY u.trial_inicio DESC NULLS LAST, u.id DESC LIMIT 100`)).rows;
+  } catch (e) { console.error('[ANALITICA] cuentas_lista:', e.message); }
+
+  return { dias, desde, totales: tot, embudo, activacion, cuentas_detalle, cuentas_lista, cuentas, pantallas, acciones, por_dia: porDia, origen, dispositivos, errores, scroll_landing: scroll, negocios };
 }
 
 router.get('/resumen', async (req, res) => {
@@ -291,6 +321,24 @@ router.get('/resumen', async (req, res) => {
   } catch (e) {
     console.error('[ANALITICA] resumen:', e.message);
     res.status(500).json({ error: 'No se pudo calcular el resumen' });
+  }
+});
+
+// Marcar una cuenta como "de prueba" (queda fuera de los numeros de clientes y del embudo). Solo admin.
+router.post('/marcar-prueba', express.json({ limit: '2kb' }), async (req, res) => {
+  try {
+    if (!pasaFreno('m:' + ipDe(req), 30, 60000)) return res.status(429).json({ error: 'Demasiados intentos' });
+    const c = await accesoOk(req);
+    if (c === 'sin_clave') return res.status(503).json({ error: 'Falta configurar ADMIN_EMAILS en el servidor' });
+    if (c !== 'ok') return res.status(401).json({ error: 'Clave incorrecta' });
+    const id = parseInt(req.body && req.body.usuario_id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'usuario_id invalido' });
+    await asegurarTabla();
+    const r = await pool.query('UPDATE usuarios SET es_prueba = $2 WHERE id = $1', [id, !!(req.body && req.body.es_prueba)]);
+    res.json({ ok: true, cambiadas: r.rowCount });
+  } catch (e) {
+    console.error('[ANALITICA] marcar-prueba:', e.message);
+    res.status(500).json({ error: 'No se pudo marcar la cuenta' });
   }
 });
 
