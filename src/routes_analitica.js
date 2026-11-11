@@ -222,7 +222,42 @@ async function resumen(dias) {
     } catch (_) { /* prueba sin el filtro de rol */ }
   }
 
-  return { dias, desde, totales: tot, embudo, cuentas, pantallas, acciones, por_dia: porDia, origen, dispositivos, errores, scroll_landing: scroll, negocios };
+  // Activacion de las cuentas nuevas: todo sale de las tablas reales (MP conectado, ventas, pantallas vistas, plan)
+  let activacion = null, cuentas_detalle = null;
+  try {
+    const base = `WITH c AS (
+        SELECT n.id AS negocio_id, u.negocio AS nombre, u.trial_inicio AS registro, COALESCE(u.subscription_status,'sin_estado') AS estado
+        FROM usuarios u
+        JOIN negocio_usuarios nu ON nu.usuario_id = u.id AND nu.rol = 'owner' AND nu.activo = true
+        JOIN negocios n ON n.id = nu.negocio_id
+        WHERE u.trial_inicio >= $1 AND COALESCE(u.subscription_status,'') <> 'interna'
+          AND u.email NOT ILIKE '%@test.%' AND u.email NOT ILIKE '%@example.%'),
+      d AS (
+        SELECT c.*,
+          EXISTS (SELECT 1 FROM integraciones_mp i WHERE i.negocio_id = c.negocio_id) AS mp,
+          (SELECT COUNT(DISTINCT (t.fecha - INTERVAL '3 hours')::date)::int FROM transacciones t WHERE t.negocio_id = c.negocio_id) AS dias_ventas,
+          EXISTS (SELECT 1 FROM analitica_eventos a WHERE a.negocio_id = c.negocio_id::text AND a.tipo = 'pantalla'
+                  AND a.ruta IN ('/fugas','/predicciones','/alertas')) AS vio_analisis
+        FROM c)`;
+    const [a] = (await pool.query(base + `SELECT COUNT(*)::int AS registradas,
+        COUNT(*) FILTER (WHERE mp)::int AS mp,
+        COUNT(*) FILTER (WHERE dias_ventas >= 1)::int AS con_ventas,
+        COUNT(*) FILTER (WHERE dias_ventas >= 3)::int AS ventas3,
+        COUNT(*) FILTER (WHERE dias_ventas >= 3 AND vio_analisis)::int AS activadas,
+        COUNT(*) FILTER (WHERE estado IN ('active','activa'))::int AS pagaron
+      FROM d`, P)).rows;
+    activacion = [
+      { paso: 'Cuentas creadas', n: a.registradas },
+      { paso: 'Conectaron Mercado Pago', n: a.mp },
+      { paso: 'Cargaron ventas (al menos 1 día)', n: a.con_ventas },
+      { paso: 'Tienen ventas de 3 días o más', n: a.ventas3 },
+      { paso: 'Activadas: 3 días de ventas y vieron el análisis', n: a.activadas },
+      { paso: 'Pagaron el plan', n: a.pagaron },
+    ];
+    cuentas_detalle = (await pool.query(base + `SELECT nombre AS negocio, registro, mp, dias_ventas, vio_analisis, estado FROM d ORDER BY registro DESC LIMIT 25`, P)).rows;
+  } catch (e) { console.error('[ANALITICA] activacion:', e.message); }
+
+  return { dias, desde, totales: tot, embudo, activacion, cuentas_detalle, cuentas, pantallas, acciones, por_dia: porDia, origen, dispositivos, errores, scroll_landing: scroll, negocios };
 }
 
 router.get('/resumen', async (req, res) => {
