@@ -118,6 +118,36 @@ function hallazgoTicket(dias, hoyISO) {
   };
 }
 
+// Tasas de referencia por medio de cobro (% sobre la venta). Son típicas de Argentina y NO verificadas:
+// cada negocio tiene las suyas. Por eso el hallazgo siempre dice que es una estimación.
+const TASAS = { debito: 0.015, credito: 0.04, mp: 0.035, qr: 0.008, transferencia: 0, efectivo: 0 };
+const NOMBRE_MEDIO = { debito: 'débito', credito: 'crédito', mp: 'Mercado Pago', qr: 'QR', transferencia: 'transferencia', efectivo: 'efectivo' };
+
+// filas: [{ medio, total, tickets }] de los últimos 28 días completos.
+function hallazgoComisiones(filas, tasas = TASAS) {
+  const f = (filas || []).filter((x) => x.total > 0);
+  const total = f.reduce((s, x) => s + x.total, 0);
+  if (total <= 0) return null;
+  const conCom = f.filter((x) => (tasas[x.medio] || 0) > 0);
+  const ticketsCom = conCom.reduce((s, x) => s + x.tickets, 0);
+  const com28 = conCom.reduce((s, x) => s + x.total * tasas[x.medio], 0);
+  if (ticketsCom < 5 || com28 / total < 0.008) return null;   // pocas ventas con tarjeta o costo irrelevante
+  const mensual = Math.round(com28 * 30 / 28);
+  const pctCom = Math.round(conCom.reduce((s, x) => s + x.total, 0) / total * 100);
+  return {
+    id: 'comisiones_cobro',
+    tipo: 'calculado',
+    titulo: `Las comisiones de cobro te cuestan unos ${fmt(mensual)} por mes`,
+    detalle: `El ${pctCom}% de tus ventas entra por medios que cobran comisión.`,
+    evidencia: [
+      ...conCom.sort((a, b) => b.total - a.total).slice(0, 3).map((x) => `${NOMBRE_MEDIO[x.medio] || x.medio}: ${fmt(x.total)} cobrados, a ~${(tasas[x.medio] * 100).toLocaleString('es-AR', { maximumFractionDigits: 1 })}% son ~${fmt(x.total * tasas[x.medio])}.`),
+      'Es una estimación con tasas de referencia. Tus tasas reales pueden ser distintas: revisalas en tu liquidación.',
+    ],
+    monto: mensual,
+    url: '/fugas',
+  };
+}
+
 function deFugas(fugas) {
   return (fugas || [])
     .filter((f) => f.estado === 'activa' && !f.incluida_en && f.monto > 0)
@@ -147,13 +177,16 @@ function elegir(hallazgos, max = 3) {
 async function calcularRadiografia(negocioId, db = pool, opts = {}) {
   const fuentes = Object.assign({ fugas: (id) => require('./fugas').calcularFugas(id) }, opts.fuentes || {});
   const ventana = `${FL} >= ${AHORA_AR}::date - INTERVAL '${VENTANA_DIAS} days' AND ${FL}::date < ${AHORA_AR}::date`;
-  const [dRes, hRes, fRes, hoyRes] = await Promise.allSettled([
+  const [dRes, hRes, fRes, hoyRes, mRes] = await Promise.allSettled([
     db.query(`SELECT ${FL}::date::text AS d, EXTRACT(DOW FROM ${FL})::int AS dow, SUM(monto)::float AS total, COUNT(*)::int AS tickets
                 FROM transacciones WHERE negocio_id = $1 AND ${ventana} GROUP BY 1, 2 HAVING SUM(monto) > 0`, [negocioId]),
     db.query(`SELECT ${FL}::date::text AS d, EXTRACT(HOUR FROM ${FL})::int AS h, SUM(monto)::float AS total
                 FROM transacciones WHERE negocio_id = $1 AND ${ventana} GROUP BY 1, 2 HAVING SUM(monto) > 0`, [negocioId]),
     fuentes.fugas(negocioId),
     db.query(`SELECT ${AHORA_AR}::date::text AS hoy`),
+    db.query(`SELECT COALESCE(metodo_pago, 'efectivo') AS medio, SUM(monto)::float AS total, COUNT(*)::int AS tickets
+                FROM transacciones WHERE negocio_id = $1 AND ${FL} >= ${AHORA_AR}::date - INTERVAL '28 days' AND ${FL}::date < ${AHORA_AR}::date
+                GROUP BY 1`, [negocioId]),
   ]);
   for (const [n, r] of [['dias', dRes], ['horas', hRes], ['fugas', fRes]]) {
     if (r.status === 'rejected') console.error('radiografia/' + n + ':', r.reason && r.reason.message);
@@ -170,6 +203,9 @@ async function calcularRadiografia(negocioId, db = pool, opts = {}) {
       try { const h = f(); if (h) hallazgos.push(h); } catch (e) { console.error('radiografia/detector:', e.message); }
     }
   }
+  if (suficiente && mRes.status === 'fulfilled') {
+    try { const h = hallazgoComisiones(mRes.value.rows); if (h) hallazgos.push(h); } catch (e) { console.error('radiografia/comisiones:', e.message); }
+  }
   if (fRes.status === 'fulfilled') hallazgos.push(...deFugas(fRes.value.fugas));
 
   const top = elegir(hallazgos, 3);
@@ -182,4 +218,4 @@ async function calcularRadiografia(negocioId, db = pool, opts = {}) {
   };
 }
 
-module.exports = { calcularRadiografia, hallazgoDiaDebil, hallazgoFranjaFloja, hallazgoTicket, deFugas, elegir, MIN_DIAS };
+module.exports = { calcularRadiografia, hallazgoComisiones, TASAS, hallazgoDiaDebil, hallazgoFranjaFloja, hallazgoTicket, deFugas, elegir, MIN_DIAS };
