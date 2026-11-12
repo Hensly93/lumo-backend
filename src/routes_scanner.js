@@ -248,6 +248,9 @@ router.post('/finalizar-venta', authTurno, async (req, res) => {
     if (!turno_id || !metodo_pago) {
       return res.status(400).json({ error: 'Faltan campos requeridos' });
     }
+    if (!['efectivo', 'debito', 'credito', 'transferencia', 'mp', 'qr'].includes(String(metodo_pago))) {
+      return res.status(400).json({ error: 'Medio de pago no válido' });
+    }
 
     await client.query('BEGIN');
 
