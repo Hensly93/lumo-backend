@@ -164,6 +164,7 @@ function hallazgoComisiones(filas, tasas = TASAS) {
       'Es una estimación con tasas de referencia. Tus tasas reales pueden ser distintas: revisalas en tu liquidación.',
     ],
     monto: mensual,
+    monto_texto: `~${fmt(mensual)} por mes (estimación)`,
     url: '/fugas',
   };
 }
