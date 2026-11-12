@@ -34,6 +34,18 @@ const TOOLS = [
     },
   },
   {
+    name: 'marcas_top',
+    description: 'Ranking de marcas del negocio: cuánto vende cada una, cuántos productos tiene y qué ganancia y margen deja (si el costo está cargado). Usar para preguntas como qué marca vendo más, cuál me deja más ganancia o en cuál pierdo. Informa qué parte de lo vendido no tiene marca cargada.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        dias: { type: 'integer', description: 'Cuántos días mirar hacia atrás, 1 a 180. Por defecto 30.' },
+        orden: { type: 'string', enum: ['monto', 'ganancia', 'unidades'], description: 'Por defecto monto.' },
+        limite: { type: 'integer', description: 'Cuántas marcas, 1 a 10. Por defecto 5.' },
+      },
+    },
+  },
+  {
     name: 'hallazgos_negocio',
     description: 'Lo más importante que detectó LumoBi hoy en el negocio (la Radiografía): problemas y oportunidades con su monto estimado, y las acciones que LumoBi puede armar. Usar cuando el dueño pregunta dónde pierde plata o qué debería mejorar.',
     input_schema: { type: 'object', properties: {} },
@@ -82,7 +94,7 @@ async function productosTop(negocioId, input, db) {
   let rows;
   try {
     rows = (await db.query(
-      `SELECT p.nombre, SUM(d.cantidad)::float AS unidades, SUM(d.subtotal)::float AS monto, p.precio_venta::float AS precio, p.precio_costo::float AS costo
+      `SELECT p.nombre, p.marca, SUM(d.cantidad)::float AS unidades, SUM(d.subtotal)::float AS monto, p.precio_venta::float AS precio, p.precio_costo::float AS costo
          FROM transacciones_detalle d JOIN transacciones t ON t.id = d.transaccion_id JOIN productos p ON p.id = d.producto_id
         WHERE t.negocio_id = $1 AND p.negocio_id = $1 AND ${FL}::date >= ${HOY_AR} - ($2::int - 1)
         GROUP BY p.id ORDER BY ${orden} DESC NULLS LAST LIMIT $3`, [negocioId, dias, limite])).rows;
@@ -91,8 +103,42 @@ async function productosTop(negocioId, input, db) {
   return {
     dias, ver_en: '/catalogo',
     productos: rows.map((x) => ({
-      nombre: x.nombre, unidades: x.unidades, monto: x.monto,
+      nombre: x.nombre, marca: x.marca || null, unidades: x.unidades, monto: x.monto,
       margen_pct: x.costo > 0 && x.precio > 0 ? Math.round((1 - x.costo / x.precio) * 100) : null,
+    })),
+  };
+}
+
+async function marcasTop(negocioId, input, db) {
+  const dias = Math.min(180, Math.max(1, Number.isInteger(input && input.dias) ? input.dias : 30));
+  const limite = Math.min(10, Math.max(1, Number.isInteger(input && input.limite) ? input.limite : 5));
+  const orden = ['monto', 'ganancia', 'unidades'].includes(input && input.orden) ? input.orden : 'monto';
+  let rows;
+  try {
+    await require('./catalogo_marca').asegurar(db);
+    // La marca de la venta es la del momento; si es una venta vieja sin esa foto, se usa la marca actual del producto
+    rows = (await db.query(
+      `SELECT COALESCE(NULLIF(d.producto_marca, ''), NULLIF(p.marca, '')) AS marca,
+              SUM(d.cantidad)::float AS unidades, SUM(d.subtotal)::float AS monto, COUNT(DISTINCT p.id)::int AS productos,
+              SUM(CASE WHEN COALESCE(d.costo_unitario, p.precio_costo) > 0 THEN d.subtotal ELSE 0 END)::float AS monto_con_costo,
+              SUM(CASE WHEN COALESCE(d.costo_unitario, p.precio_costo) > 0 THEN d.subtotal - d.cantidad * COALESCE(d.costo_unitario, p.precio_costo) ELSE 0 END)::float AS ganancia
+         FROM transacciones_detalle d JOIN transacciones t ON t.id = d.transaccion_id JOIN productos p ON p.id = d.producto_id
+        WHERE t.negocio_id = $1 AND p.negocio_id = $1 AND ${FL}::date >= ${HOY_AR} - ($2::int - 1)
+        GROUP BY 1`, [negocioId, dias])).rows;
+  } catch (e) { if (e.code === '42P01') rows = []; else throw e; }
+  if (!rows.length) return { marcas: [], nota: 'No hay ventas cargadas con productos en ese período.', ver_en: '/catalogo' };
+  const total = rows.reduce((s, x) => s + (x.monto || 0), 0);
+  const sinMarca = rows.filter((x) => !x.marca).reduce((s, x) => s + (x.monto || 0), 0);
+  const conMarca = rows.filter((x) => x.marca).sort((a, b) => (orden === 'ganancia' ? b.ganancia - a.ganancia : orden === 'unidades' ? b.unidades - a.unidades : b.monto - a.monto)).slice(0, limite);
+  return {
+    dias, ver_en: '/catalogo',
+    porcentaje_vendido_sin_marca: total > 0 ? Math.round((sinMarca / total) * 100) : 0,
+    nota: total > 0 && sinMarca / total > 0.3 ? 'Más del 30% de lo vendido no tiene marca cargada: el ranking es parcial. Se completa desde el catálogo.' : undefined,
+    marcas: conMarca.map((x) => ({
+      marca: x.marca, unidades: x.unidades, monto: x.monto, productos: x.productos,
+      ganancia: x.monto_con_costo > 0 ? Math.round(x.ganancia) : null,
+      margen_pct: x.monto_con_costo > 0 ? Math.round((x.ganancia / x.monto_con_costo) * 100) : null,
+      costo_cargado_pct: x.monto > 0 ? Math.round((x.monto_con_costo / x.monto) * 100) : 0,
     })),
   };
 }
@@ -101,6 +147,7 @@ async function ejecutar(nombre, input, negocioId, db = pool) {
   input = input && typeof input === 'object' ? input : {};
   if (nombre === 'ventas_periodo') return ventasPeriodo(negocioId, input, db);
   if (nombre === 'productos_top') return productosTop(negocioId, input, db);
+  if (nombre === 'marcas_top') return marcasTop(negocioId, input, db);
   if (nombre === 'hallazgos_negocio') {
     const r = await require('./hallazgos').radiografia(negocioId);
     return {
