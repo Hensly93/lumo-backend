@@ -4,7 +4,7 @@
 const DIAS = ['domingos', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados'];
 
 function a(id, tipo, titulo, detalle, arma) { return arma ? { id, tipo, titulo, detalle, arma: true } : { id, tipo, titulo, detalle }; }
-const PROMOS = ['promo_franja', 'promo_dia', 'combo_precio', 'descuento_efectivo', 'ajustar_precio'];   // acciones que LumoBi arma con los datos del negocio (promo.js)
+const PROMOS = ['promo_franja', 'promo_dia', 'combo_precio', 'descuento_efectivo', 'ajustar_precio', 'corregir_precios'];   // acciones que LumoBi arma con los datos del negocio (promo.js)
 
 function receta(detector, clave) {
   const num = Number(String(clave || '').match(/(\d+)$/)?.[1]);
@@ -31,6 +31,12 @@ function receta(detector, clave) {
       a('sugerir_adicional', 'ganar', 'Ofrecé un adicional al cobrar', 'Una frase fija en la caja, como "¿Le sumo una medialuna?". Con un producto chico y de buen margen sube el ticket sin que se note.'),
       a('combo_precio', 'ganar', 'LumoBi te arma un combo para subir el ticket', 'Elige los productos que tus clientes ya compran juntos, calcula el precio cuidando tu margen y te deja los textos listos.', true),
       a('revisar_precios', 'perder_menos', 'Revisá si tus precios siguieron a tus costos', 'Si el ticket bajó y tus costos subieron, el margen se achica por los dos lados.'),
+    ];
+  }
+  if (detector === 'precio_bajo_costo' || detector === 'marca_margen_bajo') {
+    return [
+      a('corregir_precios', 'perder_menos', 'LumoBi calcula el precio nuevo de los productos con margen flojo', 'Mira tus costos y tus ventas y te dice a cuánto subir cada precio para recuperar margen, de a poco para no espantar clientes. Te deja la lista lista para copiar.', true),
+      a('revisar_costos', 'perder_menos', 'Revisá que los costos estén bien cargados', 'Si el costo de un producto está mal cargado (por ejemplo, el de la caja en vez del de la unidad), el sistema ve una pérdida que no existe.'),
     ];
   }
   if (detector === 'aumentos_proveedor') {

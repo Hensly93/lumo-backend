@@ -19,12 +19,13 @@ const ESTADO_DE = { util: 'util', no_sirve: 'descartado', ya_lo_sabia: 'sabido',
 const ACCIONES = Object.keys(ESTADO_DE);
 // Plata recuperada: solo para hallazgos con monto MENSUAL comparable. A los 28 dias de marcado como resuelto se mide cuanto bajo.
 const { receta } = require('./acciones');
-const MENSUALES = ['dia_debil', 'franja_floja', 'comisiones_cobro', 'ticket_baja'];
+const MENSUALES = ['dia_debil', 'franja_floja', 'comisiones_cobro', 'ticket_baja', 'precio_bajo_costo', 'marca_margen_bajo'];
 const DIAS_MEDIR = 28;
 const MIN_MEJORA = 0.2;
 const ACCION_TEXTO = {
   dia_debil: 'Ver ventas por día', franja_floja: 'Ver ventas por hora', ticket_baja: 'Ver tu ticket promedio', ticket_sube: 'Ver tu ticket promedio',
   comisiones_cobro: 'Ver cobros por medio de pago', aumentos_proveedor: 'Revisar las facturas', fuga: 'Ver cómo cerrar la fuga',
+  precio_bajo_costo: 'Revisar tus precios y costos', marca_margen_bajo: 'Revisar los precios de esta marca',
 };
 const fmt = (n) => '$' + Math.round(Math.abs(n)).toLocaleString('es-AR');
 
@@ -144,6 +145,8 @@ async function detectar(negocioId, db = pool, opts = {}) {
   const lista = (rad.hallazgos || []).map((h) => ({ ...h }));
   try { const a = await (opts.aumentos || detectarAumentos)(negocioId, db); if (a) lista.push(a); }
   catch (e) { console.error('hallazgos/aumentos:', e.message); }
+  try { for (const m of await (opts.marcas || require('./detector_marcas').detectarMarcas)(negocioId, db)) lista.push(m); }
+  catch (e) { console.error('hallazgos/marcas:', e.message); }
   return { lista, ctx: {
     suficiente: !!rad.suficiente, ventas_mes: Number(rad.ventas_mes) || 0,
     dias_con_ventas: Number(rad.dias_con_ventas) || 0, dias_necesarios: Number(rad.dias_necesarios) || 14, faltan_dias: Number(rad.faltan_dias) || 0,

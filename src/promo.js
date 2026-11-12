@@ -145,6 +145,7 @@ async function armarProveedores(negocioId, db = pool) {
 async function armar(negocioId, hallazgo, accionId, db = pool) {
   if (accionId === 'descuento_efectivo') return armarComisiones(negocioId, db);
   if (accionId === 'ajustar_precio') return armarProveedores(negocioId, db);
+  if (accionId === 'corregir_precios') return require('./detector_marcas').armarPrecios(negocioId, db);
   const top = await datos(negocioId, db);
   if (top.length < 2) return { sin_promo: true, motivo: 'Necesito al menos 2 productos con ventas registradas por producto para armar un combo con tus datos. Escaneá o cargá ventas con productos y lo armo.' };
   const estrella = top[0];
