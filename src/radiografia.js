@@ -33,14 +33,15 @@ function hallazgoDiaDebil(dias) {
   if (brecha < 0.2) return null;
   const pct = Math.round(brecha * 100);
   const nombre = DOW[peor.dow];
+  const plural = nombre.endsWith('s') ? nombre : nombre + 's';
   const monto = Math.round((ref - peor.avg) * 4.3);
   return {
     id: 'dia_debil_' + peor.dow,
     tipo: 'estimado',
-    titulo: `Los ${nombre} vendés ${pct}% menos que el resto de la semana`,
+    titulo: `Los ${plural} vendés ${pct}% menos que el resto de la semana`,
     detalle: `Un ${nombre} promedia ${fmt(peor.avg)} y los demás días ${fmt(ref)}.`,
     evidencia: [
-      `Se miraron ${peor.n} ${nombre} de las últimas 8 semanas.`,
+      `Se miraron ${peor.n} ${plural} de las últimas 8 semanas.`,
       `Si ese día rindiera como los demás, serían unos ${fmt(monto)} más por mes (estimación).`,
     ],
     monto,

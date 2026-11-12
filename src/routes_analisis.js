@@ -451,7 +451,10 @@ router.get('/zonas', auth, async (req, res) => {
         zonas.push({ id: 'ganancia', nombre: 'Ganancia', estado: est, texto: 'Ganancia de ' + nombreMes + ': ' + (g < 0 ? '-' : '') + fmt(g) + (u.margen != null ? ' (margen ' + u.margen + '%)' : '') + '.', url: '/rentabilidad' });
       }
       const mc = r.equilibrio && r.equilibrio.mes_en_curso;
-      if (mc && mc.necesario_a_la_fecha > 0) {
+      if (mc && mc.necesario_a_la_fecha > 0 && !(mc.vendido > 0)) {
+        // Sin ventas cargadas este mes no es una alarma: faltan datos
+        zonas.push({ id: 'equilibrio', nombre: 'Punto de equilibrio', estado: 'sin_datos', texto: 'Este mes todavía no hay ventas cargadas, así que no puedo medir el equilibrio.', url: '/rentabilidad' });
+      } else if (mc && mc.necesario_a_la_fecha > 0) {
         const d = mc.diferencia;
         const est = d >= 0 ? 'ok' : (d < -0.2 * mc.necesario_a_la_fecha ? 'alerta' : 'atencion');
         zonas.push({ id: 'equilibrio', nombre: 'Punto de equilibrio', estado: est, texto: d >= 0 ? 'Este mes vas ' + fmt(d) + ' por encima de lo que necesitás vender a esta fecha.' : 'Este mes vas ' + fmt(d) + ' por debajo de lo que necesitás vender a esta fecha.', url: '/rentabilidad' });
