@@ -82,4 +82,24 @@ router.post('/unificar-marca', auth, async (req, res) => {
   } catch (e) { fallo(res, e); }
 });
 
+// "Es este": el empleado dice que el código escaneado es de un producto que ya existía; se recuerda el código para la próxima vez
+router.post('/empleado/vincular-codigo', authTurno, async (req, res) => {
+  try {
+    const codigo = String(req.body.codigo || '').replace(/\D/g, '').slice(0, 14);
+    const productoId = Number(req.body.producto_id);
+    if (codigo.length < 6 || !Number.isInteger(productoId)) return res.status(400).json({ error: 'Datos inválidos' });
+    await asegurarMarca();
+    await I.asegurar(pool);
+    const t = await pool.query(`SELECT negocio_id FROM turnos_caja WHERE id=$1 AND estado='activo'`, [req.turno.id]);
+    if (!t.rows.length) return res.status(400).json({ error: 'Turno no activo' });
+    const negocioId = t.rows[0].negocio_id;
+    const p = await pool.query('SELECT id FROM productos WHERE id=$1 AND negocio_id=$2 AND COALESCE(activo,true)', [productoId, negocioId]);
+    if (!p.rows.length) return res.status(404).json({ error: 'Producto no encontrado' });
+    const ya = await pool.query('SELECT id FROM productos WHERE negocio_id=$1 AND codigo_barras=$2 AND COALESCE(activo,true)', [negocioId, codigo]);
+    if (ya.rows.length) return res.status(409).json({ error: 'Ese código ya pertenece a otro producto' });
+    await pool.query('INSERT INTO producto_codigos (negocio_id, codigo, producto_id) VALUES ($1,$2,$3) ON CONFLICT (negocio_id, codigo) DO UPDATE SET producto_id = EXCLUDED.producto_id', [negocioId, codigo, productoId]);
+    res.json({ ok: true });
+  } catch (e) { fallo(res, e); }
+});
+
 module.exports = router;
