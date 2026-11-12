@@ -17,6 +17,7 @@ const { analizarTurnoConContexto, rankingEmpleadosTurno, contextTurnoActivo, det
 const { calcularRiesgoEmpleado } = require('./erm');
 const { notificarUsuario } = require('./push');
 const { auth } = require('./authMiddleware');
+const { registrar: registrarHecho, listar: listarHechos } = require('./registro_hechos');
 const { analizarTramo1EnVivo } = require('./perfil_conteo');
 
 // Calcula hora aleatoria para conteo: entre 40 y 180 min despues de la apertura
@@ -46,6 +47,19 @@ router.get('/empleados', auth, async (req, res) => {
       [req.user.negocio_id, sucursalId]
     );
     res.json(result.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/caja/hechos?dias=30&tipo=&empleado=  — registro de lo que pasó en la caja (solo el dueño)
+router.get('/hechos', auth, async (req, res) => {
+  try {
+    const hechos = await listarHechos(req.user.negocio_id, {
+      dias: req.query.dias, tipo: req.query.tipo ? String(req.query.tipo) : null,
+      empleado: req.query.empleado ? String(req.query.empleado) : null, limite: req.query.limite,
+    });
+    res.json({ hechos });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -416,6 +430,8 @@ router.post('/egreso', authTurno, async (req, res) => {
       'INSERT INTO egresos_caja(turno_id, usuario_id, monto, motivo) VALUES($1,$2,$3,$4)',
       [turno_id, turno.rows[0].usuario_id, monto, motivo]
     );
+    await registrarHecho({ negocio_id: req.turno.negocio_id, turno_id, empleado: req.turno.nombre_empleado, tipo: 'egreso',
+      valor: Number(monto) || 0, detalle: { motivo: String(motivo).slice(0, 200) } });
 
     res.json({ ok: true });
   } catch (e) {

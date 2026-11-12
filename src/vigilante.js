@@ -647,7 +647,7 @@ async function detHallazgos(db, p) {
   let lista = [];
   try {
     const fn = (p.opts.fuentes && p.opts.fuentes.hallazgos) || ((id) => require('./hallazgos').paraAvisar(id, db, { ahora: p.opts.ahora }));
-    lista = (await fn(p.negocioId)) || [];
+    lista = ((await fn(p.negocioId)) || []).filter((h) => h.detector !== 'equipo_caja');   // el faltante de caja ya lo avisa el detector de equipo (erm)
   } catch (e) { console.error('[VIGILANTE] hallazgos negocio', p.negocioId, e.message); return []; }
   const out = [];
   for (const h of lista.slice(0, 1)) {

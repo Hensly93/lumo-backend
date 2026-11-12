@@ -39,6 +39,29 @@ function receta(detector, clave) {
       a('revisar_costos', 'perder_menos', 'Revisá que los costos estén bien cargados', 'Si el costo de un producto está mal cargado (por ejemplo, el de la caja en vez del de la unidad), el sistema ve una pérdida que no existe.'),
     ];
   }
+  if (detector === 'equipo_caja') {
+    return [
+      a('hablar_equipo', 'perder_menos', 'Conversá con la persona, con el detalle en la mano', 'No es una acusación: mostrale los cierres con diferencia y preguntale qué pasó. Muchas veces es un vuelto mal dado o un cobro sin registrar.'),
+      a('mas_conteos', 'perder_menos', 'Pedí un conteo de caja a mitad de turno', 'Un control a mitad de turno hace que la diferencia se detecte cuando todavía se puede reconstruir qué pasó.'),
+    ];
+  }
+  if (detector === 'equipo_borrados') {
+    return [
+      a('revisar_borrados', 'perder_menos', 'Mirá qué productos se sacan del carrito', 'Si son siempre los mismos productos o la misma franja horaria, es una señal. Si están repartidos, probablemente sea escaneo con errores.'),
+      a('encargado_autoriza', 'perder_menos', 'Pedí que los borrados grandes los avise un encargado', 'Una regla simple: si se saca un producto caro del carrito, se avisa. Alcanza con que el equipo sepa que queda registrado.'),
+    ];
+  }
+  if (detector === 'equipo_egresos') {
+    return [
+      a('pedir_comprobante', 'perder_menos', 'Pedí el comprobante de cada egreso', 'Un ticket, una foto o un remito. Si hay proveedores que se pagan siempre de la caja, conviene anotarlos como gasto fijo.'),
+    ];
+  }
+  if (detector === 'equipo_precios') {
+    return [
+      a('revisar_precios_caja', 'perder_menos', 'Revisá los precios que se bajaron y volvelos a poner si hace falta', 'Si el cambio lo autorizaste, ignoralo. Si no, corregilo desde Catálogo.'),
+      a('sacar_permiso', 'perder_menos', 'Sacale el permiso de cambiar precios a quien no lo necesite', 'Solo quienes tienen el permiso de cargar productos pueden cambiar precios. Lo manejás desde Equipo.'),
+    ];
+  }
   if (detector === 'aumentos_proveedor') {
     return [
       a('cotizar', 'perder_menos', 'Pedí precio a otro proveedor', 'Con tu última factura en mano, pedí cotización de los productos que más subieron.'),

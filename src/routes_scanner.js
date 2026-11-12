@@ -3,6 +3,18 @@ const router = express.Router();
 const pool = require('./db');
 const { authTurno, crearSesionTurno, verificarBloqueoPin, registrarIntentoPin } = require('./sesion_empleado');
 const { registrarCambio } = require('./cambios_precios');
+const { registrar: registrarHecho } = require('./registro_hechos');
+
+// Deja anotado en el registro de la caja que se sacó un producto (o parte) del carrito antes de cobrar
+function hechoCarrito(req, tipo, item, quitada) {
+  if (!item) return null;
+  const q = Number(quitada) || 0;
+  return registrarHecho({
+    negocio_id: req.turno.negocio_id, turno_id: req.turno.id, empleado: req.turno.nombre_empleado, tipo,
+    producto_id: item.producto_id, cantidad: q, valor: q * (Number(item.precio_unitario) || 0),
+    detalle: { precio_unitario: Number(item.precio_unitario) || 0 },
+  });
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // GET /api/scanner/producto?turno_id=X&codigo=Y
@@ -257,12 +269,15 @@ router.post('/carrito/:turno_id/:item_id/cantidad', authTurno, express.json({ li
     const cant = parseFloat(req.body && req.body.cantidad);
     if (!Number.isFinite(cant)) return res.status(400).json({ error: 'Cantidad invalida' });
     if (cant <= 0) {
-      await pool.query(`DELETE FROM carrito_items WHERE id=$1 AND turno_id=$2`, [req.params.item_id, req.turno.id]);
+      const borrado = await pool.query(`DELETE FROM carrito_items WHERE id=$1 AND turno_id=$2 RETURNING *`, [req.params.item_id, req.turno.id]);
+      if (borrado.rows[0]) await hechoCarrito(req, 'item_borrado', borrado.rows[0], borrado.rows[0].cantidad);
       return res.json({ eliminado: true });
     }
     if (cant > 9999) return res.status(400).json({ error: 'Cantidad demasiado grande' });
+    const antes = await pool.query(`SELECT * FROM carrito_items WHERE id=$1 AND turno_id=$2`, [req.params.item_id, req.turno.id]);
     const r = await pool.query(`UPDATE carrito_items SET cantidad=$3 WHERE id=$1 AND turno_id=$2 RETURNING *`, [req.params.item_id, req.turno.id, cant]);
     if (r.rows.length === 0) return res.status(404).json({ error: 'Item no encontrado' });
+    if (antes.rows[0] && cant < Number(antes.rows[0].cantidad)) await hechoCarrito(req, 'cantidad_reducida', antes.rows[0], Number(antes.rows[0].cantidad) - cant);
     res.json({ item: r.rows[0] });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -283,6 +298,7 @@ router.delete('/carrito/:turno_id/:item_id', authTurno, async (req, res) => {
       return res.status(404).json({ error: 'Item no encontrado' });
     }
 
+    await hechoCarrito(req, 'item_borrado', result.rows[0], result.rows[0].cantidad);
     res.json({ eliminado: true, item: result.rows[0] });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -396,6 +412,7 @@ router.patch('/carrito/:turno_id/:item_id', authTurno, async (req, res) => {
     if (!cantidad || cantidad <= 0) {
       return res.status(400).json({ error: 'Cantidad inválida' });
     }
+    const antesP = await pool.query(`SELECT * FROM carrito_items WHERE id=$1 AND turno_id=$2`, [item_id, turno_id]);
 
     const result = await pool.query(
       `UPDATE carrito_items
@@ -409,6 +426,7 @@ router.patch('/carrito/:turno_id/:item_id', authTurno, async (req, res) => {
       return res.status(404).json({ error: 'Item no encontrado' });
     }
 
+    if (antesP.rows[0] && Number(cantidad) < Number(antesP.rows[0].cantidad)) await hechoCarrito(req, 'cantidad_reducida', antesP.rows[0], Number(antesP.rows[0].cantidad) - Number(cantidad));
     res.json({ actualizado: true, item: result.rows[0] });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -457,6 +475,8 @@ router.post('/producto', authTurno, async (req, res) => {
       [negocio_id, nombre.trim(), precio_venta, codigo_barras, marca]
     );
 
+    await registrarHecho({ negocio_id, turno_id, empleado: nombre_empleado, tipo: 'producto_creado', producto_id: result.rows[0].id,
+      producto_nombre: result.rows[0].nombre, valor: 0, detalle: { precio_venta: Number(precio_venta) || 0 } });
     res.json({ producto: result.rows[0] });
   } catch (e) {
     if (e.code === '23505') {
@@ -532,6 +552,10 @@ router.post('/producto/:id/precio', authTurno, async (req, res) => {
       );
     }
 
+    for (const [campo, ant, nue] of cambios) {
+      await registrarHecho({ negocio_id, turno_id, empleado: nombre_empleado, tipo: 'precio_cambiado', producto_id: antes.id,
+        producto_nombre: antes.nombre, valor: 0, detalle: { campo, antes: Number(ant), despues: Number(nue) } });
+    }
     res.json({ producto: upd.rows[0], cambios: cambios.length });
   } catch (e) {
     res.status(500).json({ error: e.message });
