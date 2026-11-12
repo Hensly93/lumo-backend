@@ -115,7 +115,7 @@ async function negocioEnVivo(negocioId, sucursalId = null, db = pool, opciones =
 
     let estado;
     if (ahora.hora < primera) estado = 'antes_de_abrir';
-    else if (ahora.hora > ultima) estado = 'cerrado';
+    else if (ahora.hora > ultima) estado = (turno || vs.some(v => v.h === ahora.hora)) ? 'fuera_de_horario' : 'cerrado';
     else if (fraccionDia < 0.10) estado = 'temprano';
     else if (dif > tol) estado = 'por_encima';
     else if (dif < -tol) estado = 'por_debajo';

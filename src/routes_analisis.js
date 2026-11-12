@@ -451,7 +451,12 @@ router.get('/zonas', auth, async (req, res) => {
         zonas.push({ id: 'ganancia', nombre: 'Ganancia', estado: est, texto: 'Ganancia de ' + nombreMes + ': ' + (g < 0 ? '-' : '') + fmt(g) + (u.margen != null ? ' (margen ' + u.margen + '%)' : '') + '.', url: '/rentabilidad' });
       }
       const mc = r.equilibrio && r.equilibrio.mes_en_curso;
-      if (mc && mc.necesario_a_la_fecha > 0 && !(mc.vendido > 0)) {
+      // Dias distintos con ventas en el mes: con pocos dias el equilibrio todavia no es una señal confiable
+      let diasMes = 99;
+      try { diasMes = (await pool.query(`SELECT COUNT(DISTINCT (fecha - INTERVAL '3 hours')::date)::int AS n FROM transacciones WHERE negocio_id=$1 AND (fecha - INTERVAL '3 hours') >= date_trunc('month', NOW() - INTERVAL '3 hours')`, [negocioId])).rows[0].n; } catch (e) { /* sin dato: no se frena */ }
+      if (mc && mc.necesario_a_la_fecha > 0 && mc.vendido > 0 && diasMes < 5) {
+        zonas.push({ id: 'equilibrio', nombre: 'Punto de equilibrio', estado: 'sin_datos', texto: 'Este mes tenés solo ' + diasMes + (diasMes === 1 ? ' día' : ' días') + ' de ventas. Con unos días más puedo medir el equilibrio.', url: '/rentabilidad' });
+      } else if (mc && mc.necesario_a_la_fecha > 0 && !(mc.vendido > 0)) {
         // Sin ventas cargadas este mes no es una alarma: faltan datos
         zonas.push({ id: 'equilibrio', nombre: 'Punto de equilibrio', estado: 'sin_datos', texto: 'Este mes todavía no hay ventas cargadas, así que no puedo medir el equilibrio.', url: '/rentabilidad' });
       } else if (mc && mc.necesario_a_la_fecha > 0) {
