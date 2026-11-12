@@ -82,10 +82,12 @@ async function armar(negocioId, hallazgo, accionId, db = pool) {
   const pr = calcularPrecio(normal, costo);
   if (pr.error) return { sin_promo: true, motivo: `Con los costos de ${cap(estrella.nombre)} y ${cap(b.nombre)} no queda margen para hacer un descuento sano. Probá con otros productos o revisá tus precios.` };
   const cu = cuando(accionId, hallazgo.clave);
-  const nombreNeg = ((await db.query('SELECT negocio FROM usuarios WHERE negocio_id = $1 ORDER BY id LIMIT 1', [negocioId]).catch(() => ({ rows: [] }))).rows[0] || {}).negocio;
+  const nombreNeg = ((await db.query('SELECT nombre FROM negocios WHERE id = $1', [negocioId]).catch(() => ({ rows: [] }))).rows[0] || {}).nombre;
   const A = cap(estrella.nombre), B = cap(b.nombre);
   const ganancia = costo > 0 ? Math.round(pr.precio - costo) : null;
-  const combosDia = hallazgo.monto > 0 ? Math.max(1, Math.min(40, Math.ceil(hallazgo.monto / 26 / pr.precio))) : null;
+  // La meta solo se muestra si es creíble (hasta 10 combos por día); una estimación inflada daría una cuenta absurda
+  const combosCalc = hallazgo.monto > 0 ? Math.max(1, Math.ceil(hallazgo.monto / 26 / pr.precio)) : null;
+  const combosDia = combosCalc && combosCalc <= 10 ? combosCalc : null;
   return {
     sin_promo: false,
     nombre: `Combo ${A} + ${B}`, cuando: cu.texto,
