@@ -18,6 +18,7 @@ const SILENCIO_DIAS = { no_sirve: 60, ya_lo_sabia: 30, resuelto: 30 };
 const ESTADO_DE = { util: 'util', no_sirve: 'descartado', ya_lo_sabia: 'sabido', resuelto: 'resuelto' };
 const ACCIONES = Object.keys(ESTADO_DE);
 // Plata recuperada: solo para hallazgos con monto MENSUAL comparable. A los 28 dias de marcado como resuelto se mide cuanto bajo.
+const { receta } = require('./acciones');
 const MENSUALES = ['dia_debil', 'franja_floja', 'comisiones_cobro', 'ticket_baja'];
 const DIAS_MEDIR = 28;
 const MIN_MEJORA = 0.2;
@@ -58,6 +59,7 @@ function asegurarTabla(db = pool) {
       await db.query('CREATE INDEX IF NOT EXISTS idx_hallazgos_neg ON hallazgos (negocio_id, vigente)');
       await db.query(`ALTER TABLE hallazgos ADD COLUMN IF NOT EXISTS resuelto_en TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS monto_al_resolver NUMERIC(14,2),
         ADD COLUMN IF NOT EXISTS monto_al_medir NUMERIC(14,2), ADD COLUMN IF NOT EXISTS recuperado NUMERIC(14,2), ADD COLUMN IF NOT EXISTS evaluado_en TIMESTAMPTZ`);
+      await db.query(`ALTER TABLE hallazgos ADD COLUMN IF NOT EXISTS accion_id TEXT, ADD COLUMN IF NOT EXISTS accion_titulo TEXT, ADD COLUMN IF NOT EXISTS accion_en TIMESTAMPTZ`);
     })().catch((e) => { tablaLista = null; throw e; });
   }
   return tablaLista;
@@ -186,7 +188,7 @@ async function radiografia(negocioId, db = pool, opts = {}) {
   return {
     suficiente: ctx.suficiente, dias_con_ventas: ctx.dias_con_ventas, dias_necesarios: ctx.dias_necesarios, faltan_dias: ctx.faltan_dias,
     hallazgos: top.map((h) => ({
-      id: h.clave, hid: h.id, accion_texto: ACCION_TEXTO[h.detector] || undefined, tipo: h.tipo, titulo: h.titulo, detalle: h.detalle || '', evidencia: h.evidencia || [],
+      id: h.clave, hid: h.id, accion_texto: ACCION_TEXTO[h.detector] || undefined, acciones: h.positivo ? [] : receta(h.detector, h.clave), tipo: h.tipo, titulo: h.titulo, detalle: h.detalle || '', evidencia: h.evidencia || [],
       monto: h.monto, monto_texto: h.monto_texto || undefined, url: h.url || '/', positivo: h.positivo || undefined,
     })),
   };
@@ -204,11 +206,35 @@ async function registrarFeedback(negocioId, id, accion, db = pool) {
             monto_al_resolver = CASE WHEN $4 = 'resuelto' THEN monto ELSE monto_al_resolver END,
             recuperado = CASE WHEN $4 = 'resuelto' THEN NULL ELSE recuperado END,
             monto_al_medir = CASE WHEN $4 = 'resuelto' THEN NULL ELSE monto_al_medir END,
-            evaluado_en = CASE WHEN $4 = 'resuelto' THEN NULL ELSE evaluado_en END
+            evaluado_en = CASE WHEN $4 = 'resuelto' THEN NULL ELSE evaluado_en END,
+            accion_id = CASE WHEN $4 = 'resuelto' THEN NULL ELSE accion_id END,
+            accion_titulo = CASE WHEN $4 = 'resuelto' THEN NULL ELSE accion_titulo END
       WHERE id = $1 AND negocio_id = $2 RETURNING id, estado, silenciado_hasta`,
     [id, negocioId, ESTADO_DE[accion], accion, dias]);
   if (!r.rows.length) throw Object.assign(new Error('No encontrado'), { status: 404 });
   return r.rows[0];
+}
+
+// El dueño elige una acción para probar: queda anotada y arranca la medición de 28 días (igual que "ya lo resolví").
+async function elegirAccion(negocioId, id, accionId, db = pool) {
+  await asegurarTabla(db);
+  const r = await db.query('SELECT detector, clave, positivo FROM hallazgos WHERE id = $1 AND negocio_id = $2', [id, negocioId]);
+  if (!r.rows.length) throw Object.assign(new Error('No encontrado'), { status: 404 });
+  const acc = receta(r.rows[0].detector, r.rows[0].clave).find((x) => x.id === accionId);
+  if (!acc || r.rows[0].positivo) throw Object.assign(new Error('Acción inválida'), { status: 400 });
+  await registrarFeedback(negocioId, id, 'resuelto', db);
+  await db.query('UPDATE hallazgos SET accion_id = $3, accion_titulo = $4, accion_en = NOW() WHERE id = $1 AND negocio_id = $2', [id, negocioId, acc.id, acc.titulo]);
+  return { ok: true, accion_titulo: acc.titulo };
+}
+
+// LumoBi arma la promo con las ventas, precios y costos del negocio (promo.js). No guarda nada: el dueño decide si la prueba.
+async function promoParaHallazgo(negocioId, id, accionId, db = pool) {
+  await asegurarTabla(db);
+  const r = await db.query('SELECT detector, clave, monto::float AS monto, positivo FROM hallazgos WHERE id = $1 AND negocio_id = $2', [id, negocioId]);
+  if (!r.rows.length) throw Object.assign(new Error('No encontrado'), { status: 404 });
+  const acc = receta(r.rows[0].detector, r.rows[0].clave).find((x) => x.id === accionId && x.arma);
+  if (!acc || r.rows[0].positivo) throw Object.assign(new Error('Acción inválida'), { status: 400 });
+  return require('./promo').armar(negocioId, r.rows[0], accionId, db);
 }
 
 // ── Plata recuperada ─────────────────────────────────────────────────────────
@@ -241,15 +267,15 @@ async function resumenRecuperado(negocioId, db = pool, opts = {}) {
   const ahora = opts.ahora || new Date();
   await evaluarRecuperos(negocioId, db, ahora, (cache.get(negocioId) || {}).ctx);
   const med = await db.query(
-    `SELECT id, titulo, monto_al_resolver::float AS antes, monto_al_medir::float AS ahora, recuperado::float AS recuperado
+    `SELECT id, titulo, accion_titulo, monto_al_resolver::float AS antes, monto_al_medir::float AS ahora, recuperado::float AS recuperado
        FROM hallazgos WHERE negocio_id = $1 AND evaluado_en IS NOT NULL AND recuperado > 0
         AND resuelto_en >= $2::timestamptz - INTERVAL '12 months' ORDER BY recuperado DESC`, [negocioId, ahora]);
   const seg = await db.query(
-    `SELECT id, titulo, monto_al_resolver::float AS antes,
+    `SELECT id, titulo, accion_titulo, monto_al_resolver::float AS antes,
             GREATEST(0, $2::int - FLOOR(EXTRACT(EPOCH FROM ($3::timestamptz - resuelto_en)) / 86400))::int AS dias_faltan
        FROM hallazgos WHERE negocio_id = $1 AND estado = 'resuelto' AND resuelto_en IS NOT NULL AND evaluado_en IS NULL
         AND detector = ANY($4::text[]) ORDER BY resuelto_en`, [negocioId, DIAS_MEDIR, ahora, MENSUALES]);
   return { total_mensual: Math.round(med.rows.reduce((s, x) => s + x.recuperado, 0)), medidos: med.rows, en_seguimiento: seg.rows };
 }
 
-module.exports = { puerta, radiografia, evaluarRecuperos, resumenRecuperado, detectarAumentos, detectar, procesar, obtener, paraAvisar, registrarFeedback, detectorDe, ACCIONES, MIN_ABS };
+module.exports = { puerta, radiografia, elegirAccion, promoParaHallazgo, evaluarRecuperos, resumenRecuperado, detectarAumentos, detectar, procesar, obtener, paraAvisar, registrarFeedback, detectorDe, ACCIONES, MIN_ABS };

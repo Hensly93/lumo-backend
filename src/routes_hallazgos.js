@@ -43,4 +43,28 @@ router.post('/:id/feedback', auth, async (req, res) => {
   }
 });
 
+// POST /api/hallazgos/:id/promo  { accion_id } — LumoBi arma la promo (combo, precio, textos) con los datos del negocio
+router.post('/:id/promo', auth, async (req, res) => {
+  try {
+    if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'No encontrado' });
+    res.json(await hallazgos.promoParaHallazgo(req.user.negocio_id, Number(req.params.id), String((req.body || {}).accion_id || '')));
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    console.error('hallazgos/promo:', e.message);
+    res.status(500).json({ error: 'No pude armar la promo.' });
+  }
+});
+
+// POST /api/hallazgos/:id/accion  { accion_id } — el dueño elige una acción para probar; arranca la medición de 28 días
+router.post('/:id/accion', auth, async (req, res) => {
+  try {
+    if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'No encontrado' });
+    res.json(await hallazgos.elegirAccion(req.user.negocio_id, Number(req.params.id), String((req.body || {}).accion_id || '')));
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    console.error('hallazgos/accion:', e.message);
+    res.status(500).json({ error: 'No pude guardar la acción.' });
+  }
+});
+
 module.exports = router;
