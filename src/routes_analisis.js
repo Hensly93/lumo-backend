@@ -570,6 +570,8 @@ async function ejecutarToolNicole(nombre, input, negocioId) {
       if (input.empleado) return await calcularRiesgoEmpleado(negocioId, input.empleado);
       return await calcularERMNegocio(negocioId, input.sucursal_id || null);
     }
+    const nt = require('./nicole_tools');
+    if (nt.TOOLS.some((t) => t.name === nombre)) return await nt.ejecutar(nombre, input, negocioId);
     return { error: "tool desconocida: " + nombre };
   } catch (e) {
     return { error: e.message };
@@ -676,9 +678,9 @@ router.post('/nicole/chat', auth, async (req, res) => {
       ? `Próxima predicción: $${Math.round(pred.valor_predicho).toLocaleString('es-AR')} para ${pred.fecha_target} (${baseStr}, horizonte ${pred.horizonte})${pred.mensaje_nicole ? '. ' + pred.mensaje_nicole : ''}`
       : 'sin predicción activa';
 
-    const systemPrompt = `Sos NICOLE, la IA de Lumo. Tu nombre es NICOLE, no sos ChatGPT ni Claude. Solo hablás sobre el negocio del dueño usando los datos reales que te paso. Español rioplatense informal, tono de socia de confianza, nunca decís fraude, siempre en pesos argentinos, máximo 5 líneas por respuesta. No sabés cómo se llama el dueño: nunca lo llames por un nombre ni inventes nombres de personas; los únicos nombres que podés usar son los de los empleados que aparecen en los datos. No uses emojis. Nunca sugieras que una persona robó, mintió o es culpable de algo: hablás de diferencias en la caja, turnos y días, no de culpables. Si los datos no alcanzan para afirmar algo, decilo con claridad (por ejemplo 'con lo que cargaste todavía no alcanza para saberlo') y no inventes números.
+    const systemPrompt = `Sos NICOLE, la IA de LumoBi. Tu nombre es NICOLE, no sos ChatGPT ni Claude. Solo hablás sobre el negocio del dueño usando los datos reales que te paso. Español rioplatense informal, tono de socia de confianza, nunca decís fraude, siempre en pesos argentinos, máximo 5 líneas por respuesta. No sabés cómo se llama el dueño: nunca lo llames por un nombre ni inventes nombres de personas; los únicos nombres que podés usar son los de los empleados que aparecen en los datos. No uses emojis. Nunca sugieras que una persona robó, mintió o es culpable de algo: hablás de diferencias en la caja, turnos y días, no de culpables. Si los datos no alcanzan para afirmar algo, decilo con claridad (por ejemplo 'con lo que cargaste todavía no alcanza para saberlo') y no inventes números. Para cualquier pregunta con números (ventas por día u hora, medios de pago, empleados, productos, qué mejorar, plata recuperada) usá las herramientas en vez de adivinar: te devuelven los datos reales del negocio. Si una herramienta no trae datos, decilo tal cual. Al final de una respuesta con números, si la herramienta trae 'ver_en', decile al dueño en qué pantalla de LumoBi ve el detalle (por ejemplo Períodos o Catálogo). Las fechas de las herramientas son YYYY-MM-DD y hoy es la fecha indicada abajo. Si el dueño te pide hacer algo (armar una promo, cambiar un precio), explicale que esas acciones las arma LumoBi desde la Radiografía del Inicio y que él decide si las prueba; vos no cambiás nada solo.
 
-DATOS DEL NEGOCIO (hoy ${new Date().toLocaleDateString('es-AR')}):
+DATOS DEL NEGOCIO (hoy ${new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10)}, hora de Argentina):
 Perfil: ${u.negocio || 'sin nombre'} · ${u.tipo_negocio || 'tipo desconocido'} · ${u.ciudad || 'sin ciudad'}${u.zona ? ` zona ${u.zona}` : ''}
 Ventas 30d: ${ventasStr}
 Empleados: ${empleadosStr}
@@ -701,7 +703,7 @@ Predicción: ${predStr}`;
     let currentMessages = [...messages];
     let finalText = null;
     let iteraciones = 0;
-    const MAX_ITERACIONES = 3;
+    const MAX_ITERACIONES = 5;
 
     while (finalText === null && iteraciones < MAX_ITERACIONES) {
       iteraciones++;
@@ -720,10 +722,10 @@ Predicción: ${predStr}`;
         },
         body: JSON.stringify({
           model: modeloIA,
-          max_tokens: 400,
+          max_tokens: 800,
           system: systemPrompt,
           messages: currentMessages,
-          tools: NICOLE_TOOLS,
+          tools: [...NICOLE_TOOLS, ...require('./nicole_tools').TOOLS],
         }),
       });
 
@@ -737,15 +739,20 @@ Predicción: ${predStr}`;
       require('./ia_presupuesto').registrarUso({ funcion: 'nicole_chat', modelo: data.model || modeloIA, usage: data.usage });
 
       if (data.stop_reason === 'tool_use') {
-        const toolUseBlock = data.content.find(b => b.type === 'tool_use');
-        if (!toolUseBlock) { finalText = 'No pude procesar la consulta.'; break; }
+        const usos = data.content.filter(b => b.type === 'tool_use');
+        if (!usos.length) { finalText = 'No pude procesar la consulta.'; break; }
 
-        const resultado = await ejecutarToolNicole(toolUseBlock.name, toolUseBlock.input, req.user.negocio_id);
+        // Claude puede pedir varias herramientas a la vez: hay que devolver el resultado de cada una
+        const resultados = [];
+        for (const uso of usos) {
+          const resultado = await ejecutarToolNicole(uso.name, uso.input, req.user.negocio_id);
+          resultados.push({ type: 'tool_result', tool_use_id: uso.id, content: JSON.stringify(resultado).slice(0, 12000) });
+        }
 
         currentMessages = [
           ...currentMessages,
           { role: 'assistant', content: data.content },
-          { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseBlock.id, content: JSON.stringify(resultado) }] },
+          { role: 'user', content: resultados },
         ];
       } else {
         finalText = data.content?.find(b => b.type === 'text')?.text?.trim() ?? 'No pude generar una respuesta. Intentá de nuevo.';
