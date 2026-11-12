@@ -104,8 +104,47 @@ async function armarComisiones(negocioId, db = pool) {
   };
 }
 
+// Proveedores: LumoBi calcula el precio nuevo de cada producto que el proveedor aumentó, manteniendo tu margen (el mismo múltiplo costo→precio).
+async function armarProveedores(negocioId, db = pool) {
+  let filas;
+  try {
+    filas = (await db.query(
+      `WITH x AS (
+         SELECT i.producto_id, i.clave, c.fecha, c.id AS cid, i.precio_unitario::float AS precio,
+                LAG(i.precio_unitario) OVER (PARTITION BY i.clave ORDER BY c.fecha, c.id) AS ant
+           FROM compras_items i JOIN compras c ON c.id = i.compra_id WHERE c.negocio_id = $1 AND i.precio_unitario > 0),
+       u AS (SELECT DISTINCT ON (producto_id) * FROM x
+              WHERE ant > 0 AND producto_id IS NOT NULL AND fecha >= (NOW() - INTERVAL '3 hours')::date - 90 AND precio / ant::float - 1 >= 0.05
+              ORDER BY producto_id, fecha DESC, cid DESC)
+       SELECT p.nombre, p.precio_venta::float AS pv, u.precio, u.ant::float AS ant
+         FROM u JOIN productos p ON p.id = u.producto_id AND p.negocio_id = $1 WHERE p.precio_venta > 0
+        ORDER BY u.precio / u.ant DESC LIMIT 8`, [negocioId])).rows;
+  } catch (e) {
+    if (e.code === '42P01') filas = [];
+    else throw e;
+  }
+  if (!filas.length) return { sin_promo: true, motivo: 'Para calcular los precios nuevos necesito facturas cargadas con productos de tu catálogo que hayan subido de precio. Cuando cargues una factura y asocies los productos, lo calculo.' };
+  const items = filas.map((x) => {
+    const paso = x.pv >= 3000 ? 100 : x.pv >= 1000 ? 50 : 10;
+    const nuevo = Math.ceil((x.pv * x.precio / x.ant) / paso) * paso;
+    return { nombre: cap(x.nombre), pv: x.pv, nuevo, subida: Math.round((nuevo / x.pv - 1) * 100), aumento: Math.round((x.precio / x.ant - 1) * 100) };
+  }).filter((x) => x.nuevo > x.pv);
+  if (!items.length) return { sin_promo: true, motivo: 'Con los aumentos que encontré, tus precios actuales ya cubren el margen. No hace falta cambiar nada.' };
+  return {
+    sin_promo: false, nombre: 'Precios nuevos por la suba de tus proveedores', cuando: '',
+    resumen: `Subí el precio de ${items.length} ${items.length === 1 ? 'producto' : 'productos'} para mantener tu margen.`,
+    por_que: [
+      ...items.map((x) => `${x.nombre}: de ${fmt(x.pv)} a ${fmt(x.nuevo)} (+${x.subida}%), porque tu proveedor lo subió ${x.aumento}%.`),
+      'El precio nuevo mantiene la misma relación entre lo que te cuesta y lo que cobrás.',
+    ],
+    aviso: 'Si ya actualizaste alguno de estos precios, ignoralo. LumoBi no cambia tus precios solo: los cargás vos en el catálogo.',
+    textos: { lista: 'Precios nuevos:\n' + items.map((x) => `${x.nombre}: ${fmt(x.nuevo)}`).join('\n') },
+  };
+}
+
 async function armar(negocioId, hallazgo, accionId, db = pool) {
   if (accionId === 'descuento_efectivo') return armarComisiones(negocioId, db);
+  if (accionId === 'ajustar_precio') return armarProveedores(negocioId, db);
   const top = await datos(negocioId, db);
   if (top.length < 2) return { sin_promo: true, motivo: 'Necesito al menos 2 productos con ventas registradas por producto para armar un combo con tus datos. Escaneá o cargá ventas con productos y lo armo.' };
   const estrella = top[0];
@@ -146,4 +185,4 @@ async function armar(negocioId, hallazgo, accionId, db = pool) {
   };
 }
 
-module.exports = { armar, armarComisiones, calcularPrecio, elegirPareja, textos, cuando, MARGEN_MIN };
+module.exports = { armar, armarProveedores, armarComisiones, calcularPrecio, elegirPareja, textos, cuando, MARGEN_MIN };

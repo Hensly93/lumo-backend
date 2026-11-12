@@ -4,7 +4,7 @@
 const DIAS = ['domingos', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados'];
 
 function a(id, tipo, titulo, detalle, arma) { return arma ? { id, tipo, titulo, detalle, arma: true } : { id, tipo, titulo, detalle }; }
-const PROMOS = ['promo_franja', 'promo_dia', 'combo_precio', 'descuento_efectivo'];   // acciones que LumoBi arma con los datos del negocio (promo.js)
+const PROMOS = ['promo_franja', 'promo_dia', 'combo_precio', 'descuento_efectivo', 'ajustar_precio'];   // acciones que LumoBi arma con los datos del negocio (promo.js)
 
 function receta(detector, clave) {
   const num = Number(String(clave || '').match(/(\d+)$/)?.[1]);
@@ -37,7 +37,7 @@ function receta(detector, clave) {
     return [
       a('cotizar', 'perder_menos', 'Pedí precio a otro proveedor', 'Con tu última factura en mano, pedí cotización de los productos que más subieron.'),
       a('negociar', 'perder_menos', 'Negociá con el proveedor actual', 'Preguntá por precio por volumen o por pago al contado en los productos que más subieron.'),
-      a('ajustar_precio', 'ganar', 'Subí el precio de lo que más te aumentó', 'Si no lo trasladás, el aumento sale de tu ganancia.'),
+      a('ajustar_precio', 'ganar', 'LumoBi calcula el precio nuevo de cada producto que te aumentaron', 'Toma tus facturas y te dice cuánto subir cada precio para mantener tu margen. Te deja la lista lista para copiar.', true),
     ];
   }
   return [];
