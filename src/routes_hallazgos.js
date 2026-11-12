@@ -20,6 +20,16 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
+// GET /api/hallazgos/recuperado — plata que LumoBi te ayudó a recuperar (medida 28 días después de marcar un hallazgo como resuelto)
+router.get('/recuperado', auth, async (req, res) => {
+  try {
+    res.json(await hallazgos.resumenRecuperado(req.user.negocio_id));
+  } catch (e) {
+    console.error('hallazgos/recuperado:', e.message);
+    res.status(500).json({ error: 'No pude calcular lo recuperado.' });
+  }
+});
+
 // POST /api/hallazgos/:id/feedback  { accion: 'util' | 'no_sirve' | 'ya_lo_sabia' | 'resuelto' }
 router.post('/:id/feedback', auth, async (req, res) => {
   try {
