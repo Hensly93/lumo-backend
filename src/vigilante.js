@@ -790,7 +790,7 @@ async function detMP(db, p) {
   return [];
 }
 
-const DETECTORES = [detTurnoSinAbrir, detCajaAbierta, detSinVentasHoy, detRitmo, detNicole, detERM, detLluvia, detFugas, detHallazgos, detRentabilidad, detBriefing, detDatosViejos, detSinDatos, detResumenDiario, detPago, detPrueba, detCancelacion, detMP];
+const DETECTORES = [detTurnoSinAbrir, detCajaAbierta, detSinVentasHoy, detRitmo, detNicole, detERM, detLluvia, detFugas, detHallazgos, detRentabilidad, detBriefing, detDatosViejos, detSinDatos, detResumenDiario, detPago, detPrueba, detCancelacion, detMP, ...require('./consejero').DETECTORES];
 
 // ─── Un negocio ─────────────────────────────────────────────────────────────
 
