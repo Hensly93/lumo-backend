@@ -165,6 +165,13 @@ try {
 }
 
 try {
+  app.use("/api/precios-masivo", require("./routes_precios_masivo"));
+  console.log("Precios masivo OK");
+} catch(e) {
+  console.error("Precios masivo ERROR:", e.message);
+}
+
+try {
   app.use("/api/identidad", require("./routes_identidad"));
   console.log("Identidad OK");
 } catch(e) {
