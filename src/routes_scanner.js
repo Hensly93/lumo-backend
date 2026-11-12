@@ -8,6 +8,28 @@ const { registrarCambio } = require('./cambios_precios');
 // GET /api/scanner/producto?turno_id=X&codigo=Y
 // Busca producto por código de barras en el negocio del turno activo
 // ─────────────────────────────────────────────────────────────────────
+// GET /api/scanner/buscar?q=  — busca productos del negocio por nombre o por parte del codigo (para la caja)
+router.get('/buscar', authTurno, async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim().slice(0, 60);
+    if (q.length < 2) return res.json({ productos: [] });
+    const turno = await pool.query(`SELECT negocio_id FROM turnos_caja WHERE id=$1 AND estado='activo'`, [req.turno.id]);
+    if (turno.rows.length === 0) return res.status(400).json({ error: 'Turno no activo' });
+    const like = '%' + q.replace(/[%_\\]/g, ' ') + '%';
+    const r = await pool.query(
+      `SELECT id, nombre, categoria, precio_venta, unidad, codigo_barras
+         FROM productos
+        WHERE negocio_id = $1 AND COALESCE(activo, true) = true AND (nombre ILIKE $2 OR codigo_barras ILIKE $2)
+        ORDER BY (nombre ILIKE $3) DESC, nombre ASC
+        LIMIT 8`,
+      [turno.rows[0].negocio_id, like, q + '%']
+    );
+    res.json({ productos: r.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/producto', authTurno, async (req, res) => {
   try {
     const { codigo } = req.query;
@@ -166,6 +188,15 @@ router.post('/carrito', authTurno, async (req, res) => {
 
     const precio_unitario = producto.rows[0].precio_venta;
 
+    // Si el mismo producto (al mismo precio) ya esta en el carrito, se suma la cantidad en vez de crear otra linea
+    const existente = await pool.query(
+      `UPDATE carrito_items SET cantidad = cantidad + $3
+        WHERE id = (SELECT id FROM carrito_items WHERE turno_id=$1 AND producto_id=$2 AND precio_unitario=$4 ORDER BY id LIMIT 1)
+        RETURNING *`,
+      [turno_id, producto_id, cantidad, precio_unitario]
+    );
+    if (existente.rows.length > 0) return res.json({ item: existente.rows[0] });
+
     const result = await pool.query(
       `INSERT INTO carrito_items (turno_id, producto_id, cantidad, precio_unitario, agregado_por)
        VALUES ($1, $2, $3, $4, $5)
@@ -214,6 +245,24 @@ router.get('/carrito/:turno_id', authTurno, async (req, res) => {
 // DELETE /api/scanner/carrito/:turno_id/:item_id
 // Elimina un item del carrito
 // ─────────────────────────────────────────────────────────────────────
+// POST /api/scanner/carrito/:turno_id/:item_id/cantidad  { cantidad } — cambia la cantidad de una linea (0 o menos la borra)
+router.post('/carrito/:turno_id/:item_id/cantidad', authTurno, express.json({ limit: '2kb' }), async (req, res) => {
+  try {
+    const cant = parseFloat(req.body && req.body.cantidad);
+    if (!Number.isFinite(cant)) return res.status(400).json({ error: 'Cantidad invalida' });
+    if (cant <= 0) {
+      await pool.query(`DELETE FROM carrito_items WHERE id=$1 AND turno_id=$2`, [req.params.item_id, req.turno.id]);
+      return res.json({ eliminado: true });
+    }
+    if (cant > 9999) return res.status(400).json({ error: 'Cantidad demasiado grande' });
+    const r = await pool.query(`UPDATE carrito_items SET cantidad=$3 WHERE id=$1 AND turno_id=$2 RETURNING *`, [req.params.item_id, req.turno.id, cant]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Item no encontrado' });
+    res.json({ item: r.rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.delete('/carrito/:turno_id/:item_id', authTurno, async (req, res) => {
   try {
     const { item_id } = req.params;
