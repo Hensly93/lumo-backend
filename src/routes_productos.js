@@ -45,6 +45,8 @@ function parsearFilasExcel(rows) {
       const pcRaw     = getCol(row, [], ['precio costo', 'p.costo', 'pcosto', 'costo', 'cost']);
       const categoria = getCol(row, [], ['categoria', 'category', 'rubro', 'tipo', 'familia', 'seccion', 'grupo']);
       const unidad    = getCol(row, [], ['unidad', 'unit', 'um', 'medida', 'presentacion']);
+      const marca     = getCol(row, [], ['marca', 'brand', 'fabricante']);
+      const codigoRaw = getCol(row, [], ['codigo de barras', 'cod. barras', 'cod barras', 'codigo barras', 'barras', 'ean', 'codigo']);
 
       return {
         nombre,
@@ -52,6 +54,8 @@ function parsearFilasExcel(rows) {
         precio_venta: limpiarPrecio(pvRaw),
         precio_costo: limpiarPrecio(pcRaw),
         unidad:       unidad || 'unidad',
+        marca:        marca || null,
+        codigo_barras: require('./catalogo_marca').normalizarCodigo(codigoRaw),
       };
     })
     .filter(p => p.nombre.length > 1);
@@ -70,10 +74,11 @@ const PROMPT_EXTRACCION = `Sos un asistente que extrae listas de productos de ar
 Del texto/imagen que te mando, extraé todos los productos que encuentres.
 Devolvé ÚNICAMENTE un JSON array con esta estructura, sin texto adicional:
 [
-  { "nombre": "string", "categoria": "string o null", "precio_venta": número o null, "precio_costo": número o null, "unidad": "string" }
+  { "nombre": "string", "marca": "string o null", "categoria": "string o null", "precio_venta": número o null, "precio_costo": número o null, "unidad": "string" }
 ]
 Reglas:
 - nombre: requerido, tal como aparece
+- marca: la marca comercial solo si aparece o es inequívoca (ej: Oreo, Arcor), sino null
 - categoria: si se puede inferir del contexto, sino null
 - precio_venta: precio al público en pesos, solo el número sin símbolo
 - precio_costo: precio de costo si aparece, sino null
@@ -101,6 +106,7 @@ async function parsearConClaude(content) {
       precio_venta: typeof p.precio_venta === 'number' && p.precio_venta > 0 ? p.precio_venta : null,
       precio_costo: typeof p.precio_costo === 'number' && p.precio_costo > 0 ? p.precio_costo : null,
       unidad:       p.unidad ? String(p.unidad).trim() : 'unidad',
+      marca:        p.marca ? String(p.marca).trim().slice(0, 80) : null,
     }));
 }
 
@@ -169,6 +175,8 @@ router.post('/upload-archivo', auth, upload.single('archivo'), async (req, res) 
       return res.status(422).json({ error: 'No se encontraron productos en el archivo. Verificá el formato.' });
     }
 
+    try { productos = await require('./producto_identidad').anotarImport(req.user.negocio_id, productos, pool); }
+    catch (e) { console.error('upload-archivo/anotar:', e.message); }   // sin anotaciones se importa igual
     res.json({ productos, total: productos.length, metodo });
   } catch (e) {
     console.error('upload-archivo error:', e.message);
@@ -185,6 +193,8 @@ router.post('/confirmar', auth, async (req, res) => {
       return res.status(400).json({ error: 'productos requerido' });
     }
 
+    await require('./catalogo_marca').asegurar();
+    await require('./producto_identidad').asegurar();
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -194,6 +204,31 @@ router.post('/confirmar', auth, async (req, res) => {
 
       for (const p of productos) {
         if (!p.nombre?.trim()) continue;
+
+        // El dueño confirmó que esta fila es un producto que ya tenía: se actualiza ese y se recuerda el nombre nuevo
+        if (Number.isInteger(p.producto_id)) {
+          const cur = await client.query('SELECT id, precio_venta FROM productos WHERE id=$1 AND negocio_id=$2 AND activo=true', [p.producto_id, req.user.negocio_id]);
+          if (cur.rows.length) {
+            const ant = cur.rows[0].precio_venta;
+            const marcaFila = require('./catalogo_marca').limpiarMarca(p.marca);
+            await client.query(
+              `UPDATE productos SET categoria = COALESCE($3, categoria), precio_venta = COALESCE($4, precio_venta), precio_costo = COALESCE($5, precio_costo),
+                      unidad = CASE WHEN $6::text IS NOT NULL AND $6::text <> 'unidad' THEN $6::text ELSE unidad END, marca = COALESCE(marca, $7), updated_at = NOW()
+                WHERE id = $1 AND negocio_id = $2`,
+              [p.producto_id, req.user.negocio_id, p.categoria || null, p.precio_venta || null, p.precio_costo || null, p.unidad || null, marcaFila]);
+            const al = require('./producto_identidad').claveAlias(p.nombre);
+            if (al) await client.query('INSERT INTO producto_alias (negocio_id, alias, producto_id) VALUES ($1,$2,$3) ON CONFLICT (negocio_id, alias) DO NOTHING', [req.user.negocio_id, al, p.producto_id]);
+            if (p.precio_venta != null && ant != null && parseFloat(ant) !== parseFloat(p.precio_venta)) {
+              await client.query(
+                `INSERT INTO productos_historico_precios(producto_id, negocio_id, precio_anterior, precio_nuevo, origen) VALUES($1,$2,$3,$4,'carga_masiva')`,
+                [p.producto_id, req.user.negocio_id, ant, p.precio_venta]);
+              const aum = ((parseFloat(p.precio_venta) - parseFloat(ant)) / parseFloat(ant)) * 100;
+              if (aum > 20) aumentosGrandes.push({ nombre: p.nombre.trim(), precio_anterior: parseFloat(ant), precio_nuevo: parseFloat(p.precio_venta), aumento_porcentaje: Math.round(aum) });
+            }
+            actualizados++;
+            continue;
+          }
+        }
 
         // Capturar precio anterior antes del INSERT
         let precioAnterior = null;
@@ -225,6 +260,15 @@ router.post('/confirmar', auth, async (req, res) => {
         const productoId = r.rows[0].id;
 
         if (esInsercion) insertados++; else actualizados++;
+
+        const marcaNueva = require('./catalogo_marca').limpiarMarca(p.marca);
+        if (marcaNueva) await client.query('UPDATE productos SET marca = COALESCE(marca, $2) WHERE id = $1', [productoId, marcaNueva]);
+        const codNuevo = require('./catalogo_marca').normalizarCodigo(p.codigo_barras);
+        if (codNuevo) {
+          await client.query(
+            `UPDATE productos SET codigo_barras = $2 WHERE id = $1 AND codigo_barras IS NULL
+                AND NOT EXISTS (SELECT 1 FROM productos o WHERE o.negocio_id = $3 AND o.codigo_barras = $2)`, [productoId, codNuevo, req.user.negocio_id]);
+        }
 
         // Registrar en histórico de precios (dentro de la transacción)
         if (p.precio_venta != null) {

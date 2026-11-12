@@ -34,7 +34,7 @@ function tamano(tok) {
 
 // Separa "500ml" o "1,5l" pegados al número ("coca1.5l") y "x6" en tokens
 function tokenizar(texto) {
-  const s = sinTildes(texto).replace(/(\d)([a-z])/g, '$1$2').replace(/[^a-z0-9.,\s]/g, ' ').replace(/(\d)[.,](?=\D|$)/g, '$1').replace(/\s+/g, ' ').trim();
+  const s = sinTildes(texto).replace(/(\d)\s+(ml|cc|lts?|litros?|l|grs?|gramos|kgs?|kilos?)\b/g, '$1$2').replace(/[^a-z0-9.,\s]/g, ' ').replace(/(\d)[.,](?=\D|$)/g, '$1').replace(/\s+/g, ' ').trim();
   return s ? s.split(' ') : [];
 }
 
@@ -91,8 +91,8 @@ function mismosTamanos(a, b) {
 }
 
 // Parecido entre dos nombres de producto, de 0 a 1. 0 si los tamaños no coinciden.
-function similitud(a, b) {
-  const A = analizar(a), B = analizar(b);
+function similitud(a, b) { return simAnalizado(analizar(a), analizar(b)); }
+function simAnalizado(A, B) {
   if (!A.palabras.length || !B.palabras.length) return 0;
   if (A.tamanos.length && B.tamanos.length && !mismosTamanos(A.tamanos, B.tamanos)) return 0;
   const libres = B.palabras.slice(); let m = 0;
@@ -145,7 +145,7 @@ async function marcasConocidas(negocioId, db = pool) {
 // Productos que ya existen y parecen el mismo que el nombre que se está por cargar (primero los que ya fueron unificados con ese nombre)
 async function buscarParecidos(negocioId, nombre, db = pool, { minimo = 0.67, limite = 3 } = {}) {
   await asegurar(db);
-  const alias = (await db.query('SELECT p.id, p.nombre, p.marca, p.codigo_barras FROM producto_alias a JOIN productos p ON p.id = a.producto_id WHERE a.negocio_id = $1 AND a.alias = $2 AND COALESCE(p.activo, true)', [negocioId, analizar(nombre).palabras.join(' ')])).rows;
+  const alias = (await db.query('SELECT p.id, p.nombre, p.marca, p.codigo_barras FROM producto_alias a JOIN productos p ON p.id = a.producto_id WHERE a.negocio_id = $1 AND a.alias = $2 AND COALESCE(p.activo, true)', [negocioId, claveAlias(nombre)])).rows;
   const filas = await catalogo(negocioId, db);
   const marcas = await marcasConocidas(negocioId, db);
   const lista = filas.map((p) => ({ id: p.id, nombre: p.nombre, marca: p.marca, codigo_barras: p.codigo_barras, similitud: similitud(nombre, p.nombre) }))
@@ -191,7 +191,7 @@ async function unificar(negocioId, canonicoId, ids, db = pool) {
     }
     let adopta = can.codigo_barras || null, marca = can.marca || null;
     for (const p of ok.filter((x) => x.id !== can.id)) {
-      const al = analizar(p.nombre).palabras.join(' ');
+      const al = claveAlias(p.nombre);
       if (al) await cx.query('INSERT INTO producto_alias (negocio_id, alias, producto_id) VALUES ($1,$2,$3) ON CONFLICT (negocio_id, alias) DO UPDATE SET producto_id = EXCLUDED.producto_id', [negocioId, al, can.id]);
       if (p.codigo_barras) {
         await cx.query('INSERT INTO producto_codigos (negocio_id, codigo, producto_id) VALUES ($1,$2,$3) ON CONFLICT (negocio_id, codigo) DO UPDATE SET producto_id = EXCLUDED.producto_id', [negocioId, p.codigo_barras, can.id]);
@@ -209,4 +209,40 @@ async function unificar(negocioId, canonicoId, ids, db = pool) {
   } finally { if (cx !== db && cx.release) cx.release(); }
 }
 
-module.exports = { analizar, similitud, distancia, mismaPalabra, reconocerMarca, tamano, buscarParecidos, sugerirUnificaciones, unificar, marcasConocidas, asegurar };
+// Importación de listas: a cada fila se le marca con qué producto del catálogo se parece (o si es el mismo seguro),
+// qué marca tiene (la del archivo o la que se reconoce por las marcas del negocio) y si se repite dentro del mismo archivo.
+// Clave de un nombre para recordar alias: las palabras normalizadas MÁS el tamaño ("coca cola 0.5l" no es "coca cola 1.5l")
+function claveDe(A) { return [...A.palabras, ...A.tamanos.map((t) => `${t.v}${t.u}`).sort()].join(' '); }
+function claveAlias(nombre) { return claveDe(analizar(nombre)); }
+
+async function anotarImport(negocioId, items, db = pool) {
+  await asegurar(db);
+  const cat = await catalogo(negocioId, db);
+  const marcas = await marcasConocidas(negocioId, db);
+  const porAlias = new Map((await db.query('SELECT alias, producto_id FROM producto_alias WHERE negocio_id = $1', [negocioId])).rows.map((r) => [r.alias, r.producto_id]));
+  const porCodigoAlias = new Map((await db.query('SELECT codigo, producto_id FROM producto_codigos WHERE negocio_id = $1', [negocioId])).rows.map((r) => [r.codigo, r.producto_id]));
+  const porId = new Map(cat.map((p) => [p.id, p]));
+  const porCodigo = new Map(cat.filter((p) => p.codigo_barras).map((p) => [p.codigo_barras, p]));
+  const catA = cat.map((p) => ({ p, A: analizar(p.nombre) }));
+  const tope = Math.min(items.length, 1500);
+  const AA = items.map((it, i) => (i < tope ? analizar(it.nombre) : null));
+  return items.map((it, i) => {
+    if (i >= tope) return it;
+    const A = AA[i];
+    let best = null;
+    const cod = it.codigo_barras ? (porCodigo.get(it.codigo_barras) || porId.get(porCodigoAlias.get(it.codigo_barras))) : null;
+    if (cod) best = { p: cod, s: 1 };
+    if (!best) { const aid = porAlias.get(claveDe(A)); if (aid && porId.get(aid)) best = { p: porId.get(aid), s: 1 }; }
+    if (!best) for (const { p, A: B } of catA) { const s = simAnalizado(A, B); if (s >= 0.75 && (!best || s > best.s)) best = { p, s }; }
+    const marca = (it.marca && String(it.marca).trim()) || reconocerMarca(it.nombre, marcas) || null;
+    let repetido = null;
+    if (items.length <= 600) for (let j = 0; j < i && !repetido; j++) if (AA[j] && simAnalizado(A, AA[j]) >= 0.85) repetido = items[j].nombre;
+    return {
+      ...it, marca,
+      existente: best ? { id: best.p.id, nombre: best.p.nombre, marca: best.p.marca || null, similitud: best.s, exacto: best.s >= 0.99 } : null,
+      parecido_archivo: repetido,
+    };
+  });
+}
+
+module.exports = { claveAlias, anotarImport, simAnalizado, analizar, similitud, distancia, mismaPalabra, reconocerMarca, tamano, buscarParecidos, sugerirUnificaciones, unificar, marcasConocidas, asegurar };
