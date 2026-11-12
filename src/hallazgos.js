@@ -110,7 +110,10 @@ async function detectar(negocioId, db = pool, opts = {}) {
   const lista = (rad.hallazgos || []).map((h) => ({ ...h }));
   try { const a = await (opts.aumentos || detectarAumentos)(negocioId, db); if (a) lista.push(a); }
   catch (e) { console.error('hallazgos/aumentos:', e.message); }
-  return { lista, ctx: { suficiente: !!rad.suficiente, ventas_mes: Number(rad.ventas_mes) || 0 } };
+  return { lista, ctx: {
+    suficiente: !!rad.suficiente, ventas_mes: Number(rad.ventas_mes) || 0,
+    dias_con_ventas: Number(rad.dias_con_ventas) || 0, dias_necesarios: Number(rad.dias_necesarios) || 14, faltan_dias: Number(rad.faltan_dias) || 0,
+  } };
 }
 
 const cache = new Map();   // negocio_id -> { ts, ctx }
@@ -162,6 +165,23 @@ async function paraAvisar(negocioId, db = pool, opts = {}) {
   return filas.filter((h) => h.puerta.pasa && h.detector !== 'fuga').slice(0, 1);
 }
 
+// Lo que muestra la Radiografía: los 3 hallazgos más valiosos de los vigentes, sin los que el dueño descartó o resolvió.
+// Cada uno trae "hid" (su número) para poder responder "me sirvió / no me sirve / ya lo resolví".
+async function radiografia(negocioId, db = pool, opts = {}) {
+  const filas = await obtener(negocioId, db, opts);
+  const ctx = (cache.get(negocioId) || {}).ctx || { suficiente: false, dias_con_ventas: 0, dias_necesarios: 14, faltan_dias: 14 };
+  const ahora = opts.ahora || new Date();
+  const visibles = filas.filter((h) => !(h.silenciado_hasta && new Date(h.silenciado_hasta) > ahora));
+  const top = require('./radiografia').elegir(visibles, 3);
+  return {
+    suficiente: ctx.suficiente, dias_con_ventas: ctx.dias_con_ventas, dias_necesarios: ctx.dias_necesarios, faltan_dias: ctx.faltan_dias,
+    hallazgos: top.map((h) => ({
+      id: h.clave, hid: h.id, tipo: h.tipo, titulo: h.titulo, detalle: h.detalle || '', evidencia: h.evidencia || [],
+      monto: h.monto, monto_texto: h.monto_texto || undefined, url: h.url || '/', positivo: h.positivo || undefined,
+    })),
+  };
+}
+
 // ── Aprendizaje: lo que dice el dueño ────────────────────────────────────────
 async function registrarFeedback(negocioId, id, accion, db = pool) {
   if (!ACCIONES.includes(accion)) throw Object.assign(new Error('Acción inválida'), { status: 400 });
@@ -176,4 +196,4 @@ async function registrarFeedback(negocioId, id, accion, db = pool) {
   return r.rows[0];
 }
 
-module.exports = { puerta, detectarAumentos, detectar, procesar, obtener, paraAvisar, registrarFeedback, detectorDe, ACCIONES, MIN_ABS };
+module.exports = { puerta, radiografia, detectarAumentos, detectar, procesar, obtener, paraAvisar, registrarFeedback, detectorDe, ACCIONES, MIN_ABS };

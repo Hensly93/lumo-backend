@@ -378,7 +378,13 @@ router.get('/inicio', auth, async (req, res) => {
 // GET /radiografia — hallazgos mas valiosos del negocio (con plata y evidencia). Ver radiografia.js
 router.get('/radiografia', auth, async (req, res) => {
   try {
-    res.json(await require('./radiografia').calcularRadiografia(req.user.negocio_id));
+    try {
+      // El cerebro guarda los hallazgos, oculta los que el dueño descartó y permite responderles (hallazgos.js)
+      res.json(await require('./hallazgos').radiografia(req.user.negocio_id));
+    } catch (e0) {
+      console.error('radiografia (cerebro), uso el calculo directo:', e0.message);
+      res.json(await require('./radiografia').calcularRadiografia(req.user.negocio_id));
+    }
   } catch (e) {
     console.error('radiografia:', e.message);
     res.status(500).json({ error: 'No se pudo calcular la radiografia' });
