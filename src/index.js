@@ -165,6 +165,13 @@ try {
 }
 
 try {
+  app.use("/api/identidad", require("./routes_identidad"));
+  console.log("Identidad OK");
+} catch(e) {
+  console.error("Identidad ERROR:", e.message);
+}
+
+try {
   const scannerRoutes = require("./routes_scanner");
   app.use("/api/scanner", scannerRoutes);
   console.log("Scanner OK");

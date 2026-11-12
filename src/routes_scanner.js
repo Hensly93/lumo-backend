@@ -12,12 +12,13 @@ const { registrarCambio } = require('./cambios_precios');
 router.get('/buscar', authTurno, async (req, res) => {
   try {
     const q = String(req.query.q || '').trim().slice(0, 60);
+    await require('./catalogo_marca').asegurar();
     if (q.length < 2) return res.json({ productos: [] });
     const turno = await pool.query(`SELECT negocio_id FROM turnos_caja WHERE id=$1 AND estado='activo'`, [req.turno.id]);
     if (turno.rows.length === 0) return res.status(400).json({ error: 'Turno no activo' });
     const like = '%' + q.replace(/[%_\\]/g, ' ') + '%';
     const r = await pool.query(
-      `SELECT id, nombre, categoria, precio_venta, unidad, codigo_barras
+      `SELECT id, nombre, marca, categoria, precio_venta, unidad, codigo_barras
          FROM productos
         WHERE negocio_id = $1 AND COALESCE(activo, true) = true AND (nombre ILIKE $2 OR codigo_barras ILIKE $2)
         ORDER BY (nombre ILIKE $3) DESC, nombre ASC
@@ -33,6 +34,7 @@ router.get('/buscar', authTurno, async (req, res) => {
 router.get('/producto', authTurno, async (req, res) => {
   try {
     const { codigo } = req.query;
+    await require('./catalogo_marca').asegurar();
     const turno_id = req.turno.id;
     if (!turno_id || !codigo) {
       return res.status(400).json({ error: 'turno_id y codigo requeridos' });
@@ -48,12 +50,16 @@ router.get('/producto', authTurno, async (req, res) => {
 
     const negocio_id = turno.rows[0].negocio_id;
     const producto = await pool.query(
-      'SELECT id, nombre, categoria, precio_venta, unidad, codigo_barras FROM productos WHERE negocio_id=$1 AND codigo_barras=$2',
+      'SELECT id, nombre, marca, categoria, precio_venta, unidad, codigo_barras FROM productos WHERE negocio_id=$1 AND codigo_barras=$2',
       [negocio_id, codigo]
     );
 
     if (producto.rows.length === 0) {
-      return res.json({ existe: false, codigo });
+      // Código que se unió a otro producto: se encuentra igual
+      try { await require('./producto_identidad').asegurar(); const al = await pool.query('SELECT p.id, p.nombre, p.marca, p.categoria, p.precio_venta, p.unidad, p.codigo_barras FROM producto_codigos c JOIN productos p ON p.id=c.producto_id WHERE c.negocio_id=$1 AND c.codigo=$2 AND COALESCE(p.activo,true)', [negocio_id, codigo]); if (al.rows.length) return res.json({ existe: true, producto: al.rows[0] }); } catch (e) { /* sigue como código nuevo */ }
+      // Código desconocido: se sugiere nombre y marca desde Open Food Facts para que la alta sea con un toque
+      const sugerencia = await require('./catalogo_marca').buscarCodigo(codigo).catch(() => null);
+      return res.json({ existe: false, codigo, sugerencia });
     }
 
     res.json({ existe: true, producto: producto.rows[0] });
@@ -303,6 +309,7 @@ router.post('/finalizar-venta', authTurno, async (req, res) => {
 
     await client.query('BEGIN');
 
+    await require('./catalogo_marca').asegurar();
     // Obtener datos del turno para atribución completa
     const turno = await client.query(
       'SELECT negocio_id, nombre_empleado, tipo_turno, sucursal_id FROM turnos_caja WHERE id=$1 AND estado=$2',
@@ -349,6 +356,11 @@ router.post('/finalizar-venta', authTurno, async (req, res) => {
         [transaccion_id, item.producto_id, item.cantidad, item.precio_unitario, subtotal]
       );
     }
+
+    // Foto del producto en el momento de la venta: nombre, marca y costo (el historial no cambia si después se edita el producto)
+    await client.query(
+      `UPDATE transacciones_detalle d SET producto_nombre = p.nombre, producto_marca = p.marca, costo_unitario = p.precio_costo
+         FROM productos p WHERE d.transaccion_id = $1 AND p.id = d.producto_id`, [transaccion_id]);
 
     // Vaciar carrito
     await client.query('DELETE FROM carrito_items WHERE turno_id=$1', [turno_id]);
@@ -411,6 +423,8 @@ router.patch('/carrito/:turno_id/:item_id', authTurno, async (req, res) => {
 router.post('/producto', authTurno, async (req, res) => {
   try {
     const { codigo_barras, nombre, precio_venta } = req.body;
+    const marca = require('./catalogo_marca').limpiarMarca(req.body.marca);
+    await require('./catalogo_marca').asegurar();
     const turno_id = req.turno.id;
 
     if (!turno_id || !codigo_barras || !nombre || precio_venta === undefined) {
@@ -437,10 +451,10 @@ router.post('/producto', authTurno, async (req, res) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO productos (negocio_id, nombre, precio_venta, codigo_barras)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO productos (negocio_id, nombre, precio_venta, codigo_barras, marca)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
-      [negocio_id, nombre.trim(), precio_venta, codigo_barras]
+      [negocio_id, nombre.trim(), precio_venta, codigo_barras, marca]
     );
 
     res.json({ producto: result.rows[0] });

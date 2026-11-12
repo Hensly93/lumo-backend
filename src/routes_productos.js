@@ -276,7 +276,8 @@ router.post('/confirmar', auth, async (req, res) => {
 router.get('/', auth, async (req, res) => {
   try {
     const { categoria, q } = req.query;
-    let query = `SELECT id, nombre, categoria, precio_venta, precio_costo, unidad, updated_at, codigo_barras
+    await require('./catalogo_marca').asegurar();
+    let query = `SELECT id, nombre, marca, categoria, precio_venta, precio_costo, unidad, updated_at, codigo_barras
                  FROM productos WHERE negocio_id=$1 AND activo=true`;
     const params = [req.user.negocio_id];
 
@@ -319,6 +320,8 @@ router.get('/categorias', auth, async (req, res) => {
 router.patch('/:id', auth, async (req, res) => {
   try {
     const { nombre, categoria, precio_venta, precio_costo, unidad, codigo_barras } = req.body;
+    const marca = req.body.marca === undefined ? null : (require('./catalogo_marca').limpiarMarca(req.body.marca) || '');
+    await require('./catalogo_marca').asegurar();
 
     // Capturar precio anterior si se actualiza precio_venta
     let precioAnterior = null;
@@ -338,10 +341,11 @@ router.patch('/:id', auth, async (req, res) => {
         precio_costo  = COALESCE($4, precio_costo),
         unidad        = COALESCE($5, unidad),
         codigo_barras = COALESCE($6, codigo_barras),
+        marca         = COALESCE($9, marca),
         updated_at    = NOW()
        WHERE id=$7 AND negocio_id=$8
        RETURNING *`,
-      [nombre || null, categoria || null, precio_venta ?? null, precio_costo ?? null, unidad || null, codigo_barras || null, req.params.id, req.user.negocio_id]
+      [nombre || null, categoria || null, precio_venta ?? null, precio_costo ?? null, unidad || null, codigo_barras || null, req.params.id, req.user.negocio_id, marca]
     );
     if (r.rowCount === 0) return res.status(404).json({ error: 'Producto no encontrado' });
 
@@ -452,6 +456,8 @@ router.post('/', auth, async (req, res) => {
   try {
     const { nombre, categoria, precio_venta, precio_costo, unidad, codigo_barras } = req.body;
     if (!nombre?.trim()) return res.status(400).json({ error: 'nombre requerido' });
+    const marca = require('./catalogo_marca').limpiarMarca(req.body.marca);
+    await require('./catalogo_marca').asegurar();
 
     // Capturar precio anterior si existe el producto
     let precioAnterior = null;
@@ -464,12 +470,12 @@ router.post('/', auth, async (req, res) => {
     }
 
     const r = await pool.query(
-      `INSERT INTO productos(negocio_id, nombre, categoria, precio_venta, precio_costo, unidad, codigo_barras)
-       VALUES($1,$2,$3,$4,$5,$6,$7)
+      `INSERT INTO productos(negocio_id, nombre, categoria, precio_venta, precio_costo, unidad, codigo_barras, marca)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8)
        ON CONFLICT(negocio_id, nombre) WHERE activo=true
-       DO UPDATE SET precio_venta=COALESCE(EXCLUDED.precio_venta, productos.precio_venta), precio_costo=COALESCE(EXCLUDED.precio_costo, productos.precio_costo), categoria=COALESCE(EXCLUDED.categoria, productos.categoria), codigo_barras=COALESCE(EXCLUDED.codigo_barras, productos.codigo_barras), activo=true, updated_at=NOW()
+       DO UPDATE SET precio_venta=COALESCE(EXCLUDED.precio_venta, productos.precio_venta), precio_costo=COALESCE(EXCLUDED.precio_costo, productos.precio_costo), categoria=COALESCE(EXCLUDED.categoria, productos.categoria), codigo_barras=COALESCE(EXCLUDED.codigo_barras, productos.codigo_barras), marca=COALESCE(EXCLUDED.marca, productos.marca), activo=true, updated_at=NOW()
        RETURNING *, (xmax = 0) AS insertado`,
-      [req.user.negocio_id, nombre.trim(), categoria || null, precio_venta || null, precio_costo || null, unidad || 'unidad', codigo_barras || null]
+      [req.user.negocio_id, nombre.trim(), categoria || null, precio_venta || null, precio_costo || null, unidad || 'unidad', codigo_barras || null, marca]
     );
 
     const producto = r.rows[0];
