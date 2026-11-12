@@ -120,12 +120,32 @@ function hallazgoTicket(dias, hoyISO) {
 
 // Tasas de referencia por medio de cobro (% sobre la venta). Son típicas de Argentina y NO verificadas:
 // cada negocio tiene las suyas. Por eso el hallazgo siempre dice que es una estimación.
-const TASAS = { debito: 0.015, credito: 0.04, mp: 0.035, qr: 0.008, transferencia: 0, efectivo: 0 };
-const NOMBRE_MEDIO = { debito: 'débito', credito: 'crédito', mp: 'Mercado Pago', qr: 'QR', transferencia: 'transferencia', efectivo: 'efectivo' };
+const TASAS = { debito: 0.015, credito: 0.04, tarjeta: 0.03, mp: 0.035, qr: 0.008, transferencia: 0, efectivo: 0 };
+// Los archivos importados traen el medio escrito de muchas formas ('Mercado Pago', 'Débito', 'tarjeta_credito'...): se unifica.
+function normMedio(m) {
+  const s = String(m == null ? '' : m).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\s_\-]/g, '');
+  if (!s) return null;
+  if (['mp', 'mercadopago', 'cuentamp'].includes(s)) return 'mp';
+  if (['debito', 'tarjetadebito'].includes(s)) return 'debito';
+  if (['credito', 'tarjetacredito'].includes(s)) return 'credito';
+  if (s === 'tarjeta') return 'tarjeta';
+  if (s === 'qr') return 'qr';
+  if (s === 'transferencia') return 'transferencia';
+  if (['efectivo', 'cash'].includes(s)) return 'efectivo';
+  return null;   // medio desconocido o sin dato: no se estima nada
+}
+const NOMBRE_MEDIO = { debito: 'débito', credito: 'crédito', tarjeta: 'tarjeta', mp: 'Mercado Pago', qr: 'QR', transferencia: 'transferencia', efectivo: 'efectivo' };
 
 // filas: [{ medio, total, tickets }] de los últimos 28 días completos.
 function hallazgoComisiones(filas, tasas = TASAS) {
-  const f = (filas || []).filter((x) => x.total > 0);
+  const juntas = {};
+  for (const x of (filas || [])) {
+    const k = normMedio(x.medio);
+    if (!k || !(x.total > 0)) continue;
+    juntas[k] = juntas[k] || { medio: k, total: 0, tickets: 0 };
+    juntas[k].total += x.total; juntas[k].tickets += x.tickets;
+  }
+  const f = Object.values(juntas);
   const total = f.reduce((s, x) => s + x.total, 0);
   if (total <= 0) return null;
   const conCom = f.filter((x) => (tasas[x.medio] || 0) > 0);
@@ -184,7 +204,7 @@ async function calcularRadiografia(negocioId, db = pool, opts = {}) {
                 FROM transacciones WHERE negocio_id = $1 AND ${ventana} GROUP BY 1, 2 HAVING SUM(monto) > 0`, [negocioId]),
     fuentes.fugas(negocioId),
     db.query(`SELECT ${AHORA_AR}::date::text AS hoy`),
-    db.query(`SELECT COALESCE(metodo_pago, 'efectivo') AS medio, SUM(monto)::float AS total, COUNT(*)::int AS tickets
+    db.query(`SELECT COALESCE(metodo_pago, '') AS medio, SUM(monto)::float AS total, COUNT(*)::int AS tickets
                 FROM transacciones WHERE negocio_id = $1 AND ${FL} >= ${AHORA_AR}::date - INTERVAL '28 days' AND ${FL}::date < ${AHORA_AR}::date
                 GROUP BY 1`, [negocioId]),
   ]);
