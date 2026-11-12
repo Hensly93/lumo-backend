@@ -164,7 +164,7 @@ async function efectoLluvia(db, p, sucursalId) {
 }
 
 function frase_lluvia(ef) {
-  if (!ef) return 'Todavía no tenemos suficientes días de lluvia en tu historial para medir cuánto te afecta. NICOLE lo va aprendiendo.';
+  if (!ef) return '';   // sin efecto medido no se rellena con un texto vacio de contenido
   if (Math.abs(ef.pct) < 8) return `En tus ${ef.dias} días de lluvia anteriores la venta no cambió de forma marcada.`;
   return `En tus ${ef.dias} días de lluvia anteriores vendiste ${Math.abs(ef.pct)}% ${ef.pct > 0 ? 'más' : 'menos'} que un día normal.`;
 }
@@ -465,16 +465,20 @@ async function detLluvia(db, p) {
   const h = Math.floor(reloj.hora);
   const ahoraMm = cl.horas[h] || 0;
   const proximas = (cl.horas[h + 1] || 0) + (cl.horas[h + 2] || 0) + (cl.horas[h + 3] || 0);
+  // Es un PRONOSTICO de un modelo, no una medicion: solo se avisa si es fuerte y el dia en total viene con lluvia
+  if ((cl.precip_hoy_mm || 0) < 3) return [];
   let titulo = null;
-  if (ahoraMm >= 0.5) titulo = 'Está lloviendo en tu zona';
-  else if (proximas >= 1.5) titulo = 'Va a empezar a llover en las próximas horas';
+  if (ahoraMm >= 1.5) titulo = 'Se pronostica lluvia en tu zona';
+  else if (proximas >= 3) titulo = 'Se pronostica que va a llover en las próximas horas';
   if (!titulo) return [];
   const ef = await efectoLluvia(db, p, cl.sucursal_id);
+  // Sin un efecto medido en TU negocio no hay nada para accionar: no se avisa
+  if (!ef || Math.abs(ef.pct) < 8) return [];
   const accion = ef && ef.pct <= -8 ? ' Conviene reforzar pedidos por delivery y cobros digitales.'
     : ef && ef.pct >= 8 ? ' Revisá que tengas stock para un día más movido.' : '';
   return [{
     tipo: 'lluvia', contexto: reloj.hoy, pref: 'alertas_medias', prioridad: 3, titulo,
-    mensaje: frase_lluvia(ef) + accion, url: '/predicciones', boton: 'Ver predicciones',
+    mensaje: frase_lluvia(ef) + accion + ' Es un pronóstico: puede no llover donde estás.', url: '/predicciones', boton: 'Ver predicciones',
   }];
 }
 
