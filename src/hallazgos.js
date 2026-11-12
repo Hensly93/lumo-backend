@@ -69,12 +69,34 @@ const detectorDe = (id) => (String(id).startsWith('fuga_') ? 'fuga' : String(id)
 
 // ── Filtro de calidad (puro) ─────────────────────────────────────────────────
 // h: fila del hallazgo. ctx: { suficiente, ventas_mes }. Devuelve { pasa, motivo }.
+// ── Aprendizaje: el piso de monto se ajusta por tipo de hallazgo según lo que dice el dueño ──────────────────────
+// Si marca seguido "no me sirve" / "ya lo sabía" en un tipo, ese tipo solo se muestra con montos más altos.
+// Si le sirven seguido ("me sirvió" / "ya lo resolví"), se muestra con montos algo menores. Nunca baja de la mitad del piso.
+function factorSensibilidad(neg, pos) {
+  if (neg >= 4 && pos === 0) return 3;
+  if (neg >= 2 && neg > 2 * pos) return 2;
+  if (pos >= 2 && pos > neg) return 0.7;
+  return 1;
+}
+
+async function calcularSensibilidad(negocioId, db = pool) {
+  const r = await db.query(
+    `SELECT detector, COUNT(*) FILTER (WHERE feedback IN ('no_sirve', 'ya_lo_sabia'))::int AS neg,
+            COUNT(*) FILTER (WHERE feedback IN ('util', 'resuelto'))::int AS pos
+       FROM hallazgos WHERE negocio_id = $1 AND feedback IS NOT NULL GROUP BY detector`, [negocioId]);
+  const out = {};
+  for (const x of r.rows) { const f = factorSensibilidad(x.neg, x.pos); if (f !== 1) out[x.detector] = f; }
+  return out;
+}
+
 function puerta(h, ctx, ahora = new Date()) {
   if (h.positivo) return { pasa: false, motivo: 'positivo' };
   if (!ctx.suficiente && !h.ignora_suficiente) return { pasa: false, motivo: 'pocos_datos' };
   if (!Array.isArray(h.evidencia) || !h.evidencia.length) return { pasa: false, motivo: 'sin_evidencia' };
   const monto = Number(h.monto) || 0;
-  const piso = Math.max(MIN_ABS, (Number(ctx.ventas_mes) || 0) * (h.tipo === 'estimado' ? PCT_ESTIMADO : PCT_CALCULADO));
+  const factor = (ctx.sensibilidad && ctx.sensibilidad[h.detector || detectorDe(h.clave || h.id || '')]) || 1;
+  const base = Math.max(MIN_ABS, (Number(ctx.ventas_mes) || 0) * (h.tipo === 'estimado' ? PCT_ESTIMADO : PCT_CALCULADO));
+  const piso = Math.max(MIN_ABS / 2, base * factor);
   if (monto < piso) return { pasa: false, motivo: 'monto_bajo', piso };
   if (h.silenciado_hasta && new Date(h.silenciado_hasta) > ahora) return { pasa: false, motivo: 'silenciado' };
   if (h.tipo === 'estimado' && (Number(h.veces) || 1) < MIN_DIAS_ESTIMADO) return { pasa: false, motivo: 'recien_visto' };
@@ -149,6 +171,7 @@ async function procesar(negocioId, db = pool, opts = {}) {
        Number(h.monto) || 0, h.monto_texto || null, h.tipo || 'calculado', h.url || null, !!h.positivo, !!h.ignora_suficiente]);
   }
   await db.query('UPDATE hallazgos SET vigente = false WHERE negocio_id = $1 AND vigente AND NOT (clave = ANY($2::text[]))', [negocioId, claves]);
+  ctx.sensibilidad = await calcularSensibilidad(negocioId, db).catch(() => ({}));
   cache.set(negocioId, { ts: Date.now(), ctx });
   return ctx;
 }
@@ -278,4 +301,4 @@ async function resumenRecuperado(negocioId, db = pool, opts = {}) {
   return { total_mensual: Math.round(med.rows.reduce((s, x) => s + x.recuperado, 0)), medidos: med.rows, en_seguimiento: seg.rows };
 }
 
-module.exports = { puerta, radiografia, elegirAccion, promoParaHallazgo, evaluarRecuperos, resumenRecuperado, detectarAumentos, detectar, procesar, obtener, paraAvisar, registrarFeedback, detectorDe, ACCIONES, MIN_ABS };
+module.exports = { puerta, factorSensibilidad, calcularSensibilidad, radiografia, elegirAccion, promoParaHallazgo, evaluarRecuperos, resumenRecuperado, detectarAumentos, detectar, procesar, obtener, paraAvisar, registrarFeedback, detectorDe, ACCIONES, MIN_ABS };
