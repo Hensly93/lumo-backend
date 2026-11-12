@@ -4,7 +4,7 @@
 const DIAS = ['domingos', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados'];
 
 function a(id, tipo, titulo, detalle, arma) { return arma ? { id, tipo, titulo, detalle, arma: true } : { id, tipo, titulo, detalle }; }
-const PROMOS = ['promo_franja', 'promo_dia', 'combo_precio'];   // acciones que LumoBi arma con los datos del negocio (promo.js)
+const PROMOS = ['promo_franja', 'promo_dia', 'combo_precio', 'descuento_efectivo'];   // acciones que LumoBi arma con los datos del negocio (promo.js)
 
 function receta(detector, clave) {
   const num = Number(String(clave || '').match(/(\d+)$/)?.[1]);
@@ -22,7 +22,7 @@ function receta(detector, clave) {
   }
   if (detector === 'comisiones_cobro') {
     return [
-      a('descuento_efectivo', 'perder_menos', 'Ofrecé un descuento por pagar en efectivo o transferencia', 'Un 3 a 5% puede costarte menos que la comisión de la tarjeta. En general el recargo por tarjeta no está permitido, el descuento por efectivo sí.'),
+      a('descuento_efectivo', 'perder_menos', 'LumoBi calcula el descuento por pagar en efectivo o transferencia', 'Mira tu mezcla de cobros y elige el descuento que de verdad te deja plata, descontando lo que regalás a quienes ya pagan en efectivo. Te deja los textos listos.', true),
       a('negociar_tasa', 'perder_menos', 'Pedí una mejor tasa a tu procesador de cobros', 'Preguntá si hay una tasa más baja para tu volumen o si te conviene cobrar con acreditación más lenta.'),
     ];
   }

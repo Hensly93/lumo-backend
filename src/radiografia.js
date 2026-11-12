@@ -34,7 +34,7 @@ function hallazgoDiaDebil(dias) {
   const pct = Math.round(brecha * 100);
   const nombre = DOW[peor.dow];
   const plural = nombre.endsWith('s') ? nombre : nombre + 's';
-  const monto = Math.round((ref - peor.avg) * 4.3);
+  const monto = Math.round(((ref - peor.avg) * 4.3) / 3);   // prudente: un tercio de la brecha, no toda
   return {
     id: 'dia_debil_' + peor.dow,
     tipo: 'estimado',
@@ -42,7 +42,7 @@ function hallazgoDiaDebil(dias) {
     detalle: `Un ${nombre} promedia ${fmt(peor.avg)} y los demás días ${fmt(ref)}.`,
     evidencia: [
       `Se miraron ${peor.n} ${plural} de las últimas 8 semanas.`,
-      `Si ese día rindiera como los demás, serían unos ${fmt(monto)} más por mes (estimación).`,
+      `Si recuperás un tercio de la diferencia con los demás días, serían unos ${fmt(monto)} más por mes (estimación prudente: igualarlos sería ${fmt(monto * 3)}).`,
     ],
     monto,
     url: '/predicciones',
@@ -73,7 +73,7 @@ function hallazgoFranjaFloja(horas, nDias) {
   const brecha = 1 - peor.v / media;
   if (brecha < 0.3) return null;
   const diasMes = (nDias / (VENTANA_DIAS / 7)) * 4.3;     // días abiertos por mes
-  const monto = Math.round((media - peor.v) * diasMes);
+  const monto = Math.round(((media - peor.v) * diasMes) / 3);   // prudente: un tercio de la brecha, no toda
   return {
     id: 'franja_floja_' + peor.h,
     tipo: 'estimado',
@@ -81,7 +81,7 @@ function hallazgoFranjaFloja(horas, nDias) {
     detalle: `Vendés ${Math.round(brecha * 100)}% menos que en una franja promedio de dos horas (${fmt(peor.v)} contra ${fmt(media)}).`,
     evidencia: [
       `Promedio de las últimas 8 semanas, ${nDias} días con ventas.`,
-      `Con una promo o un combo que la acerque al promedio, serían unos ${fmt(monto)} más por mes (estimación).`,
+      `Si una promo recupera un tercio de la diferencia con el promedio, serían unos ${fmt(monto)} más por mes (estimación prudente: cerrar toda la brecha sería ${fmt(monto * 3)}).`,
     ],
     monto,
     url: '/predicciones',
@@ -243,4 +243,4 @@ async function calcularRadiografia(negocioId, db = pool, opts = {}) {
   };
 }
 
-module.exports = { calcularRadiografia, hallazgoComisiones, TASAS, hallazgoDiaDebil, hallazgoFranjaFloja, hallazgoTicket, deFugas, elegir, MIN_DIAS };
+module.exports = { calcularRadiografia, hallazgoComisiones, normMedio, TASAS, hallazgoDiaDebil, hallazgoFranjaFloja, hallazgoTicket, deFugas, elegir, MIN_DIAS };

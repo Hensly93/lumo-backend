@@ -63,7 +63,49 @@ async function datos(negocioId, db) {
   return top;
 }
 
+// Comisiones: LumoBi calcula el descuento por pagar en efectivo/transferencia que SÍ conviene con la mezcla de cobros del negocio.
+// Ojo: el descuento lo aprovecha también quien ya paga en efectivo, así que se descuenta ese costo del ahorro.
+async function armarComisiones(negocioId, db = pool) {
+  const { normMedio, TASAS } = require('./radiografia');
+  const filas = (await db.query(
+    `SELECT COALESCE(metodo_pago, '') AS medio, SUM(monto)::float AS total FROM transacciones
+      WHERE negocio_id = $1 AND (fecha - INTERVAL '3 hours') >= (NOW() - INTERVAL '3 hours')::date - INTERVAL '28 days'
+        AND (fecha - INTERVAL '3 hours')::date < (NOW() - INTERVAL '3 hours')::date GROUP BY 1`, [negocioId])).rows;
+  let sc = 0, com = 0, se = 0;
+  for (const x of filas) {
+    const k = normMedio(x.medio); if (!k) continue;
+    const t = TASAS[k] || 0, mes = x.total * 30 / 28;
+    if (t > 0) { sc += mes; com += mes * t; } else se += mes;
+  }
+  if (!(sc > 0) || !(com > 0)) return { sin_promo: true, motivo: 'No veo cobros con tarjeta o billetera en el último mes, así que no hay comisiones para reducir.' };
+  const r = com / sc;
+  const neto = (d, f) => f * sc * (r - d) - d * se;
+  let mejor = null;
+  for (const d of [0.03, 0.04, 0.05]) { const n = neto(d, 0.2); if (n > 0 && (!mejor || n > mejor.n)) mejor = { d, n }; }
+  if (!mejor) return { sin_promo: true, motivo: `Hoy pagás en promedio ${(r * 100).toFixed(1)}% de comisión en los cobros con tarjeta o billetera y ya cobrás ${fmt(se)} por mes en efectivo o transferencia. Un descuento por pagar así te costaría más de lo que ahorrarías en comisiones, porque también se lo llevarían los que ya pagan en efectivo. Un descuento menor al 3% casi no mueve a los clientes, así que no te lo recomiendo.` };
+  const d = mejor.d, pct = Math.round(d * 100);
+  const nombreNeg = ((await db.query('SELECT nombre FROM negocios WHERE id = $1', [negocioId]).catch(() => ({ rows: [] }))).rows[0] || {}).nombre;
+  const nom = nombreNeg || 'tu negocio';
+  const esc = (f) => { const n = Math.round(neto(d, f)); return `Si ${Math.round(f * 100)}% de tus cobros con tarjeta o billetera pasa a efectivo o transferencia: ${n >= 0 ? 'ganás' : 'perdés'} ${fmt(Math.abs(n))} por mes.`; };
+  return {
+    sin_promo: false, nombre: `${pct}% de descuento por pagar en efectivo o transferencia`, cuando: '',
+    resumen: `Ofrecé ${pct}% de descuento a quien pague en efectivo o transferencia.`,
+    por_que: [
+      `El ${Math.round(sc / (sc + se) * 100)}% de lo que cobrás es con tarjeta o billetera y te cuesta en promedio ${(r * 100).toFixed(1)}% (estimado con tasas típicas: cada procesador tiene las suyas).`,
+      `Elegí ${pct}% porque es el descuento que más te deja con tu mezcla de cobros, descontando lo que regalás a quienes ya pagan en efectivo.`,
+      esc(0.1), esc(0.2), esc(0.3),
+    ],
+    aviso: 'En general el recargo por tarjeta no está permitido; el descuento por pagar en efectivo sí. Los porcentajes de arriba son supuestos: probalo un mes y mirá cuánto cambia tu mezcla de cobros.',
+    textos: {
+      whatsapp: `¡Hola! En ${nom} tenés ${pct}% de descuento si pagás en efectivo o transferencia. ¡Te esperamos!`,
+      instagram: `PAGANDO EN EFECTIVO O TRANSFERENCIA ✨\n${pct}% DE DESCUENTO\nEn ${nom}`,
+      cartel: `${pct}% DE DESCUENTO\nPagando en efectivo o transferencia`,
+    },
+  };
+}
+
 async function armar(negocioId, hallazgo, accionId, db = pool) {
+  if (accionId === 'descuento_efectivo') return armarComisiones(negocioId, db);
   const top = await datos(negocioId, db);
   if (top.length < 2) return { sin_promo: true, motivo: 'Necesito al menos 2 productos con ventas registradas por producto para armar un combo con tus datos. Escaneá o cargá ventas con productos y lo armo.' };
   const estrella = top[0];
@@ -104,4 +146,4 @@ async function armar(negocioId, hallazgo, accionId, db = pool) {
   };
 }
 
-module.exports = { armar, calcularPrecio, elegirPareja, textos, cuando, MARGEN_MIN };
+module.exports = { armar, armarComisiones, calcularPrecio, elegirPareja, textos, cuando, MARGEN_MIN };
