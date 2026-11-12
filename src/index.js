@@ -149,6 +149,14 @@ try {
 }
 
 try {
+  const comprasRoutes = require("./routes_compras");
+  app.use("/api/compras", comprasRoutes);
+  console.log("Compras OK");
+} catch(e) {
+  console.error("Compras ERROR:", e.message);
+}
+
+try {
   const scannerRoutes = require("./routes_scanner");
   app.use("/api/scanner", scannerRoutes);
   console.log("Scanner OK");
