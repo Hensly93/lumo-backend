@@ -634,6 +634,40 @@ async function detFugas(db, p) {
   return out.slice(0, 2);
 }
 
+// Hallazgos del negocio (el "cerebro", hallazgos.js): pasan por el filtro de calidad (plata, evidencia, datos suficientes;
+// lo que el dueño descarto queda silenciado). Avisa solo el mejor. No repite el mismo hallazgo en 21 dias, salvo que el
+// monto suba ~30% (cada escalon de 1,3x es un contexto nuevo). Las fugas tienen su propio aviso (detFugas).
+async function detHallazgos(db, p) {
+  const { reloj } = p;
+  if (reloj.hora < 9 || reloj.hora >= 20) return [];
+  let lista = [];
+  try {
+    const fn = (p.opts.fuentes && p.opts.fuentes.hallazgos) || ((id) => require('./hallazgos').paraAvisar(id, db, { ahora: p.opts.ahora }));
+    lista = (await fn(p.negocioId)) || [];
+  } catch (e) { console.error('[VIGILANTE] hallazgos negocio', p.negocioId, e.message); return []; }
+  const out = [];
+  for (const h of lista.slice(0, 1)) {
+    const monto = Number(h.monto) || 0;
+    const escalon = Math.floor(Math.log(Math.max(monto, 1)) / Math.log(1.3));
+    const pref = h.clave + '|m';
+    const ult = await db.query(
+      `SELECT contexto FROM vigilante_envios WHERE negocio_id=$1 AND tipo='hallazgo' AND left(contexto, char_length($2)) = $2
+         AND creado >= NOW() - INTERVAL '21 days' ORDER BY creado DESC LIMIT 1`, [p.negocioId, pref]);
+    if (ult.rows.length) {
+      const previo = parseInt(String(ult.rows[0].contexto).slice(pref.length), 10);
+      if (!(escalon > previo)) continue;      // ya se aviso hace menos de 3 semanas y no empeoro
+    }
+    const cuanto = h.monto_texto || (h.tipo === 'estimado' ? 'Hasta ~' + pesos(monto) + ' más por mes (estimación).' : pesos(monto) + ' en juego.');
+    out.push({
+      tipo: 'hallazgo', contexto: recorte(`${pref}${escalon}|d${Math.floor(Date.parse(reloj.hoy) / 86400000 / 21)}`, 110),
+      pref: 'alertas_medias', prioridad: 3, titulo: recorte(h.titulo, 110),
+      mensaje: recorte(cuanto + ' ' + ((h.evidencia && h.evidencia[0]) || h.detalle || '')),
+      url: h.url || '/', boton: 'Ver el detalle',
+    });
+  }
+  return out;
+}
+
 // ── Avisos del negocio con LumoBi: prueba, plan, cobro y Mercado Pago ──
 // Todos salen de datos reales: fechas del plan, cobros registrados por el webhook y el estado de la sincronizacion.
 
@@ -752,7 +786,7 @@ async function detMP(db, p) {
   return [];
 }
 
-const DETECTORES = [detTurnoSinAbrir, detCajaAbierta, detSinVentasHoy, detRitmo, detNicole, detERM, detLluvia, detFugas, detRentabilidad, detBriefing, detDatosViejos, detSinDatos, detResumenDiario, detPago, detPrueba, detCancelacion, detMP];
+const DETECTORES = [detTurnoSinAbrir, detCajaAbierta, detSinVentasHoy, detRitmo, detNicole, detERM, detLluvia, detFugas, detHallazgos, detRentabilidad, detBriefing, detDatosViejos, detSinDatos, detResumenDiario, detPago, detPrueba, detCancelacion, detMP];
 
 // ─── Un negocio ─────────────────────────────────────────────────────────────
 
@@ -879,4 +913,4 @@ async function correrVigilante(db = pool, opts = {}) {
   return resumen;
 }
 
-module.exports = { correrVigilante, relojAR, mediana, preferenciaActiva, detPrueba, detCancelacion, detPago, detMP };
+module.exports = { correrVigilante, relojAR, mediana, preferenciaActiva, detPrueba, detCancelacion, detPago, detMP, detHallazgos };

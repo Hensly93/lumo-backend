@@ -229,13 +229,17 @@ async function calcularRadiografia(negocioId, db = pool, opts = {}) {
   }
   if (fRes.status === 'fulfilled') hallazgos.push(...deFugas(fRes.value.fugas));
 
-  const top = elegir(hallazgos, 3);
+  // completo: todos los hallazgos (los usa el cerebro, hallazgos.js); si no, solo los 3 mas valiosos
+  const top = opts.completo ? hallazgos.slice().sort((a, b) => b.monto - a.monto) : elegir(hallazgos, 3);
+  const edadDe = (d) => Math.floor((new Date(hoy + 'T00:00:00Z').getTime() - new Date(d + 'T00:00:00Z').getTime()) / 86400000);
+  const ventasMes = Math.round(dias.filter((x) => edadDe(x.d) >= 1 && edadDe(x.d) <= 28).reduce((s, x) => s + x.total, 0) * 30 / 28);
   return {
     suficiente,
     dias_con_ventas: nDias,
     dias_necesarios: MIN_DIAS,
     faltan_dias: Math.max(0, MIN_DIAS - nDias),
     hallazgos: top,
+    ventas_mes: ventasMes,
   };
 }
 
