@@ -4,6 +4,17 @@ const pool = require('./db');
 const { authTurno, crearSesionTurno, verificarBloqueoPin, registrarIntentoPin } = require('./sesion_empleado');
 const { registrarCambio } = require('./cambios_precios');
 const { registrar: registrarHecho } = require('./registro_hechos');
+const { guardia } = require('./autorizacion_caja');
+
+// Si lo que se saca del carrito se pasa de lo habitual en el turno, pide autorización del dueño (ver autorizacion_caja.js).
+// Devuelve true si puede seguir; si no, ya respondió 403 con los datos para pedir la autorización.
+function guardiaSacar(req, res, item, quitada) {
+  const q = Number(quitada) || 0;
+  return guardia(req, res, {
+    tipo: 'sacar_producto', clave: 'sacar:' + item.id + ':' + (Number(item.cantidad) - q),
+    valor: q * (Number(item.precio_unitario) || 0), producto_id: item.producto_id,
+  });
+}
 
 // Deja anotado en el registro de la caja que se sacó un producto (o parte) del carrito antes de cobrar
 function hechoCarrito(req, tipo, item, quitada) {
@@ -269,12 +280,15 @@ router.post('/carrito/:turno_id/:item_id/cantidad', authTurno, express.json({ li
     const cant = parseFloat(req.body && req.body.cantidad);
     if (!Number.isFinite(cant)) return res.status(400).json({ error: 'Cantidad invalida' });
     if (cant <= 0) {
+      const itemPrevio = await pool.query(`SELECT * FROM carrito_items WHERE id=$1 AND turno_id=$2`, [req.params.item_id, req.turno.id]);
+      if (itemPrevio.rows[0] && !(await guardiaSacar(req, res, itemPrevio.rows[0], itemPrevio.rows[0].cantidad))) return;
       const borrado = await pool.query(`DELETE FROM carrito_items WHERE id=$1 AND turno_id=$2 RETURNING *`, [req.params.item_id, req.turno.id]);
       if (borrado.rows[0]) await hechoCarrito(req, 'item_borrado', borrado.rows[0], borrado.rows[0].cantidad);
       return res.json({ eliminado: true });
     }
     if (cant > 9999) return res.status(400).json({ error: 'Cantidad demasiado grande' });
     const antes = await pool.query(`SELECT * FROM carrito_items WHERE id=$1 AND turno_id=$2`, [req.params.item_id, req.turno.id]);
+    if (antes.rows[0] && cant < Number(antes.rows[0].cantidad) && !(await guardiaSacar(req, res, antes.rows[0], Number(antes.rows[0].cantidad) - cant))) return;
     const r = await pool.query(`UPDATE carrito_items SET cantidad=$3 WHERE id=$1 AND turno_id=$2 RETURNING *`, [req.params.item_id, req.turno.id, cant]);
     if (r.rows.length === 0) return res.status(404).json({ error: 'Item no encontrado' });
     if (antes.rows[0] && cant < Number(antes.rows[0].cantidad)) await hechoCarrito(req, 'cantidad_reducida', antes.rows[0], Number(antes.rows[0].cantidad) - cant);
@@ -289,6 +303,8 @@ router.delete('/carrito/:turno_id/:item_id', authTurno, async (req, res) => {
     const { item_id } = req.params;
     const turno_id = req.turno.id;
 
+    const previo = await pool.query(`SELECT * FROM carrito_items WHERE id=$1 AND turno_id=$2`, [item_id, turno_id]);
+    if (previo.rows[0] && !(await guardiaSacar(req, res, previo.rows[0], previo.rows[0].cantidad))) return;
     const result = await pool.query(
       `DELETE FROM carrito_items WHERE id=$1 AND turno_id=$2 RETURNING *`,
       [item_id, turno_id]
@@ -413,6 +429,7 @@ router.patch('/carrito/:turno_id/:item_id', authTurno, async (req, res) => {
       return res.status(400).json({ error: 'Cantidad inválida' });
     }
     const antesP = await pool.query(`SELECT * FROM carrito_items WHERE id=$1 AND turno_id=$2`, [item_id, turno_id]);
+    if (antesP.rows[0] && Number(cantidad) < Number(antesP.rows[0].cantidad) && !(await guardiaSacar(req, res, antesP.rows[0], Number(antesP.rows[0].cantidad) - Number(cantidad)))) return;
 
     const result = await pool.query(
       `UPDATE carrito_items
@@ -524,6 +541,10 @@ router.post('/producto/:id/precio', authTurno, async (req, res) => {
     );
     if (prod.rows.length === 0) return res.status(404).json({ error: 'Producto no encontrado' });
     const antes = prod.rows[0];
+    if (nuevoV != null && Number(antes.precio_venta) > 0 && nuevoV < Number(antes.precio_venta)) {
+      const pct = (1 - nuevoV / Number(antes.precio_venta)) * 100;
+      if (!(await guardia(req, res, { tipo: 'bajar_precio', clave: 'precio:' + antes.id + ':' + nuevoV, valor: Number(antes.precio_venta) - nuevoV, pct, producto_id: antes.id, producto_nombre: antes.nombre }))) return;
+    }
 
     const upd = await pool.query(
       `UPDATE productos SET precio_venta = COALESCE($1, precio_venta), precio_costo = COALESCE($2, precio_costo), updated_at = NOW()

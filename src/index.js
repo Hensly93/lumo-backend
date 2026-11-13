@@ -165,6 +165,13 @@ try {
 }
 
 try {
+  app.use("/api/autorizaciones", require("./routes_autorizaciones"));
+  console.log("Autorizaciones OK");
+} catch(e) {
+  console.error("Autorizaciones ERROR:", e.message);
+}
+
+try {
   app.use("/api/precios-masivo", require("./routes_precios_masivo"));
   console.log("Precios masivo OK");
 } catch(e) {

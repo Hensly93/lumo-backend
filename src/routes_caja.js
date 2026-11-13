@@ -18,6 +18,7 @@ const { calcularRiesgoEmpleado } = require('./erm');
 const { notificarUsuario } = require('./push');
 const { auth } = require('./authMiddleware');
 const { registrar: registrarHecho, listar: listarHechos } = require('./registro_hechos');
+const { guardia } = require('./autorizacion_caja');
 const { analizarTramo1EnVivo } = require('./perfil_conteo');
 
 // Calcula hora aleatoria para conteo: entre 40 y 180 min despues de la apertura
@@ -425,6 +426,7 @@ router.post('/egreso', authTurno, async (req, res) => {
       [turno_id]
     );
     if (turno.rows.length === 0) return res.status(400).json({ error: 'Turno no activo' });
+    if (!(await guardia(req, res, { tipo: 'egreso', clave: 'egreso:' + Number(monto), valor: Number(monto) || 0 }))) return;
 
     await pool.query(
       'INSERT INTO egresos_caja(turno_id, usuario_id, monto, motivo) VALUES($1,$2,$3,$4)',
