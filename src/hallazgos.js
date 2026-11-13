@@ -19,7 +19,10 @@ const ESTADO_DE = { util: 'util', no_sirve: 'descartado', ya_lo_sabia: 'sabido',
 const ACCIONES = Object.keys(ESTADO_DE);
 // Plata recuperada: solo para hallazgos con monto MENSUAL comparable. A los 28 dias de marcado como resuelto se mide cuanto bajo.
 const { receta } = require('./acciones');
-const MENSUALES = ['dia_debil', 'franja_floja', 'comisiones_cobro', 'ticket_baja', 'precio_bajo_costo', 'marca_margen_bajo'];
+// equipo_* y stock_diferencia suman los últimos 30 días, igual que los demás: se pueden comparar mes contra mes.
+// Quedan afuera equipo_frenadas (es plata que se evitó, no un problema que baja) y los de stock agotado/bajo/inmóvil (son una estimación a 7 días o plata parada, no un monto mensual).
+const MENSUALES = ['dia_debil', 'franja_floja', 'comisiones_cobro', 'ticket_baja', 'precio_bajo_costo', 'marca_margen_bajo',
+  'equipo_caja', 'equipo_borrados', 'equipo_egresos', 'equipo_precios', 'stock_diferencia'];
 const DIAS_MEDIR = 28;
 const MIN_MEJORA = 0.2;
 const ACCION_TEXTO = {
