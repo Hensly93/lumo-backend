@@ -210,6 +210,13 @@ try {
 }
 
 try {
+  app.use("/api/mp-cobro", require("./routes_mp_cobro"));
+  console.log("Cobro MP OK");
+} catch(e) {
+  console.error("Cobro MP ERROR:", e.message);
+}
+
+try {
   const scannerDuenoRoutes = require("./routes_scanner_dueno");
   app.use("/api/scanner-dueno", scannerDuenoRoutes);
   console.log("Scanner Dueno OK");

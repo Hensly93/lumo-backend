@@ -176,4 +176,4 @@ async function correrSyncMP(db = pool, opts = {}) {
   return resumen;
 }
 
-module.exports = { correrSyncMP, comisionDe };
+module.exports = { correrSyncMP, comisionDe, tokenVigente };
