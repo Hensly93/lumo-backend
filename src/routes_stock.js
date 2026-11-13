@@ -11,6 +11,12 @@ router.get('/', auth, async (req, res) => {
   catch (e) { console.error('stock/listar:', e.message); res.status(500).json({ error: 'No pude cargar el stock.' }); }
 });
 
+// GET /api/stock/ranking?dias=30 — qué se vende más, qué deja más ganancia y qué casi no se vende
+router.get('/ranking', auth, async (req, res) => {
+  try { res.json(await require('./ranking_productos').ranking(req.user.negocio_id, req.query.dias)); }
+  catch (e) { console.error('stock/ranking:', e.message); res.status(500).json({ error: 'No pude armar el ranking.' }); }
+});
+
 // POST /api/stock/contar  { items: [{ producto_id, contado }] }  — stock inicial o conteo con ajuste
 router.post('/contar', auth, async (req, res) => {
   try {
