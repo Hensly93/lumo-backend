@@ -294,13 +294,16 @@ router.post('/', auth, async (req, res) => {
         costos.push({ producto_id: it.producto_id, producto_nombre: ant.rows[0] && ant.rows[0].nombre, valor_anterior: ant.rows[0] ? ant.rows[0].costo : null, valor_nuevo: it.precio_unitario });
       }
     }
+    // Stock liviano: lo comprado suma al stock de los productos que ya se controlan (solo unidades; cajas y kilos no se mezclan).
+    let stockRes = { sumados: 0, omitidos: 0 };
+    try { await require('./stock').asegurar(); stockRes = await require('./stock').sumarCompra(cx, { negocioId, compraId, items }); } catch (e) { console.error('compras/stock:', e.message); }
     await cx.query('COMMIT');
     // Historial de cambios de costo (si falla, la compra ya está guardada)
     try {
       const { registrarCambio } = require('./cambios_precios');
       for (const x of costos) await registrarCambio({ negocio_id: negocioId, producto_id: x.producto_id, producto_nombre: x.producto_nombre, campo: 'precio_costo', valor_anterior: x.valor_anterior, valor_nuevo: x.valor_nuevo, empleado: null, origen: 'factura' });
     } catch (e) { console.error('compras/registrarCambio:', e.message); }
-    res.json({ id: compraId, alertas, costos_actualizados: costos.length });
+    res.json({ id: compraId, alertas, costos_actualizados: costos.length, stock_sumado: stockRes.sumados, stock_omitido: stockRes.omitidos });
   } catch (e) {
     if (cx) { try { await cx.query('ROLLBACK'); } catch (_) { /* nada */ } }
     console.error('compras/guardar error:', e.message);
@@ -368,6 +371,7 @@ router.delete('/:id', auth, async (req, res) => {
   try {
     if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'No encontrada' });
     await asegurarTablas();
+    try { await require('./stock').asegurar(); await require('./stock').revertirCompra(pool, { negocioId: req.user.negocio_id, compraId: parseInt(req.params.id, 10) }); } catch (e) { console.error('compras/stock-revertir:', e.message); }
     const r = await pool.query('DELETE FROM compras WHERE id = $1 AND negocio_id = $2 RETURNING id', [req.params.id, req.user.negocio_id]);
     if (!r.rows.length) return res.status(404).json({ error: 'No encontrada' });
     res.json({ ok: true });

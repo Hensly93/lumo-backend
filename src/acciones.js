@@ -68,6 +68,30 @@ function receta(detector, clave) {
       a('sacar_permiso', 'perder_menos', 'Sacale el permiso de cambiar precios a quien no lo necesite', 'Solo quienes tienen el permiso de cargar productos pueden cambiar precios. Lo manejás desde Equipo.'),
     ];
   }
+  if (detector === 'stock_agotado') {
+    return [
+      a('reponer', 'ganar', 'Pedí hoy lo que se vende y no tenés', 'Cada día sin stock es ganancia que se va. Empezá por los de la lista: son los que más se venden.'),
+      a('minimo', 'perder_menos', 'Poné un mínimo en cada producto', 'Con un mínimo cargado, LumoBi te avisa antes de que se termine y no cuando ya faltó.'),
+    ];
+  }
+  if (detector === 'stock_bajo') {
+    return [
+      a('reponer', 'ganar', 'Armá el pedido con estos productos', 'Son los que se terminan en pocos días al ritmo actual. Pedilos juntos para no hacer dos viajes o dos pedidos.'),
+      a('minimo', 'perder_menos', 'Poné un mínimo en cada producto', 'Así el aviso llega con tiempo, según lo que tarda tu proveedor en entregar.'),
+    ];
+  }
+  if (detector === 'stock_inmovil') {
+    return [
+      a('promo_inmovil', 'ganar', 'Hacé una promo o un combo con lo que no se vende', 'Aunque ganes menos por unidad, la plata vuelve a la caja. Un 2x1 o un combo con algo que sí se vende suele alcanzar.'),
+      a('dejar_reponer', 'perder_menos', 'Dejá de reponer estos productos', 'Si no se venden en dos meses, reponerlos es inmovilizar más plata.'),
+    ];
+  }
+  if (detector === 'stock_diferencia') {
+    return [
+      a('contar_seguido', 'perder_menos', 'Contá los productos con diferencia más seguido', 'Un conteo corto cada semana, solo de los productos que más faltan, te dice cuándo y dónde se pierden.'),
+      a('revisar_vencidos', 'perder_menos', 'Revisá rotura, vencimiento y cargas mal hechas', 'Muchas veces la diferencia es mercadería vencida que se tiró sin anotar o una compra cargada de más.'),
+    ];
+  }
   if (detector === 'aumentos_proveedor') {
     return [
       a('cotizar', 'perder_menos', 'Pedí precio a otro proveedor', 'Con tu última factura en mano, pedí cotización de los productos que más subieron.'),

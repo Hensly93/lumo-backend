@@ -394,6 +394,10 @@ router.post('/finalizar-venta', authTurno, async (req, res) => {
       `UPDATE transacciones_detalle d SET producto_nombre = p.nombre, producto_marca = p.marca, costo_unitario = p.precio_costo
          FROM productos p WHERE d.transaccion_id = $1 AND p.id = d.producto_id`, [transaccion_id]);
 
+    // Stock liviano: baja lo vendido. Nunca frena ni rompe la venta (si falla, queda anotado en el log).
+    try { await require('./stock').asegurar(); } catch (e) { console.error('stock/asegurar:', e.message); }
+    await require('./stock').descontarVenta(client, { negocioId: negocio_id, transaccionId: transaccion_id, items: carrito.rows, empleado: nombre_empleado });
+
     // Vaciar carrito
     await client.query('DELETE FROM carrito_items WHERE turno_id=$1', [turno_id]);
 

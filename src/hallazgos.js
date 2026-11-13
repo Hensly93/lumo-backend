@@ -27,6 +27,7 @@ const ACCION_TEXTO = {
   comisiones_cobro: 'Ver cobros por medio de pago', aumentos_proveedor: 'Revisar las facturas', fuga: 'Ver cómo cerrar la fuga',
   precio_bajo_costo: 'Revisar tus precios y costos', marca_margen_bajo: 'Revisar los precios de esta marca',
   equipo_caja: 'Ver el detalle del equipo', equipo_borrados: 'Ver el detalle del equipo', equipo_egresos: 'Ver el detalle del equipo', equipo_precios: 'Ver el detalle del equipo', equipo_frenadas: 'Ver el detalle del equipo',
+  stock_agotado: 'Ver el stock', stock_bajo: 'Ver el stock', stock_inmovil: 'Ver el stock', stock_diferencia: 'Ver el stock',
 };
 const fmt = (n) => '$' + Math.round(Math.abs(n)).toLocaleString('es-AR');
 
@@ -150,6 +151,8 @@ async function detectar(negocioId, db = pool, opts = {}) {
   catch (e) { console.error('hallazgos/marcas:', e.message); }
   try { for (const q of await (opts.equipo || require('./detector_equipo').detectarEquipo)(negocioId, db)) lista.push(q); }
   catch (e) { console.error('hallazgos/equipo:', e.message); }
+  try { for (const s of await (opts.stock || require('./detector_stock').detectarStock)(negocioId, db)) lista.push(s); }
+  catch (e) { console.error('hallazgos/stock:', e.message); }
   return { lista, ctx: {
     suficiente: !!rad.suficiente, ventas_mes: Number(rad.ventas_mes) || 0,
     dias_con_ventas: Number(rad.dias_con_ventas) || 0, dias_necesarios: Number(rad.dias_necesarios) || 14, faltan_dias: Number(rad.faltan_dias) || 0,

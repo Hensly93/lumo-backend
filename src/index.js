@@ -149,6 +149,13 @@ try {
 }
 
 try {
+  app.use("/api/stock", require("./routes_stock"));
+  console.log("Stock OK");
+} catch(e) {
+  console.error("Stock ERROR:", e.message);
+}
+
+try {
   const comprasRoutes = require("./routes_compras");
   app.use("/api/compras", comprasRoutes);
   console.log("Compras OK");
