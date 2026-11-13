@@ -23,6 +23,15 @@ app.use(cors({
   credentials: true,
 }));
 app.use(express.json());
+// Detrás del proxy de Render: así req.ip es la IP real de cada visitante (necesario para frenar intentos).
+app.set("trust proxy", 1);
+{
+  const { frenoAuth } = require("./rate_limit");
+  app.use("/api/auth/login", frenoAuth.login);
+  app.use("/api/auth/register", frenoAuth.registro);
+  app.use("/api/auth/forgot-password", frenoAuth.olvido);
+  app.use("/api/auth/reset-password", frenoAuth.reset);
+}
 app.use(require('./normalizar_respuesta')); // mensajes/recomendaciones como objeto → texto (evita pantalla blanca)
 
 try {
