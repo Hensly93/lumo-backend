@@ -154,11 +154,36 @@ async function detPrecios(negocioId, db) {
   };
 }
 
+// ── 5) Acciones que la caja frenó (pedidos de autorización rechazados, vencidos o cancelados) ──────────
+// Es la plata que el control dejó de perder: lo que se intentó sacar o cambiar y el dueño no autorizó.
+async function detFrenadas(negocioId, db) {
+  const r = await db.query(
+    `SELECT empleado, COUNT(*)::int AS n, COALESCE(SUM(valor),0)::float AS valor
+       FROM autorizaciones_caja WHERE negocio_id = $1 AND estado IN ('rechazada','vencida','cancelada')
+        AND tipo <> 'bajar_precio' AND creado >= NOW() - ($2::int * INTERVAL '1 day') GROUP BY empleado ORDER BY 3 DESC`, [negocioId, DIAS]);
+  const n = r.rows.reduce((s, x) => s + x.n, 0);
+  const total = Math.round(r.rows.reduce((s, x) => s + x.valor, 0));
+  if (n < 3 || total <= 0) return null;
+  const rech = (await db.query(
+    `SELECT COUNT(*)::int AS n FROM autorizaciones_caja WHERE negocio_id = $1 AND estado = 'rechazada' AND tipo <> 'bajar_precio' AND creado >= NOW() - ($2::int * INTERVAL '1 day')`, [negocioId, DIAS])).rows[0].n;
+  return {
+    id: 'equipo_frenadas', tipo: 'estimado', ignora_suficiente: true,
+    titulo: `La caja frenó ${n} acciones fuera de lo habitual: ${fmt(total)} en ${DIAS} días`,
+    detalle: 'Son pedidos de autorización que no se aprobaron (rechazados, vencidos o cancelados). Si se repiten con la misma persona, conviene hablarlo.',
+    evidencia: [
+      `${n} acciones frenadas en ${DIAS} días por ${fmt(total)}${rech ? `, ${rech} rechazadas por vos` : ''}.`,
+      ...r.rows.filter((x) => x.empleado).slice(0, 3).map((x) => `${x.empleado}: ${x.n} ${x.n === 1 ? 'acción frenada' : 'acciones frenadas'} (${fmt(x.valor)}).`),
+      'Es plata que el control evitó mover. Lo que sí se aprobó no cuenta acá.',
+    ],
+    monto: total, monto_texto: `${fmt(total)} en acciones frenadas`, url: '/empleados',
+  };
+}
+
 // Devuelve la lista de hallazgos del equipo (cada señal falla por separado sin tumbar a las demás).
 async function detectarEquipo(negocioId, db = pool, opts = {}) {
   const out = [];
   const pasos = [['caja', () => detCaja(negocioId, db, opts)], ['borrados', () => detBorrados(negocioId, db)],
-    ['egresos', () => detEgresos(negocioId, db)], ['precios', () => detPrecios(negocioId, db)]];
+    ['egresos', () => detEgresos(negocioId, db)], ['precios', () => detPrecios(negocioId, db)], ['frenadas', () => detFrenadas(negocioId, db)]];
   for (const [nombre, fn] of pasos) {
     try { const h = await fn(); if (h) out.push(h); }
     catch (e) { if (!sinTabla(e)) console.error('detector_equipo/' + nombre + ':', e.message); }
@@ -166,4 +191,4 @@ async function detectarEquipo(negocioId, db = pool, opts = {}) {
   return out;
 }
 
-module.exports = { detectarEquipo, detCaja, detBorrados, detEgresos, detPrecios };
+module.exports = { detectarEquipo, detCaja, detBorrados, detEgresos, detPrecios, detFrenadas };

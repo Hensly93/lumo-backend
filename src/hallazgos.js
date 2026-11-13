@@ -26,7 +26,7 @@ const ACCION_TEXTO = {
   dia_debil: 'Ver ventas por día', franja_floja: 'Ver ventas por hora', ticket_baja: 'Ver tu ticket promedio', ticket_sube: 'Ver tu ticket promedio',
   comisiones_cobro: 'Ver cobros por medio de pago', aumentos_proveedor: 'Revisar las facturas', fuga: 'Ver cómo cerrar la fuga',
   precio_bajo_costo: 'Revisar tus precios y costos', marca_margen_bajo: 'Revisar los precios de esta marca',
-  equipo_caja: 'Ver el detalle del equipo', equipo_borrados: 'Ver el detalle del equipo', equipo_egresos: 'Ver el detalle del equipo', equipo_precios: 'Ver el detalle del equipo',
+  equipo_caja: 'Ver el detalle del equipo', equipo_borrados: 'Ver el detalle del equipo', equipo_egresos: 'Ver el detalle del equipo', equipo_precios: 'Ver el detalle del equipo', equipo_frenadas: 'Ver el detalle del equipo',
 };
 const fmt = (n) => '$' + Math.round(Math.abs(n)).toLocaleString('es-AR');
 

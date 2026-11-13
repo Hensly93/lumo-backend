@@ -56,6 +56,12 @@ function receta(detector, clave) {
       a('pedir_comprobante', 'perder_menos', 'Pedí el comprobante de cada egreso', 'Un ticket, una foto o un remito. Si hay proveedores que se pagan siempre de la caja, conviene anotarlos como gasto fijo.'),
     ];
   }
+  if (detector === 'equipo_frenadas') {
+    return [
+      a('revisar_frenadas', 'perder_menos', 'Mirá quién pidió esas acciones y en qué horarios', 'Si se concentran en una persona o en una franja, es la señal más clara. Si están repartidas, probablemente el límite está muy ajustado.'),
+      a('hablar_equipo', 'perder_menos', 'Conversá con la persona con el detalle en la mano', 'Mostrale lo que se intentó y preguntale qué pasó. El objetivo es que sepa que queda registrado, no acusar.'),
+    ];
+  }
   if (detector === 'equipo_precios') {
     return [
       a('revisar_precios_caja', 'perder_menos', 'Revisá los precios que se bajaron y volvelos a poner si hace falta', 'Si el cambio lo autorizaste, ignoralo. Si no, corregilo desde Catálogo.'),
