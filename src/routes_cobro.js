@@ -85,6 +85,7 @@ router.post('/checkout', auth, async (req, res) => {
         reason: 'LumoBi - abono mensual',
         external_reference: uid + ':' + nid,
         payer_email: payerEmail,
+        notification_url: 'https://lumo-backend-1.onrender.com/api/plan/webhook',
         back_url: origen + '/?pago=ok',
         status: 'pending',
         auto_recurring: { frequency: 1, frequency_type: 'months', transaction_amount: p.total, currency_id: 'ARS' },
@@ -142,6 +143,44 @@ async function sincronizar(preId) {
     console.log('[COBRO] plan dado de baja (' + p.status + '): negocio', nid);
   }
   try { require('./plan_gate').invalidar(nid); } catch (e) { /* sin cache */ }
+}
+
+// ─── POST /api/plan/verificar ────────────────────────────────────────────────
+// Si el aviso de Mercado Pago se demora (o se pierde), la app pregunta directo: se vuelve a leer la suscripción y se devuelve el plan al día.
+const ultimaVerif = new Map();
+router.post('/verificar', auth, async (req, res) => {
+  try {
+    const nid = req.user.negocio_id;
+    const k = String(nid);
+    if (Date.now() - (ultimaVerif.get(k) || 0) > 2000) {
+      ultimaVerif.set(k, Date.now());
+      const n = await pool.query('SELECT mp_subscription_id FROM negocios WHERE id=$1', [nid]);
+      const id = n.rows[0] && n.rows[0].mp_subscription_id;
+      if (id) await sincronizar(String(id));
+    }
+    res.json(await estadoPlan(pool, nid, { sinCache: true }));
+  } catch (e) {
+    console.error('[COBRO] verificar:', e.message);
+    res.status(500).json({ error: 'No se pudo verificar el pago' });
+  }
+});
+
+// Conciliación: cada 6 horas se vuelve a leer en Mercado Pago cada suscripción, por si un aviso nunca llegó.
+// Un pago que no se vio queda activado, y un abono que se cayó deja de figurar como activo.
+async function conciliar() {
+  try {
+    const r = await pool.query("SELECT id, mp_subscription_id FROM negocios WHERE mp_subscription_id IS NOT NULL AND mp_subscription_id <> '' ORDER BY id LIMIT 300");
+    let n = 0;
+    for (const f of r.rows) {
+      try { await sincronizar(String(f.mp_subscription_id)); n++; } catch (e) { console.error('[COBRO] conciliar negocio', f.id, e.message); }
+      await new Promise((ok) => setTimeout(ok, 300));
+    }
+    if (n) console.log('[COBRO] conciliadas ' + n + ' suscripciones');
+  } catch (e) { console.error('[COBRO] conciliar:', e.message); }
+}
+if (process.env.MP_ACCESS_TOKEN) {
+  setTimeout(conciliar, 90 * 1000).unref();
+  setInterval(conciliar, 6 * 3600 * 1000).unref();
 }
 
 // Estado que se guarda: un cobro de la cuota que Mercado Pago rechazo queda como 'rechazado' (con reintento o sin el)
