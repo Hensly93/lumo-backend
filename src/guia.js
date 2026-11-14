@@ -43,7 +43,27 @@ async function estadoGuia(negocioId, usuarioId, db = pool) {
     locales: r('locales', extra.locales > 0, 'Cargar tu local (dirección)', '/red'),
     mp: r('mp', extra.mp, 'Conectar Mercado Pago (opcional)', '/ajustes'),
   };
-  return { requisitos, conteos: { ...c, productos: prod.total || 0, costo_pct: costoPct, empleados: extra.empleados || 0 } };
+  // Qué activa el dueño, cuánto pesa y qué gana con cada cosa. "LumoBi funcionando al X%".
+  const ACTIVABLES = [
+    { id: 'caja', peso: 30, titulo: 'Abrir la caja y cerrar un turno', beneficio: 'Es el corazón de LumoBi: sin ventas en la caja no hay nada que analizar.', ir: '/primeros-pasos?paso=caja', listo: requisitos.caja.listo },
+    { id: 'avisos', peso: 15, titulo: 'Activar los avisos en tu celu', beneficio: 'LumoBi te avisa en el momento: el informe de cada turno, lo que se desvía y qué esperar mañana.', ir: '/primeros-pasos?paso=avisos', listo: requisitos.avisos.listo },
+    { id: 'costos', peso: 15, titulo: 'Cargar el costo de tus productos', beneficio: 'Sabés qué productos te dejan plata y cuáles no, y tu ganancia real.', ir: '/catalogo', listo: requisitos.costos.listo },
+    { id: 'locales', peso: 10, titulo: 'Cargar la dirección de tu local', beneficio: 'Las predicciones usan el clima de tu zona (la lluvia y el calor cambian lo que vendés).', ir: '/red', listo: requisitos.locales.listo },
+    { id: 'gastos', peso: 10, titulo: 'Cargar los gastos fijos del mes', beneficio: 'Sabés cuánto ganás de verdad y cuánto tenés que vender para no perder.', ir: '/rentabilidad', listo: requisitos.gastos.listo },
+    { id: 'facturas', peso: 10, titulo: 'Sacarle foto a una factura de proveedor', beneficio: 'LumoBi te avisa cuando un proveedor te sube el precio y a cuánto tenés que vender.', ir: '/compras', listo: requisitos.facturas.listo },
+    { id: 'mp', peso: 10, titulo: 'Conectar Mercado Pago (si cobrás con QR o posnet)', beneficio: 'Los cobros con QR y tarjeta entran solos a la caja y LumoBi los cruza con lo vendido.', ir: '/ajustes', listo: requisitos.mp.listo },
+  ];
+  const total = ACTIVABLES.reduce((a, x) => a + x.peso, 0);
+  const hecho = ACTIVABLES.filter((x) => x.listo).reduce((a, x) => a + x.peso, 0);
+  const activacion = {
+    porcentaje: Math.round((hecho / total) * 100),
+    items: ACTIVABLES.map((x) => ({ ...x, ir: x.listo ? null : x.ir })),
+    siguiente: ACTIVABLES.find((x) => !x.listo) || null,
+    // Lo que LumoBi aprende solo con el uso (no se activa: se junta)
+    aprendiendo: [requisitos.dias3, requisitos.turnos5, requisitos.turnos_emp].filter((x) => !x.listo).map((x) => x.falta),
+  };
+
+  return { requisitos, activacion, conteos: { ...c, productos: prod.total || 0, costo_pct: costoPct, empleados: extra.empleados || 0 } };
 }
 
 module.exports = { estadoGuia };
