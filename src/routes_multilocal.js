@@ -212,11 +212,11 @@ router.get('/red-vivo', auth, async (req, res) => {
             `SELECT COALESCE(SUM(monto),0) as total, COUNT(*) as tx
              FROM transacciones
              WHERE negocio_id=$1 AND sucursal_id=$2
-               AND fecha >= DATE_TRUNC('day', NOW())`,
+               AND (fecha - INTERVAL '3 hours')::date = (NOW() - INTERVAL '3 hours')::date`,
             [req.user.negocio_id, s.id]
           ),
           pool.query(
-            `SELECT nombre_empleado, tipo_turno, hora_apertura, caja_apertura
+            `SELECT id, nombre_empleado, tipo_turno, hora_apertura, caja_apertura
              FROM turnos_caja
              WHERE negocio_id=$1 AND sucursal_id=$2 AND estado='activo'
              ORDER BY hora_apertura DESC LIMIT 1`,
@@ -228,26 +228,16 @@ router.get('/red-vivo', auth, async (req, res) => {
         let brechaTurnoActivo = null;
 
         if (turno) {
+          // Solo el turno activo de esta caja: sus egresos y sus ventas (ver ventas_turno.js)
           const egresosRes = await pool.query(
-            `SELECT COALESCE(SUM(monto),0) as total
-             FROM egresos_caja eg
-             JOIN turnos_caja tc ON tc.id = eg.turno_id
-             WHERE tc.negocio_id=$1 AND tc.sucursal_id=$2 AND tc.estado='activo'`,
-            [req.user.negocio_id, s.id]
+            'SELECT COALESCE(SUM(monto),0) as total FROM egresos_caja WHERE turno_id=$1',
+            [turno.id]
           );
-
-          const ventasDesdeApertura = await pool.query(
-            `SELECT
-               COALESCE(SUM(monto),0) as total,
-               COALESCE(SUM(CASE WHEN LOWER(REPLACE(REPLACE(COALESCE(metodo_pago,''),' ',''),'_','')) IN ('mp','mercadopago','digital','debito','tarjetadebito','credito','tarjetacredito','tarjeta','transferencia','qr','cuentamp') THEN monto ELSE 0 END),0) as total_mp
-             FROM transacciones
-             WHERE negocio_id=$1 AND sucursal_id=$2 AND fecha >= $3`,
-            [req.user.negocio_id, s.id, turno.hora_apertura]
-          );
+          const vt = await require('./ventas_turno').ventasDelTurno(pool, { ...turno, negocio_id: req.user.negocio_id, sucursal_id: s.id, hora_cierre: null });
 
           const esperado = parseFloat(turno.caja_apertura)
-            + parseFloat(ventasDesdeApertura.rows[0].total)
-            - parseFloat(ventasDesdeApertura.rows[0].total_mp)
+            + vt.total_ventas
+            - vt.total_mp
             - parseFloat(egresosRes.rows[0].total);
           brechaTurnoActivo = Math.round(esperado);
         }

@@ -18,7 +18,8 @@ const pool = require('./db');
 
 const K_FACTOR = 0.5;   // slack como fracción de σ
 const H_FACTOR = 4.5;   // umbral alarma como múltiplo de σ
-const VENTANA_DIAS = 14;
+const VENTANA_DIAS = 14;      // período vigilado: los últimos 14 días
+const REFERENCIA_DIAS = 60;   // historia previa para saber qué es "normal" (sin mezclarla con lo vigilado)
 const ALPHA_BLEND_DIAS = 21;
 
 // ─── Calcular CUSUM para un empleado/turno ────────────────────────────────────
@@ -32,25 +33,39 @@ async function calcularCUSUM(usuarioId, tipoTurno, metrica = 'brecha', sucursalI
      FROM turnos_caja
      WHERE negocio_id=$1 AND LOWER(tipo_turno)=LOWER($2)
        AND estado='cerrado' AND brecha IS NOT NULL
-       AND hora_apertura >= NOW() - INTERVAL '${VENTANA_DIAS} days'
+       AND hora_apertura >= NOW() - INTERVAL '${VENTANA_DIAS + REFERENCIA_DIAS} days'
        AND ($3::integer IS NULL OR sucursal_id = $3)
      ORDER BY hora_apertura ASC`,
     [usuarioId, tipoTurno, sucursalId]
   );
 
-  if (res.rows.length < 5) {
-    return { disponible: false, motivo: 'insuficientes_datos', n: res.rows.length };
+  // Referencia (lo normal) = turnos ANTERIORES a los últimos 14 días. Antes la referencia era la primera
+  // mitad de esos mismos 14 días: una deriva de más de una semana quedaba adentro de "lo normal" y no se veía.
+  const corte = Date.now() - VENTANA_DIAS * 86400000;
+  let referencia = res.rows.filter(r => new Date(r.hora_apertura).getTime() < corte);
+  let vigilados = res.rows.filter(r => new Date(r.hora_apertura).getTime() >= corte);
+  if (referencia.length < 5) {
+    // Negocio nuevo: sin historia previa se usa la primera mitad como antes
+    const todos = res.rows;
+    if (todos.length < 5) return { disponible: false, motivo: 'insuficientes_datos', n: todos.length, turno: tipoTurno };
+    const mitad = Math.max(Math.floor(todos.length / 2), 3);
+    referencia = todos.slice(0, mitad);
+    vigilados = todos.slice(mitad);
   }
+  if (vigilados.length === 0) return { disponible: false, motivo: 'sin_turnos_recientes', n: 0, turno: tipoTurno };
 
-  const valores = res.rows.map(r => parseFloat(r.valor));
-  const empleados = res.rows.map(r => r.nombre_empleado);
+  const valores = vigilados.map(r => parseFloat(r.valor));
+  const empleados = vigilados.map(r => r.nombre_empleado);
   const n = valores.length;
 
-  // Estimar media y σ de la primera mitad (baseline de referencia)
-  const mitad = Math.max(Math.floor(n / 2), 3);
-  const baseline = valores.slice(0, mitad);
-  const mu = baseline.reduce((a, b) => a + b, 0) / baseline.length;
-  const sigma = Math.sqrt(baseline.reduce((a, b) => a + Math.pow(b - mu, 2), 0) / baseline.length) || mu * 0.3;
+  // Media y σ robustas de la referencia (mediana y MAD: un par de cierres raros no inflan "lo normal")
+  const ref = referencia.map(r => parseFloat(r.valor)).sort((a, b) => a - b);
+  const med = (arr) => arr.length % 2 ? arr[(arr.length - 1) / 2] : (arr[arr.length / 2 - 1] + arr[arr.length / 2]) / 2;
+  const mu = med(ref);
+  const mad = med(ref.map(v => Math.abs(v - mu)).sort((a, b) => a - b));
+  const media = ref.reduce((a, b) => a + b, 0) / ref.length;
+  const std = Math.sqrt(ref.reduce((a, b) => a + Math.pow(b - media, 2), 0) / ref.length);
+  const sigma = Math.max(1.4826 * mad || std, 50); // piso de $50 para no alarmar por centavos
 
   const k = K_FACTOR * sigma;
   const h = H_FACTOR * sigma;
@@ -121,23 +136,50 @@ async function calcularCUSUM(usuarioId, tipoTurno, metrica = 'brecha', sucursalI
     direccion,
     indice_alarma: indiceAlarma,
     contribucion_por_empleado: contribucionPorEmpleado,
-    alerta: alarmaDetectada ? {
-      tipo: 'CUSUM_CAMBIO_CONDUCTUAL',
-      prioridad: pctUmbral > 1.5 ? 'critico' : 'atencion',
-      mensaje: `Cambio conductual sostenido en turno ${tipoTurno}: brecha ${direccion} por ${n - indiceAlarma} turnos consecutivos.`,
-      accion: `Revisá los últimos ${n - indiceAlarma} cierres del turno ${tipoTurno}. Este patrón sostenido supera el umbral estadístico.`,
-      zscore: pctUmbral * H_FACTOR,
-    } : null,
+    alerta: alarmaDetectada ? (() => {
+      const turnoTxt = { manana: 'mañana', tarde: 'tarde', noche: 'noche' }[String(tipoTurno).toLowerCase()] || tipoTurno;
+      const desde = indiceAlarma >= 0 ? indiceAlarma : 0;
+      const diferencia = Math.round(valores.slice(inicioRun).reduce((a, v) => a + (v - mu), 0));
+      return {
+        tipo: 'CUSUM_CAMBIO_CONDUCTUAL',
+        prioridad: pctUmbral > 1.5 ? 'critico' : 'atencion',
+        contexto: `${String(tipoTurno).toLowerCase()}_${sucursalId ?? 'todos'}`,
+        sucursal_id: sucursalId,
+        mensaje: `Cambio sostenido en los cierres del turno ${turnoTxt}: la diferencia de caja viene ${direccion === 'creciente' ? 'faltando' : 'sobrando'} de forma repetida en los últimos ${n - desde} turnos (unos $${Math.abs(diferencia).toLocaleString('es-AR')} por encima de lo normal en total).`,
+        accion: `Revisá los últimos ${n - desde} cierres del turno ${turnoTxt}.`,
+        impacto_pesos: Math.abs(diferencia),
+        contribucion_por_empleado: contribucionPorEmpleado,
+        zscore: pctUmbral * H_FACTOR,
+      };
+    })() : null,
   };
 }
 
 // ─── CUSUM para todos los turnos del usuario ──────────────────────────────────
 
 async function calcularCUSUMCompleto(negocioId, sucursalId = null) {
-  const TURNOS = ['MANANA', 'TARDE', 'NOCHE'];
-  const resultados = await Promise.all(
-    TURNOS.map(t => calcularCUSUM(negocioId, t, 'brecha', sucursalId).catch(() => ({ disponible: false, turno: t })))
-  );
+  const TURNOS = ['manana', 'tarde', 'noche'];
+  // Cada local tiene su propia caja: con varios locales se vigila cada turno de cada local por separado
+  // (mezclarlos diluye la deriva de una caja con los cierres normales de la otra).
+  let locales = [sucursalId];
+  if (sucursalId == null) {
+    try {
+      const r = await pool.query(
+        `SELECT DISTINCT sucursal_id FROM turnos_caja
+         WHERE negocio_id=$1 AND estado='cerrado' AND hora_apertura >= NOW() - INTERVAL '${VENTANA_DIAS + REFERENCIA_DIAS} days'`,
+        [negocioId]
+      );
+      const ids = r.rows.map(x => x.sucursal_id).filter(x => x != null);
+      if (ids.length > 1) locales = ids;
+    } catch (e) { /* se sigue con el negocio entero */ }
+  }
+  const tareas = [];
+  for (const loc of locales) for (const t of TURNOS) {
+    tareas.push(calcularCUSUM(negocioId, t, 'brecha', loc)
+      .then(r => ({ ...r, turno: r.turno || t, sucursal_id: loc }))
+      .catch(() => ({ disponible: false, turno: t, sucursal_id: loc })));
+  }
+  const resultados = await Promise.all(tareas);
 
   const alertas = resultados
     .filter(r => r.disponible && r.alarma && r.alerta)

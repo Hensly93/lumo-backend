@@ -14,7 +14,6 @@ const { calcularERMNegocio, calcularRiesgoEmpleado } = require('./erm');
 const { analizarCruceTurno }                 = require('./cruce_variables');
 const { atribuirAnomaliaSucursal }           = require('./perfil_sucursal');
 
-const TOTAL_MODULOS = 6;
 
 // ─── Risk score desde detección ───────────────────────────────────────────────
 // 60 pts por cobertura de métricas anómalas (0-3 métricas distintas),
@@ -105,18 +104,38 @@ function calcularContextoScore(erm, cusum) {
 //   señales_consolidadas — inputs listos para alert_manager
 //   data_quality        — disponibilidad de módulos (incluye fallidos/6)
 
-async function orchestrate({ negocio_id, uid = null, turno_actual = null }) {
+// Ventana de historia que mira el orquestador: alcanza para el baseline por turno y no carga años de ventas.
+const DIAS_HISTORIA = 120;
+
+async function orchestrate({ negocio_id, uid = null, turno_actual = null, sucursal_id = null }) {
 
   // detectarAnomalias recibe datos ya agregados, no un ID —
   // el orquestador hace el fetch propio para no depender de motor.js.
-  let agregados = [];
+  let agregados = null;
   try {
     const txRes = await pool.query(
-      'SELECT * FROM transacciones WHERE negocio_id = $1 ORDER BY fecha ASC',
-      [negocio_id]
+      `SELECT fecha, monto, turno, metodo_pago, sucursal_id FROM transacciones
+       WHERE negocio_id = $1 AND ($2::integer IS NULL OR sucursal_id = $2)
+         AND fecha >= NOW() - ($3 || ' days')::interval
+       ORDER BY fecha ASC`,
+      [negocio_id, sucursal_id, String(DIAS_HISTORIA)]
     );
     agregados = agregarPorTurno(txRes.rows);
-  } catch { /* si falla, deteccion quedará null */ }
+  } catch (e) { console.error('[orchestrator] ventas:', e.message); }
+
+  // Cruce de variables: si no se pide un turno puntual, se cruza el último turno cerrado
+  if (!turno_actual) {
+    try {
+      const ult = await pool.query(
+        `SELECT id FROM turnos_caja WHERE negocio_id=$1 AND estado='cerrado'
+           AND ($2::integer IS NULL OR sucursal_id = $2)
+           AND hora_cierre >= NOW() - INTERVAL '3 days'
+         ORDER BY hora_cierre DESC LIMIT 1`,
+        [negocio_id, sucursal_id]
+      );
+      turno_actual = ult.rows[0]?.id ?? null;
+    } catch (e) { console.error('[orchestrator] ultimo turno:', e.message); }
+  }
 
   // ── PASO 1: Recolección en paralelo ─────────────────────────────────────────
 
@@ -128,12 +147,12 @@ async function orchestrate({ negocio_id, uid = null, turno_actual = null }) {
     rERM,
     rCruce,
   ] = await Promise.allSettled([
-    Promise.resolve(detectarAnomalias(agregados)),
-    calcularCUSUMCompleto(negocio_id),
-    detectarPatronesSemana(negocio_id),
-    cruzarCatalogoConTicket(negocio_id),
-    calcularERMNegocio(negocio_id),
-    turno_actual ? analizarCruceTurno(turno_actual)        : Promise.resolve(null),
+    agregados ? Promise.resolve(detectarAnomalias(agregados)) : Promise.reject(new Error('sin ventas')),
+    calcularCUSUMCompleto(negocio_id, sucursal_id),
+    detectarPatronesSemana(negocio_id, sucursal_id),
+    cruzarCatalogoConTicket(negocio_id, sucursal_id),
+    calcularERMNegocio(negocio_id, sucursal_id),
+    turno_actual ? analizarCruceTurno(turno_actual)        : Promise.resolve(undefined),
   ]);
 
   const deteccion = rDeteccion.status === 'fulfilled' ? rDeteccion.value : null;
@@ -141,7 +160,7 @@ async function orchestrate({ negocio_id, uid = null, turno_actual = null }) {
   const patrones  = rPatrones.status  === 'fulfilled' ? rPatrones.value  : null;
   const catalogo  = rCatalogo.status  === 'fulfilled' ? rCatalogo.value  : null;
   const erm       = rERM.status       === 'fulfilled' ? rERM.value       : null;
-  const cruce     = rCruce.status     === 'fulfilled' ? rCruce.value     : null;
+  const cruce     = rCruce.status     === 'fulfilled' ? (rCruce.value ?? null) : null;
 
   // ── Atribución de anomalías por sucursal ───────────────────────────────────
   const sucursalesPorTurno = {};
@@ -156,8 +175,13 @@ async function orchestrate({ negocio_id, uid = null, turno_actual = null }) {
     }
   }
 
-  const modulos_fallidos = [deteccion, cusum, patrones, catalogo, erm, cruce]
-    .filter(v => v === null).length;
+  // Un módulo cuenta como fallido solo si se ejecutó y dio error (el cruce sin turno reciente no es una falla)
+  const ejecutados = [rDeteccion, rCusum, rPatrones, rCatalogo, rERM, ...(turno_actual ? [rCruce] : [])];
+  const modulos_fallidos = ejecutados.filter(r => r.status === 'rejected').length;
+  const TOTAL_EJECUTADOS = ejecutados.length;
+  for (const [nombre, r] of [['deteccion', rDeteccion], ['cusum', rCusum], ['patrones', rPatrones], ['catalogo', rCatalogo], ['erm', rERM], ['cruce', rCruce]]) {
+    if (r.status === 'rejected') console.error('[orchestrator] modulo', nombre, 'fallo:', r.reason && r.reason.message);
+  }
 
   // ── PASO 2: Cruces ────────────────────────────────────────────────────────
 
@@ -186,6 +210,7 @@ async function orchestrate({ negocio_id, uid = null, turno_actual = null }) {
     patrones:       patrones             ?? [],
     catalogo_señal: catalogo?.señal      ?? null,
     cruce_señales:  cruce?.señales       ?? [],
+    cruce_turno_id: turno_actual,
     erm_nivel:      erm?.empleados?.[0]?.nivel ?? null,
     erm_score:      erm?.empleados?.[0]?.score ?? null,
   };
@@ -218,9 +243,10 @@ async function orchestrate({ negocio_id, uid = null, turno_actual = null }) {
 
     // Calidad de datos — tasa de módulos que respondieron (modulos_fallidos / 6)
     data_quality: {
-      modulos_ok:          TOTAL_MODULOS - modulos_fallidos,
+      modulos_ok:          TOTAL_EJECUTADOS - modulos_fallidos,
       modulos_fallidos,
-      tasa_disponibilidad: Math.round(((TOTAL_MODULOS - modulos_fallidos) / TOTAL_MODULOS) * 100),
+      modulos_total:       TOTAL_EJECUTADOS,
+      tasa_disponibilidad: Math.round(((TOTAL_EJECUTADOS - modulos_fallidos) / TOTAL_EJECUTADOS) * 100),
     },
   };
 }

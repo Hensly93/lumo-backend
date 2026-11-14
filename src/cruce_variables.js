@@ -51,23 +51,12 @@ async function analizarCruceTurno(turnoId) {
   const totalEgresos = parseFloat(egresosRes.rows[0].total);
   const cantEgresos = parseInt(egresosRes.rows[0].cantidad);
 
-  // 3. Ventas del turno (por ventana temporal)
-  const ventasRes = await pool.query(
-    `SELECT
-       COALESCE(SUM(monto),0) as total_ventas,
-       COALESCE(SUM(CASE WHEN LOWER(REPLACE(REPLACE(COALESCE(metodo_pago,''),' ',''),'_','')) IN ('mp','mercadopago','digital','debito','tarjetadebito','credito','tarjetacredito','tarjeta','transferencia','qr','cuentamp') THEN monto ELSE 0 END),0) as total_mp,
-       COUNT(*) as cantidad_tx,
-       COALESCE(AVG(monto),0) as ticket_promedio
-     FROM transacciones
-     WHERE negocio_id=$1 AND fecha >= $2 AND fecha <= COALESCE($3, NOW())
-     AND ($4::integer IS NULL OR sucursal_id IS NULL OR sucursal_id = $4)`,
-    [t.negocio_id, t.hora_apertura, t.hora_cierre, t.sucursal_id || null]
-  );
-  const v = ventasRes.rows[0];
-  const totalVentas = parseFloat(v.total_ventas);
-  const totalMP = parseFloat(v.total_mp);
-  const cantidadTx = parseInt(v.cantidad_tx);
-  const ticketPromedio = parseFloat(v.ticket_promedio);
+  // 3. Ventas del turno: solo las de ESTE turno (ver ventas_turno.js)
+  const v = await require('./ventas_turno').ventasDelTurno(pool, t);
+  const totalVentas = v.total_ventas;
+  const totalMP = v.total_mp;
+  const cantidadTx = v.cantidad_tx;
+  const ticketPromedio = v.ticket_promedio;
   const totalEfectivo = totalVentas - totalMP;
 
   // 4. Fórmula central

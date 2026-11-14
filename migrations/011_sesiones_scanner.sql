@@ -1,7 +1,7 @@
 -- 011_sesiones_scanner.sql
 -- Sesiones temporales para vincular el escáner con un turno activo
 
-CREATE TABLE sesiones_scanner (
+CREATE TABLE IF NOT EXISTS sesiones_scanner (
   id SERIAL PRIMARY KEY,
   token UUID NOT NULL UNIQUE DEFAULT gen_random_uuid(),
   turno_id INTEGER NOT NULL REFERENCES turnos_caja(id),
@@ -10,4 +10,4 @@ CREATE TABLE sesiones_scanner (
   expira_en TIMESTAMP NOT NULL
 );
 
-CREATE INDEX idx_sesiones_scanner_token ON sesiones_scanner(token);
+CREATE INDEX IF NOT EXISTS idx_sesiones_scanner_token ON sesiones_scanner(token);

@@ -1,6 +1,6 @@
 // job_nocturno.js — Lumo S9
 // Coordina el sistema predictivo completo. Corre a las 3AM Argentina.
-// Sin cron activo — se activa cuando se upgradee Render a plan pago.
+// Lo dispara un servicio externo (cron-job.org) con POST /api/job/trigger y el header x-internal-key.
 //
 // Flujo:
 //   1. Agregar datos del día a agregados_zona (solo publica si negocios_count >= 5)
@@ -15,66 +15,42 @@ const { notificarUsuario } = require('./push');
 const { calcularRiesgoAjustado } = require('./erm');
 const { detectarGoteo } = require('./cruce_variables');
 
-// ─── Paso 1: Agregar datos del día a agregados_zona ───────────────────────────
+// ─── Paso 1: Agregados de la semana por zona y rubro (efecto red) ───────────
+// Se recalcula la semana completa desde cero en cada corrida: negocios_count = negocios DISTINTOS.
+// Antes se sumaba +1 por corrida, así que un solo negocio llegaba a "5 negocios" en 5 noches y se
+// rompía el mínimo de 5 (privacidad). Además buscaba ventas por usuario_id, que la caja no carga.
 
 async function agregarDatosDia(db) {
-  const log = [];
-
-  // Usuarios con transacciones hoy que tengan zona y tipo_negocio
-  const usuariosRes = await db.query(`
-    SELECT DISTINCT u.id, u.zona, u.tipo_negocio
-    FROM usuarios u
-    JOIN transacciones t ON t.usuario_id = u.id
-    WHERE DATE(t.fecha) = CURRENT_DATE
-      AND u.zona IS NOT NULL
-      AND u.tipo_negocio IS NOT NULL
-  `);
-
-  for (const usuario of usuariosRes.rows) {
-    // Métricas del día para este usuario
-    const metRes = await db.query(`
-      SELECT
-        AVG(monto)  AS ticket_promedio,
-        SUM(monto)  AS ventas_totales
-      FROM transacciones
-      WHERE usuario_id = $1 AND DATE(fecha) = CURRENT_DATE
-    `, [usuario.id]);
-
-    const { ticket_promedio, ventas_totales } = metRes.rows[0];
-    if (!ventas_totales) continue;
-
-    // Semana ISO (lunes de la semana actual)
-    const semana = new Date();
-    semana.setDate(semana.getDate() - ((semana.getDay() + 6) % 7));
-    const semanaStr = semana.toISOString().slice(0, 10);
-
-    // Upsert en agregados_zona — acumula promedio incremental
-    await db.query(`
-      INSERT INTO agregados_zona (zona, tipo_negocio, semana, ticket_promedio, ventas_promedio, negocios_count)
-      VALUES ($1, $2, $3, $4, $5, 1)
-      ON CONFLICT (zona, tipo_negocio, semana) DO UPDATE SET
-        ticket_promedio = (agregados_zona.ticket_promedio * agregados_zona.negocios_count + EXCLUDED.ticket_promedio)
-                          / (agregados_zona.negocios_count + 1),
-        ventas_promedio = (agregados_zona.ventas_promedio * agregados_zona.negocios_count + EXCLUDED.ventas_promedio)
-                          / (agregados_zona.negocios_count + 1),
-        negocios_count  = agregados_zona.negocios_count + 1
-    `, [usuario.zona, usuario.tipo_negocio, semanaStr, parseFloat(ticket_promedio), parseFloat(ventas_totales)]);
-
-    log.push({ usuario_id: usuario.id, zona: usuario.zona, tipo_negocio: usuario.tipo_negocio });
-  }
-
-  // Registrar cuántas zonas tienen >= 5 negocios (W2 se activará con estos)
-  const zonasActivasRes = await db.query(`
-    SELECT zona, tipo_negocio, negocios_count
-    FROM agregados_zona
-    WHERE semana = (SELECT MAX(semana) FROM agregados_zona)
-      AND negocios_count >= 5
+  const r = await db.query(`
+    WITH semana AS (
+      SELECT (date_trunc('week', NOW() - INTERVAL '3 hours'))::date AS lunes
+    ),
+    por_negocio AS (
+      SELECT n.id, n.zona, n.tipo_negocio,
+             AVG(t.monto) AS ticket,
+             SUM(t.monto) / NULLIF(COUNT(DISTINCT (t.fecha - INTERVAL '3 hours')::date), 0) AS venta_dia
+      FROM negocios n
+      JOIN transacciones t ON t.negocio_id = n.id
+      CROSS JOIN semana s
+      WHERE n.zona IS NOT NULL AND n.tipo_negocio IS NOT NULL AND n.deletion_scheduled_at IS NULL
+        AND (t.fecha - INTERVAL '3 hours')::date >= s.lunes
+      GROUP BY n.id, n.zona, n.tipo_negocio
+    )
+    INSERT INTO agregados_zona (zona, tipo_negocio, semana, ticket_promedio, ventas_promedio, negocios_count)
+    SELECT zona, tipo_negocio, (SELECT lunes FROM semana), AVG(ticket), AVG(venta_dia), COUNT(*)
+    FROM por_negocio
+    GROUP BY zona, tipo_negocio
+    ON CONFLICT (zona, tipo_negocio, semana) DO UPDATE SET
+      ticket_promedio = EXCLUDED.ticket_promedio,
+      ventas_promedio = EXCLUDED.ventas_promedio,
+      negocios_count  = EXCLUDED.negocios_count
+    RETURNING zona, tipo_negocio, negocios_count
   `);
 
   return {
     paso: 'agregar_datos_dia',
-    usuarios_procesados: log.length,
-    zonas_con_5_plus: zonasActivasRes.rows.length,
+    grupos_zona_rubro: r.rows.length,
+    zonas_con_5_plus: r.rows.filter(x => x.negocios_count >= 5).length,
   };
 }
 
@@ -126,13 +102,12 @@ async function calcularPredicciones(db) {
 // ─── Paso 3: Comparar predicciones de ayer con realidad ──────────────────────
 
 async function compararConRealidad(db) {
-  const ayer = new Date();
-  ayer.setDate(ayer.getDate() - 1);
-  const ayerStr = ayer.toISOString().slice(0, 10);
+  // "Ayer" en hora Argentina
+  const ayerStr = new Date(Date.now() - 3 * 3600 * 1000 - 86400000).toISOString().slice(0, 10);
 
   // Predicciones de ayer sin valor_real aún en historial
   const pendientesRes = await db.query(`
-    SELECT pn.id, pn.usuario_id, pn.sucursal_id, pn.valor_predicho
+    SELECT pn.id, pn.negocio_id, pn.sucursal_id, pn.valor_predicho
     FROM predicciones_negocio pn
     LEFT JOIN historial_predicciones hp ON hp.prediccion_id = pn.id
     WHERE pn.fecha_target = $1 AND hp.id IS NULL
@@ -146,10 +121,10 @@ async function compararConRealidad(db) {
     const realRes = await db.query(`
       SELECT COALESCE(SUM(monto), 0) AS total
       FROM transacciones
-      WHERE usuario_id = $1
+      WHERE negocio_id = $1
         AND ($2::integer IS NULL OR sucursal_id = $2)
-        AND DATE(fecha) = $3
-    `, [pred.usuario_id, pred.sucursal_id, ayerStr]);
+        AND (fecha - INTERVAL '3 hours')::date = $3::date
+    `, [pred.negocio_id, pred.sucursal_id, ayerStr]);
 
     const valor_real = parseFloat(realRes.rows[0].total);
     const error_absoluto = Math.abs(valor_real - parseFloat(pred.valor_predicho));
@@ -171,14 +146,15 @@ async function compararConRealidad(db) {
         SELECT COUNT(*) AS n
         FROM historial_predicciones hp
         JOIN predicciones_negocio pn ON pn.id = hp.prediccion_id
-        WHERE pn.usuario_id = $1
+        WHERE pn.negocio_id = $1
+          AND pn.sucursal_id IS NOT DISTINCT FROM $2::integer
           AND hp.error_porcentual > 30
           AND hp.created_at >= NOW() - INTERVAL '3 days'
-      `, [pred.usuario_id]);
+      `, [pred.negocio_id, pred.sucursal_id]);
 
       if (parseInt(rachaRes.rows[0].n) >= 3) {
         alertas.push({
-          usuario_id: pred.usuario_id,
+          negocio_id: pred.negocio_id,
           sucursal_id: pred.sucursal_id,
           mensaje: `Error de predicción > 30% por 3 días consecutivos. Revisar calidad de señal propia.`,
         });
@@ -201,12 +177,13 @@ async function compararConRealidad(db) {
 
 async function recordatorioPreciosCatalogo(db) {
   const usuariosRes = await db.query(`
-    SELECT p.usuario_id
+    SELECT nu.usuario_id
     FROM productos p
+    JOIN negocio_usuarios nu ON nu.negocio_id = p.negocio_id AND nu.rol = 'owner' AND nu.activo = true
     WHERE p.activo = true
-    GROUP BY p.usuario_id
-    HAVING (CURRENT_DATE - MAX(p.updated_at::date)) >= 15
-       AND (CURRENT_DATE - MAX(p.updated_at::date)) % 15 = 0
+    GROUP BY p.negocio_id, nu.usuario_id
+    HAVING ((NOW() - INTERVAL '3 hours')::date - MAX((p.updated_at - INTERVAL '3 hours')::date)) >= 15
+       AND ((NOW() - INTERVAL '3 hours')::date - MAX((p.updated_at - INTERVAL '3 hours')::date)) % 15 = 0
   `);
 
   let enviados = 0;
@@ -225,10 +202,9 @@ async function recordatorioPreciosCatalogo(db) {
 // ─── Paso 5: Snapshots ERM diarios + notificaciones de riesgo ─────────────────
 
 async function snapshotsERM(db) {
-  const hoy = new Date().toISOString().slice(0, 10);
-  const ayer = new Date();
-  ayer.setDate(ayer.getDate() - 1);
-  const ayerStr = ayer.toISOString().slice(0, 10);
+  // Fechas en hora Argentina
+  const hoy = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+  const ayerStr = new Date(Date.now() - 3 * 3600 * 1000 - 86400000).toISOString().slice(0, 10);
 
   // Todos los negocios activos
   const negociosRes = await db.query(`
@@ -321,7 +297,7 @@ async function snapshotsERM(db) {
 // ─── Paso 6: Snapshots Goteo diarios + notificaciones ────────────────────────
 
 async function snapshotsGoteo(db) {
-  const hoy = new Date().toISOString().slice(0, 10);
+  const hoy = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
 
   const negociosRes = await db.query(`
     SELECT id FROM negocios WHERE deletion_scheduled_at IS NULL
@@ -404,23 +380,31 @@ async function runJobNocturno(db = pool) {
   const inicio = Date.now();
   console.log('[JOB NOCTURNO] Iniciando —', new Date().toISOString());
 
+  // Cada paso corre aunque otro falle: antes un error en el paso 1 cortaba predicciones, ERM y goteo.
   const pasos = [];
-  try {
-    pasos.push(await agregarDatosDia(db));
-    pasos.push(await guardarClimaReciente(db));
-    pasos.push(await calcularPredicciones(db));
-    pasos.push(await compararConRealidad(db));
-    pasos.push(await recordatorioPreciosCatalogo(db));
-    pasos.push(await snapshotsERM(db));
-    pasos.push(await snapshotsGoteo(db));
-  } catch (e) {
-    console.error('[JOB NOCTURNO] Error fatal:', e.message);
-    return { ok: false, error: e.message, pasos };
+  const PASOS = [
+    ['agregar_datos_dia', agregarDatosDia],
+    ['clima', guardarClimaReciente],
+    ['calcular_predicciones', calcularPredicciones],
+    ['comparar_realidad', compararConRealidad],
+    ['recordatorio_precios_catalogo', recordatorioPreciosCatalogo],
+    ['snapshots_erm', snapshotsERM],
+    ['snapshots_goteo', snapshotsGoteo],
+  ];
+  let fallidos = 0;
+  for (const [nombre, fn] of PASOS) {
+    try {
+      pasos.push(await fn(db));
+    } catch (e) {
+      fallidos++;
+      console.error(`[JOB NOCTURNO] Paso ${nombre} fallo:`, e.message);
+      pasos.push({ paso: nombre, error: e.message });
+    }
   }
 
   const duracion_ms = Date.now() - inicio;
   console.log(`[JOB NOCTURNO] Completado en ${duracion_ms}ms`);
-  return { ok: true, duracion_ms, pasos };
+  return { ok: fallidos === 0, pasos_fallidos: fallidos, duracion_ms, pasos };
 }
 
 async function triggerManual(db = pool) {

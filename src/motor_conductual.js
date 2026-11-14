@@ -42,7 +42,7 @@ async function calcularUmbralCelda(negocioId, tipoTurno, diaSemana, condicion = 
   // Primero: ver si hay umbral P7 guardado para esta celda
   const umbrales = await pool.query(
     `SELECT umbral_actual FROM umbrales_celda
-     WHERE negocio_id=$1 AND tipo_turno=$2 AND dia_semana=$3 AND condicion=$4`,
+     WHERE negocio_id=$1 AND LOWER(tipo_turno)=LOWER($2) AND dia_semana=$3 AND condicion=$4`,
     [negocioId, tipoTurno, diaSemana, condicion]
   );
   if (umbrales.rows.length > 0) {
@@ -53,8 +53,8 @@ async function calcularUmbralCelda(negocioId, tipoTurno, diaSemana, condicion = 
   const hist = await pool.query(
     `SELECT ABS(brecha) as brecha_abs
      FROM turnos_caja
-     WHERE negocio_id=$1 AND tipo_turno=$2
-       AND EXTRACT(DOW FROM hora_apertura) = $3
+     WHERE negocio_id=$1 AND LOWER(tipo_turno)=LOWER($2)
+       AND EXTRACT(DOW FROM (hora_apertura - INTERVAL '3 hours')) = $3
        AND estado='cerrado' AND brecha IS NOT NULL
        AND hora_apertura >= NOW() - INTERVAL '90 days'`,
     [negocioId, tipoTurno, diaSemana]
@@ -91,10 +91,15 @@ async function adaptarUmbralPorFeedback(negocioId, alertaId) {
 
   const { tipo_alerta, contexto, feedback_confirmada } = alerta.rows[0];
 
-  // Extraer celda del contexto (formato: "TURNO|DIA|CONDICION" o solo turno)
-  const partes = (contexto || '').split('|');
-  const tipoTurno = partes[0] || 'GENERAL';
-  const diaSemana = parseInt(partes[1]) || new Date().getDay();
+  // Extraer la celda del contexto de la alerta. Formatos: "2026-11-12_tarde_ventas_por_turno",
+  // "tarde", o el viejo "TURNO|DIA|CONDICION". Sin turno reconocible → celda 'general'.
+  const ctxTxt = String(contexto || '').toLowerCase();
+  const partes = ctxTxt.split('|');
+  const mTurno = ctxTxt.match(/\b(manana|tarde|noche)\b|_(manana|tarde|noche)(_|$)/);
+  const tipoTurno = mTurno ? (mTurno[1] || mTurno[2]) : 'general';
+  const mFecha = ctxTxt.match(/(\d{4}-\d{2}-\d{2})/);
+  const diaSemana = mFecha ? new Date(mFecha[1] + 'T12:00:00Z').getUTCDay()
+    : (parseInt(partes[1]) || new Date(Date.now() - 3 * 3600 * 1000).getUTCDay());
   const condicion = partes[2] || 'normal';
 
   // Contar feedbacks anteriores en esta celda
@@ -105,9 +110,9 @@ async function adaptarUmbralPorFeedback(negocioId, alertaId) {
        COUNT(*) as total
      FROM alertas_gestionadas
      WHERE negocio_id=$1 AND tipo_alerta=$2
-       AND contexto LIKE $3
+       AND LOWER(contexto) LIKE $3
        AND feedback_confirmada IS NOT NULL`,
-    [negocioId, tipo_alerta, `${tipoTurno}%`]
+    [negocioId, tipo_alerta, tipoTurno === 'general' ? '%' : `%${tipoTurno}%`]
   );
 
   const { falsos_positivos, verdaderos_positivos, total } = stats.rows[0];

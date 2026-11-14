@@ -35,10 +35,10 @@ async function cerrarVenta(client, turno_id, metodo_pago, extra) {
 
   // Crear transacción con atribución completa para CUSUM/ERM
   const transaccion = await client.query(
-    `INSERT INTO transacciones (negocio_id, monto, tipo, empleado, turno, metodo_pago, sucursal_id, mp_payment_id, fecha)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::timestamptz, NOW()))
+    `INSERT INTO transacciones (negocio_id, monto, tipo, empleado, turno, metodo_pago, sucursal_id, mp_payment_id, fecha, turno_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::timestamptz, NOW()), $10)
      RETURNING id, fecha`,
-    [negocio_id, monto_total, 'venta', nombre_empleado, tipo_turno, metodo_pago, sucursal_id, extra.mp_payment_id || null, extra.fecha || null]
+    [negocio_id, monto_total, 'venta', nombre_empleado, tipo_turno, metodo_pago, sucursal_id, extra.mp_payment_id || null, extra.fecha || null, turno_id]
   );
 
   const transaccion_id = transaccion.rows[0].id;

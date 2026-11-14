@@ -1,4 +1,4 @@
-const { detectarAnomalias } = require('./deteccion');
+const { detectarAnomalias, agregarPorTurno } = require('./deteccion');
 const { generarInsight, generarInsightMetrica } = require('./insights');
 const { getBenchmarkSector, normalizarTipoNegocio, calcularZScoreSector } = require('./benchmarks_sector');
 const { calcularMetricasNegocio, getBaselineNegocio } = require('./baseline_negocio');
@@ -13,17 +13,6 @@ const METRICAS = ['ticket_promedio', 'ventas_por_turno', 'ratio_efectivo'];
 const UMBRAL_SEÑAL = 2.0;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
-
-function agregarPorTurno(transacciones) {
-  const grupos = {};
-  transacciones.forEach(t => {
-    const dia = new Date(t.fecha).toISOString().split('T')[0];
-    const clave = `${t.turno || 'SIN_TURNO'}_${dia}`;
-    if (!grupos[clave]) grupos[clave] = { ...t, monto: 0 };
-    grupos[clave].monto = Number(grupos[clave].monto) + Number(t.monto);
-  });
-  return Object.values(grupos);
-}
 
 function filtrarUltimosDias(transacciones, dias) {
   const corte = new Date();
@@ -102,10 +91,8 @@ function evaluarSeñalesSectorPorTurno(agregados, benchmarkSector) {
   if (!bVentas) return señales;
 
   agregados.forEach(ag => {
-    const dia = new Date(ag.fecha).toISOString().split('T')[0];
-    const key = `${ag.turno || 'SIN_TURNO'}_${dia}`;
-    const z = calcularZScoreSector(Number(ag.monto), bVentas);
-    if (Math.abs(z) >= UMBRAL_SEÑAL) señales.add(key);
+    const z = calcularZScoreSector(Number(ag.ventas_por_turno), bVentas);
+    if (Math.abs(z) >= UMBRAL_SEÑAL) señales.add(ag.clave);
   });
   return señales;
 }
@@ -122,9 +109,14 @@ function construirAlertasMetricas(señalesMetricas, metricasRecientes, benchmark
     const valor = metricasRecientes[metrica];
     const bSector = benchmarkSector[metrica];
     const bPropio = baselineNegocio[metrica];
-    const referencia = bSector ? Number(bSector.valor_promedio) : Number(bPropio.valor);
+    // El valor esperado sale de la misma capa que más pesa en el score (propia si ya hay datos propios)
+    const usaPropio = bPropio && (!bSector || pesos.peso_capa2 >= 0.5);
+    const referencia = usaPropio ? Number(bPropio.valor) : Number(bSector.valor_promedio);
     const desvio = referencia > 0 ? Math.round(((valor - referencia) / referencia) * 100) : 0;
-    const impacto = Math.round(Math.abs(valor - referencia));
+    // Impacto en pesos: el ratio de efectivo se pasa a plata con las ventas por turno
+    const impacto = metrica === 'ratio_efectivo'
+      ? Math.round(Math.abs(valor - referencia) * (Number(metricasRecientes.ventas_por_turno) || 0))
+      : Math.round(Math.abs(valor - referencia));
     const confianza_pct = Math.min(Math.round((Math.abs(scoreHibrido) / 4) * 100), 100);
     const nivelConfianza = confianza_pct > 80 ? 'ALTA' : confianza_pct > 50 ? 'MEDIA' : 'BAJA';
     const capaOrigen = determinarCapaOrigen(pesos);
@@ -151,38 +143,74 @@ function construirAlertasMetricas(señalesMetricas, metricasRecientes, benchmark
 }
 
 // ─── Construcción de alertas de segmento ─────────────────────────────────────
-// REGLA: sólo emite si la anomalía de segmento tiene ≥1 señal de corroboración
-// (sector benchmark para ese turno+día, o al menos 1 métrica global anómala).
+// Entrada: resultados de detectarAnomalias (una fila por turno+día+métrica, hora Argentina).
+// Solo se miran los últimos DIAS_RECIENTES días: un desvío de hace semanas no es una alerta de hoy.
+// REGLA: la anomalía necesita ≥1 señal de corroboración: otra métrica anómala en el mismo turno,
+// el benchmark del sector para ese turno, o al menos 1 métrica global anómala.
 
-function construirAlertasSegmento(anomalias, señalesSectorPorTurno, señalesMetricas, pesos) {
+const DIAS_RECIENTES = 3;
+const NOMBRE_METRICA = { ventas_por_turno: 'las ventas', ticket_promedio: 'el ticket promedio', ratio_efectivo: 'la parte cobrada en efectivo' };
+const NOMBRE_TURNO = { manana: 'mañana', tarde: 'tarde', noche: 'noche' };
+
+function construirAlertasSegmento(resultados, agregados, señalesSectorPorTurno, señalesMetricas, pesos, nombresLocal = {}) {
   const numSeñalesMetrica = Object.keys(señalesMetricas).length;
   const capaOrigen = determinarCapaOrigen(pesos);
+  const hoyAR = new Date(Date.now() - 3 * 3600 * 1000);
+  const corte = new Date(hoyAR.getTime() - (DIAS_RECIENTES - 1) * 86400000).toISOString().slice(0, 10);
+  const porClave = {};
+  for (const ag of agregados) porClave[ag.clave] = ag;
+
+  const anomalias = (resultados || []).filter(r => r.es_anomalia && r.fecha >= corte);
+  const metricasPorClave = {};
+  for (const a of anomalias) (metricasPorClave[a.clave] = metricasPorClave[a.clave] || new Set()).add(a.metrica);
 
   return anomalias
-    .filter(a => {
-      const dia = new Date(a.fecha).toISOString().split('T')[0];
-      const key = `${a.turno || 'SIN_TURNO'}_${dia}`;
-      const tieneSectorSignal = señalesSectorPorTurno.has(key);
-      const tieneMetricaSignal = numSeñalesMetrica >= 1;
-      // señal 1 = ZSCORE_SEGMENTO (el propio z-score ya pasó el umbral)
-      // señal 2 = sector benchmark o métrica global
-      return tieneSectorSignal || tieneMetricaSignal;
-    })
+    .filter(a => metricasPorClave[a.clave].size >= 2 || señalesSectorPorTurno.has(a.clave) || numSeñalesMetrica >= 1)
     .map(a => {
-      const dia = new Date(a.fecha).toISOString().split('T')[0];
-      const key = `${a.turno || 'SIN_TURNO'}_${dia}`;
+      const ag = porClave[a.clave] || {};
       const corroboradoras = [];
-      if (señalesSectorPorTurno.has(key)) corroboradoras.push('SECTOR_BENCHMARK');
+      if (metricasPorClave[a.clave].size >= 2) corroboradoras.push('OTRA_METRICA_MISMO_TURNO');
+      if (señalesSectorPorTurno.has(a.clave)) corroboradoras.push('SECTOR_BENCHMARK');
       if (numSeñalesMetrica >= 1) corroboradoras.push('METRICA_GLOBAL');
 
+      // Plata estimada en juego, siempre en pesos
+      let impacto = 0;
+      if (a.metrica === 'ventas_por_turno') impacto = Math.abs(a.valor - a.mediana);
+      else if (a.metrica === 'ticket_promedio') impacto = Math.abs(a.valor - a.mediana) * (ag.cantidad || 0);
+      else if (a.metrica === 'ratio_efectivo') impacto = Math.abs(a.valor - a.mediana) * (ag.total_ventas || 0);
+      impacto = Math.round(impacto);
+
+      const z = Math.abs(a.zscore);
+      const confianza_pct = Math.min(Math.round((z / 4) * 100), 100);
+      const nivel = confianza_pct > 80 ? 'ALTA' : confianza_pct > 50 ? 'MEDIA' : 'BAJA';
+      const subeVenta = a.metrica === 'ventas_por_turno' && a.direccion === 'alto';
+      const desvio = a.mediana ? Math.round(((a.valor - a.mediana) / a.mediana) * 100) : 0;
+      const turnoTxt = (NOMBRE_TURNO[a.turno] || a.turno) + (a.sucursal_id != null && nombresLocal[a.sucursal_id] ? ` (${nombresLocal[a.sucursal_id]})` : '');
+      const insight = subeVenta
+        ? `Turno ${turnoTxt} del ${a.fecha}: las ventas estuvieron ${Math.abs(desvio)}% por encima de lo normal para ese turno (unos $${impacto.toLocaleString('es-AR')} más).`
+        : `Posible inconsistencia operativa en el turno ${turnoTxt} del ${a.fecha}: ${NOMBRE_METRICA[a.metrica]} ${a.direccion === 'bajo' ? (a.metrica === 'ventas_por_turno' ? 'bajaron' : 'bajó') : (a.metrica === 'ventas_por_turno' ? 'subieron' : 'subió')} ${Math.abs(desvio)}% contra lo normal de ese turno. Impacto estimado: $${impacto.toLocaleString('es-AR')}.`;
+
       return {
-        ...a,
+        tipo: subeVenta ? 'TURNO_VENTAS_ALTAS' : 'ANOMALIA_TURNO',
+        metrica: a.metrica,
+        turno: a.turno,
+        sucursal_id: a.sucursal_id ?? null,
+        fecha: a.fecha,
+        contexto: `${a.clave}_${a.metrica}`,
+        valor_actual: Math.round(a.valor * 100) / 100,
+        valor_esperado: Math.round(a.mediana * 100) / 100,
+        desvio_porcentaje: desvio,
+        zscore: a.zscore,
         capa_origen: capaOrigen,
         señales_corroboradoras: corroboradoras,
         peso_usado: { capa1: Math.round(pesos.peso_capa1 * 100), capa2: Math.round(pesos.peso_capa2 * 100) },
-        confianza_porcentaje: a.confianza.score,
-        impacto_pesos: Math.abs(Number(a.monto) - Number(a.monto_esperado)),
-        insight: generarInsight(a),
+        confianza: { nivel, score: confianza_pct },
+        confianza_porcentaje: confianza_pct,
+        impacto_pesos: impacto,
+        cantidad_transacciones: a.cantidad_transacciones,
+        es_positiva: subeVenta,
+        insight,
+        accion: subeVenta ? '' : `Revisá el cierre y los tickets del turno ${turnoTxt} del ${a.fecha}.`,
       };
     });
 }
@@ -199,9 +227,12 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
     const { id: negocioId, tipo_negocio } = negocioResult.rows[0] || {};
     const tipoNegocio = normalizarTipoNegocio(tipo_negocio);
 
+    if (!negocioId) return { alertas: [], señales: [], error: 'negocio_no_encontrado', data_quality_score: calcularDataQualityScore([]) };
+    // Últimos 120 días: alcanza para baseline y detección sin cargar años de ventas en cada pantalla
     const result = await pool.query(
       `SELECT * FROM transacciones WHERE negocio_id = $1
        AND ($2::integer IS NULL OR sucursal_id = $2)
+       AND fecha >= NOW() - INTERVAL '120 days'
        ORDER BY fecha ASC`,
       [negocioId, sucursalId]
     );
@@ -218,7 +249,7 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
     }
 
     // Llamar a orchestrator para obtener contexto
-    const contexto = await orchestrate({ negocio_id: usuarioId, uid: null, turno_actual: null });
+    const contexto = await orchestrate({ negocio_id: negocioId, uid: null, turno_actual: null, sucursal_id: sucursalId });
 
     const debe_emitir          = contexto?.debe_emitir          ?? true;
     const confirmacion_cruzada = contexto?.confirmacion_cruzada ?? false;
@@ -230,6 +261,7 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
         alertas:            [],
         señales:            [],
         mensaje:            'Orquestador: score insuficiente para emitir señales',
+        total_transacciones: transacciones.length,
         risk_score_final,
         data_quality_score: { ...data_quality, ...orchQuality },
       };
@@ -243,7 +275,7 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
 
     const pesos = calcularPesos(transacciones.length);
     const benchmarkSector = tipoNegocio ? await getBenchmarkSector(tipoNegocio) : {};
-    const diaSemana = new Date().getDay(); // 0=domingo, 6=sábado
+    const diaSemana = new Date(Date.now() - 3 * 3600 * 1000).getUTCDay(); // 0=domingo, 6=sábado (hora Argentina)
     const baselineNegocio = await getBaselineNegocio(negocioId, sucursalId, diaSemana);
 
     // Contexto temporal actual + clima
@@ -273,17 +305,23 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
 
     // Evaluar todas las señales (con baseline ajustado por contexto)
     const señalesMetricas = evaluarSeñalesMetricas(metricasRecientes, benchmarkSector, baselineAjustado, pesos);
-    const agregados = agregarPorTurno(transacciones);
+    const agregados = agregarPorTurno(transacciones); // deteccion.js: por turno y día en hora Argentina, con métricas
     const señalesSectorPorTurno = evaluarSeñalesSectorPorTurno(agregados, benchmarkSector);
 
     // P6: umbral dinámico para la celda del contexto actual
-    const turnoActual = ctx.turno.toUpperCase();
+    const turnoActual = ctx.turno; // en minúsculas, como se guarda en turnos_caja
     const umbralDinamico = await calcularUmbralCelda(
       negocioId, turnoActual, ctx.dia_semana, condicionDesdeContexto(ctx)
     ).catch(() => UMBRAL_SEÑAL);
 
-    // Detección de segmento (Capa 2 - z-score robusto por turno+franja+quincena)
+    // Detección de segmento (Capa 2 - z-score robusto de cada turno contra su propio historial)
     const anomalias = detectarAnomalias(agregados, umbralDinamico);
+
+    const nombresLocal = {};
+    try {
+      const rl = await pool.query('SELECT id, nombre FROM mis_sucursales WHERE negocio_id=$1', [negocioId]);
+      for (const r of rl.rows) nombresLocal[r.id] = r.nombre;
+    } catch (e) { /* sin nombres de local */ }
 
     // CUSUM, patrones y catálogo ya vienen del orquestador — no se re-ejecutan aquí
     const [alertasMetricas, alertasSegmento] = await Promise.all([
@@ -291,7 +329,7 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
         señalesMetricas, metricasRecientes, benchmarkSector, baselineNegocio, pesos, tipoNegocio, confirmacion_cruzada
       )),
       Promise.resolve(construirAlertasSegmento(
-        anomalias, señalesSectorPorTurno, señalesMetricas, pesos
+        anomalias, agregados, señalesSectorPorTurno, señalesMetricas, pesos, nombresLocal
       )),
     ]);
 
@@ -304,19 +342,38 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
     // Las alertas del motor necesitan prioridad/mensaje normalizados
     const señalesMotor = todasAlertas.map(a => ({
       ...a,
-      prioridad: a.confianza?.nivel === 'ALTA' ? 'critico'
+      prioridad: a.es_positiva ? 'positivo'
+                 : a.confianza?.nivel === 'ALTA' ? 'critico'
                  : a.confianza?.nivel === 'MEDIA' ? 'atencion'
                  : 'info',
       mensaje: a.insight || '',
       accion:  a.accion  || '',
-      contexto: a.turno || a.metrica || '',
+      contexto: a.contexto || a.turno || a.metrica || '',
     }));
     // Señales del catálogo
     const señalesCatalogo = [];
     if (cruceCatalogo.señal) señalesCatalogo.push(cruceCatalogo.señal);
 
+    // Cruce de variables del último turno cerrado (fórmula de caja): solo con ≥2 señales simultáneas
+    const señalesCruce = [];
+    const cruce = contexto?.outputs?.cruce;
+    if (cruce && !cruce.error && cruce.num_señales >= 2 && cruce.grado_final !== 'ok') {
+      const f = cruce.formula || {};
+      const turnoTxt = { manana: 'mañana', tarde: 'tarde', noche: 'noche' }[cruce.tipo_turno] || cruce.tipo_turno;
+      señalesCruce.push({
+        tipo: 'CRUCE_CAJA_TURNO',
+        prioridad: cruce.grado_final === 'critico' ? 'critico' : 'atencion',
+        contexto: `turno_${cruce.turno_id}`,
+        mensaje: `Turno ${turnoTxt} de ${cruce.empleado}: la caja cerró con una diferencia de $${Math.round(Math.abs(f.brecha || 0)).toLocaleString('es-AR')} (${(f.brecha || 0) > 0 ? 'falta' : 'sobra'} efectivo) y hay ${cruce.num_señales} señales a la vez: ${cruce.señales.map(x => x.descripcion).join('; ')}.`,
+        accion: 'Revisá el conteo de cierre de ese turno junto con los egresos cargados.',
+        impacto_pesos: Math.round(Math.abs(f.brecha || 0)),
+        datos: { turno_id: cruce.turno_id, formula: f, señales: cruce.señales },
+      });
+    }
+
     const señales = [
       ...señalesMotor,
+      ...señalesCruce,
       ...(cusumResult.alertas_cusum || []),
       ...(patronesSemana || []),
       ...señalesCatalogo,

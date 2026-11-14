@@ -57,15 +57,13 @@ function determinarMensajeContextual(score, nTransacciones, diasHistorial) {
 // GET /api/negocio/data-quality-score
 router.get('/data-quality-score', auth, async (req, res) => {
   try {
-    const usuarioId = req.user.id;
-
-    // Obtener todas las transacciones del usuario
+    // Transacciones del negocio (antes buscaba por usuario_id y las ventas de la caja no lo tienen: daba siempre 0)
     const result = await pool.query(
       `SELECT fecha, monto, metodo_pago, turno
        FROM transacciones
-       WHERE usuario_id = $1
+       WHERE negocio_id = $1
        ORDER BY fecha DESC`,
-      [usuarioId]
+      [req.user.negocio_id]
     );
 
     const transacciones = result.rows;

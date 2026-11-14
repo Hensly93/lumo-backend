@@ -3,11 +3,11 @@
 -- Permite geocodificar direcciones de sucursales con lat/lon estructurados
 
 ALTER TABLE mis_sucursales
-  ADD COLUMN calle TEXT,
-  ADD COLUMN numero TEXT,
-  ADD COLUMN localidad TEXT,
-  ADD COLUMN provincia TEXT,
-  ADD COLUMN latitud NUMERIC(9,6),
-  ADD COLUMN longitud NUMERIC(9,6),
-  ADD COLUMN geocoding_status TEXT DEFAULT 'pendiente',
-  ADD COLUMN geocoding_fecha TIMESTAMP;
+  ADD COLUMN IF NOT EXISTS calle TEXT,
+  ADD COLUMN IF NOT EXISTS numero TEXT,
+  ADD COLUMN IF NOT EXISTS localidad TEXT,
+  ADD COLUMN IF NOT EXISTS provincia TEXT,
+  ADD COLUMN IF NOT EXISTS latitud NUMERIC(9,6),
+  ADD COLUMN IF NOT EXISTS longitud NUMERIC(9,6),
+  ADD COLUMN IF NOT EXISTS geocoding_status TEXT DEFAULT 'pendiente',
+  ADD COLUMN IF NOT EXISTS geocoding_fecha TIMESTAMP;

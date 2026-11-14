@@ -5,19 +5,22 @@ const jwt = require("jsonwebtoken");
 const pool = require("./db");
 const { TIPOS_VALIDOS } = require("./benchmarks_sector");
 const { enviarBienvenida, enviarRecupero, enviarConfirmacionReset } = require("./mailer");
+const { huellaPassword } = require("./authMiddleware");
+const normEmail = (e) => String(e || "").trim().toLowerCase();
 
 // ─── POST /api/auth/register ──────────────────────────────────────────────────
 router.post("/register", async (req, res) => {
   const client = await pool.connect();
   try {
-    const { nombre, email, password, negocio, tipo_negocio, provincia, ciudad, zona, celular, cuit } = req.body;
+    const { nombre, password, negocio, tipo_negocio, provincia, ciudad, zona, celular, cuit } = req.body;
+    const email = normEmail(req.body.email);
     if (!nombre || !email || !password || !negocio) {
       return res.status(400).json({ error: "Campos obligatorios: nombre, email, password, negocio" });
     }
     if (tipo_negocio && !TIPOS_VALIDOS.includes(tipo_negocio)) {
       return res.status(400).json({ error: `tipo_negocio inválido. Valores aceptados: ${TIPOS_VALIDOS.join(', ')}` });
     }
-    const existe = await client.query("SELECT id FROM usuarios WHERE email=$1", [email]);
+    const existe = await client.query("SELECT id FROM usuarios WHERE LOWER(email)=$1", [email]);
     if (existe.rows.length > 0) {
       return res.status(400).json({ error: "Email ya registrado" });
     }
@@ -56,7 +59,7 @@ router.post("/register", async (req, res) => {
 
     // 4. Generar JWT minimalista
     const token = jwt.sign(
-      { id: usuario.id, negocio_id, rol: 'owner' },
+      { id: usuario.id, negocio_id, rol: 'owner', pv: huellaPassword(hash) },
       process.env.JWT_SECRET,
       { expiresIn: "30d" }
     );
@@ -76,8 +79,9 @@ router.post("/register", async (req, res) => {
 // ─── POST /api/auth/login ─────────────────────────────────────────────────────
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body;
-    const userResult = await pool.query("SELECT * FROM usuarios WHERE email=$1", [email]);
+    const { password } = req.body;
+    const email = normEmail(req.body.email);
+    const userResult = await pool.query("SELECT * FROM usuarios WHERE LOWER(email)=$1 ORDER BY id LIMIT 1", [email]);
     if (userResult.rows.length === 0) {
       return res.status(400).json({ error: "Credenciales incorrectas" });
     }
@@ -107,7 +111,7 @@ router.post("/login", async (req, res) => {
 
     // Generar JWT minimalista
     const token = jwt.sign(
-      { id, negocio_id, rol },
+      { id, negocio_id, rol, pv: huellaPassword(userResult.rows[0].password) },
       process.env.JWT_SECRET,
       { expiresIn: "30d" }
     );
@@ -124,23 +128,24 @@ router.post("/login", async (req, res) => {
 // ─── POST /api/auth/forgot-password ──────────────────────────────────────────
 router.post("/forgot-password", async (req, res) => {
   try {
-    const { email } = req.body;
+    const email = normEmail(req.body.email);
     if (!email) return res.status(400).json({ error: "Email requerido" });
 
-    const result = await pool.query("SELECT id, nombre FROM usuarios WHERE email=$1", [email]);
+    const result = await pool.query("SELECT id, nombre, email, password FROM usuarios WHERE LOWER(email)=$1 ORDER BY id LIMIT 1", [email]);
 
     // Siempre responde ok — no revelar si el email existe
     if (result.rows.length === 0) return res.json({ ok: true });
 
     const { id, nombre } = result.rows[0];
+    // pv: el link sirve una sola vez (al cambiar la contraseña la huella cambia)
     const resetToken = jwt.sign(
-      { id, purpose: "reset" },
+      { id, purpose: "reset", pv: huellaPassword(result.rows[0].password) },
       process.env.JWT_SECRET,
       { expiresIn: "1h" }
     );
     const resetUrl = `${process.env.FRONTEND_URL || "https://lumo-psi.vercel.app"}/reset-password?token=${resetToken}`;
 
-    await enviarRecupero({ nombre, email, resetUrl });
+    await enviarRecupero({ nombre, email: result.rows[0].email, resetUrl });
 
     res.json({ ok: true });
   } catch (e) {
@@ -162,6 +167,10 @@ router.post("/reset-password", async (req, res) => {
       return res.status(400).json({ error: "El link expiró o es inválido" });
     }
     if (payload.purpose !== "reset") return res.status(400).json({ error: "Token inválido" });
+    const actual = await pool.query("SELECT password FROM usuarios WHERE id=$1", [payload.id]);
+    if (!actual.rows.length || (payload.pv && payload.pv !== huellaPassword(actual.rows[0].password))) {
+      return res.status(400).json({ error: "El link ya se usó o expiró. Pedí uno nuevo." });
+    }
 
     const hash = await bcrypt.hash(password, 10);
     await pool.query("UPDATE usuarios SET password=$1 WHERE id=$2", [hash, payload.id]);
@@ -200,12 +209,12 @@ router.post("/switch-negocio", async (req, res) => {
     } catch {
       return res.status(401).json({ error: 'Token inválido' });
     }
-
-    // Validar que el usuario pertenezca a ese negocio
+    if (usuario.purpose) return res.status(401).json({ error: 'Token inválido' }); // un link de recupero no es un login
     const negocioResult = await pool.query(
-      `SELECT n.id, n.nombre, n.tipo_negocio, nu.rol
+      `SELECT n.id, n.nombre, n.tipo_negocio, nu.rol, u.password
        FROM negocio_usuarios nu
        JOIN negocios n ON n.id = nu.negocio_id
+       JOIN usuarios u ON u.id = nu.usuario_id
        WHERE nu.negocio_id = $1 AND nu.usuario_id = $2 AND nu.activo = true`,
       [negocio_id, usuario.id]
     );
@@ -214,11 +223,12 @@ router.post("/switch-negocio", async (req, res) => {
       return res.status(403).json({ error: 'No tenés acceso a este negocio' });
     }
 
-    const { nombre: negocio, tipo_negocio, rol } = negocioResult.rows[0];
+    const { nombre: negocio, tipo_negocio, rol, password: pwHash } = negocioResult.rows[0];
+    if (usuario.pv && usuario.pv !== huellaPassword(pwHash)) return res.status(401).json({ error: 'Sesión vencida. Volvé a ingresar.' });
 
     // Generar nuevo JWT con el negocio seleccionado
     const newToken = jwt.sign(
-      { id: usuario.id, negocio_id, rol },
+      { id: usuario.id, negocio_id, rol, pv: huellaPassword(pwHash) },
       process.env.JWT_SECRET,
       { expiresIn: "30d" }
     );

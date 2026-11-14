@@ -224,6 +224,23 @@ router.get('/importar', authWithQuery, async (req, res) => {
         );
         if (yaEsta.rowCount > 0) { omitidos++; continue; }
 
+        // ¿La venta ya se cargó en la caja como pago digital? (mismo monto, ±15 min, sin pago de MP asociado)
+        // Si es así se le asocia el pago en vez de duplicarla.
+        const enCaja = await pool.query(
+          `SELECT id FROM transacciones
+           WHERE negocio_id = $1 AND mp_payment_id IS NULL AND monto = $2
+             AND COALESCE(empleado, '') <> 'importado_mp'
+             AND LOWER(COALESCE(metodo_pago, '')) NOT IN ('efectivo', 'cash')
+             AND fecha BETWEEN $3::timestamptz - INTERVAL '15 minutes' AND $3::timestamptz + INTERVAL '15 minutes'
+           ORDER BY ABS(EXTRACT(EPOCH FROM (fecha - $3::timestamptz))) LIMIT 1`,
+          [req.user.negocio_id, pago.transaction_amount, fecha]
+        );
+        if (enCaja.rowCount > 0) {
+          await pool.query('UPDATE transacciones SET mp_payment_id = $1 WHERE id = $2', [pago.id, enCaja.rows[0].id]);
+          omitidos++;
+          continue;
+        }
+
         const ins = await pool.query(
           `INSERT INTO transacciones(negocio_id, monto, tipo, empleado, turno, fecha, metodo_pago, mp_payment_id)
            VALUES($1,$2,$3,$4,$5,$6,$7,$8)

@@ -17,9 +17,23 @@ function calcularMAD(valores, mediana) {
   return calcularMediana(desviaciones);
 }
 
-function robustZScore(valor, mediana, mad) {
-  if (mad === 0) return 0;
+function robustZScore(valor, mediana, mad, escalaAlternativa = 0) {
+  if (mad === 0) {
+    // MAD = 0 pasa cuando más de la mitad de los turnos tienen el mismo valor (ej. 100% efectivo).
+    // Antes daba z = 0 y ningún desvío se detectaba; ahora se usa una escala alternativa.
+    if (!escalaAlternativa) return 0;
+    return (valor - mediana) / escalaAlternativa;
+  }
   return (0.6745 * (valor - mediana)) / (1.4826 * mad);
+}
+
+// Escala de respaldo cuando MAD = 0: desvío absoluto medio, con un piso del 5% de la mediana
+// (o 0.05 para proporciones) para que una variación mínima no grite.
+function escalaRespaldo(valores, mediana, esProporcion) {
+  const n = valores.length || 1;
+  const meanAD = valores.reduce((a, v) => a + Math.abs(v - mediana), 0) / n;
+  const piso = esProporcion ? 0.05 : Math.abs(mediana) * 0.05;
+  return Math.max(1.2533 * meanAD, piso) || 0;
 }
 
 function agregarPorTurno(transacciones) {
@@ -34,13 +48,16 @@ function agregarPorTurno(transacciones) {
       ? "sin_fecha"
       : new Date(instante.getTime() - 3 * 3600 * 1000).toISOString().slice(0, 10);
     const turno = tx.turno || "sin_turno";
-    const clave = `${fecha}_${turno}`;
+    // Cada local se compara contra sí mismo: el turno tarde de Castelar no es el turno tarde del Centro
+    const sucursal = tx.sucursal_id ?? null;
+    const clave = sucursal == null ? `${fecha}_${turno}` : `${fecha}_${turno}_s${sucursal}`;
 
     if (!turnos[clave]) {
       turnos[clave] = {
         clave,
         fecha,
         turno,
+        sucursal_id: sucursal,
         transacciones: [],
         total_ventas: 0,
         total_efectivo: 0,
@@ -82,8 +99,9 @@ function detectarAnomalias(turnosAgregados, umbralZScore = 2.0) {
   // Si un turno tiene menos de MIN_TURNOS_BASE registros no se lo juzga: sin historial no hay "anormal".
   const MIN_TURNOS_BASE = 5;
   const porNombreTurno = {};
+  const grupo = (t) => `${t.turno || "sin_turno"}|${t.sucursal_id ?? ""}`;
   for (const t of turnosAgregados) {
-    const k = t.turno || "sin_turno";
+    const k = grupo(t);
     (porNombreTurno[k] = porNombreTurno[k] || []).push(t);
   }
 
@@ -95,24 +113,25 @@ function detectarAnomalias(turnosAgregados, umbralZScore = 2.0) {
         .filter((v) => v !== null && v !== undefined && !isNaN(v));
       if (valores.length < MIN_TURNOS_BASE) continue;
       const med = calcularMediana(valores);
-      base[k] = { mediana: med, mad: calcularMAD(valores, med) };
+      base[k] = { mediana: med, mad: calcularMAD(valores, med), respaldo: escalaRespaldo(valores, med, metrica === 'ratio_efectivo') };
     }
 
     for (const turno of turnosAgregados) {
-      const b = base[turno.turno || "sin_turno"];
+      const b = base[grupo(turno)];
       if (!b) continue;
       const valor = turno[metrica];
       if (valor === null || valor === undefined || isNaN(valor)) continue;
 
       const mediana = b.mediana;
       const mad = b.mad;
-      const zscore = robustZScore(valor, mediana, mad);
+      const zscore = robustZScore(valor, mediana, mad, b.respaldo);
       const esAnomalia = Math.abs(zscore) > umbralZScore;
 
       resultados.push({
         clave: turno.clave,
         fecha: turno.fecha,
         turno: turno.turno,
+        sucursal_id: turno.sucursal_id ?? null,
         metrica,
         valor,
         mediana,

@@ -27,8 +27,10 @@ function calcularHoraConteo(desde) {
   return new Date(new Date(desde).getTime() + minutos * 60000);
 }
 
+// Hora de Argentina (UTC-3) sin depender de la zona horaria del servidor (Render corre en UTC).
+// Mismo criterio que getContextoTemporal en zscore_contextual.js.
 function calcularTipoTurno() {
-  const h = new Date().getHours();
+  const h = new Date(Date.now() - 3 * 3600 * 1000).getUTCHours();
   if (h >= 6 && h < 14) return 'manana';
   if (h >= 14 && h < 22) return 'tarde';
   return 'noche';
@@ -465,19 +467,10 @@ router.post('/cierre', authTurno, async (req, res) => {
     );
     const totalEgresos = parseFloat(egresos.rows[0].total);
 
-    // Ventas del turno (por rango de tiempo)
-    const ventas = await pool.query(
-      `SELECT
-         COALESCE(SUM(monto),0) as total_ventas,
-         COALESCE(SUM(CASE WHEN LOWER(REPLACE(REPLACE(COALESCE(metodo_pago,''),' ',''),'_','')) IN ('mp','mercadopago','digital','debito','tarjetadebito','credito','tarjetacredito','tarjeta','transferencia','qr','cuentamp') THEN monto ELSE 0 END),0) as total_mp,
-         COUNT(*) as cantidad_tx
-       FROM transacciones
-       WHERE negocio_id=$1 AND fecha >= $2 AND fecha <= NOW()
-         AND ($3::integer IS NULL OR sucursal_id IS NULL OR sucursal_id = $3)`,
-      [t.negocio_id, t.hora_apertura, t.sucursal_id || null]
-    );
-    const totalVentas = parseFloat(ventas.rows[0].total_ventas);
-    const totalMP = parseFloat(ventas.rows[0].total_mp);
+    // Ventas del turno: solo las de ESTE turno (ver ventas_turno.js)
+    const vt = await require('./ventas_turno').ventasDelTurno(pool, t);
+    const totalVentas = vt.total_ventas;
+    const totalMP = vt.total_mp;
 
     // Fórmula central
     const efectivoEsperado = parseFloat(t.caja_apertura) + totalVentas - totalMP - totalEgresos;

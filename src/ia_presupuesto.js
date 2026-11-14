@@ -38,9 +38,12 @@ function preciosDe(modelo) {
 function costoUsd(modelo, usage) {
   const u = usage || {};
   const [pin, pout] = preciosDe(modelo);
-  const tin = Number(u.input_tokens || 0) + Number(u.cache_creation_input_tokens || 0) + Number(u.cache_read_input_tokens || 0);
+  const base = Number(u.input_tokens || 0);
+  const creacion = Number(u.cache_creation_input_tokens || 0); // escribir caché: 1.25x
+  const lectura = Number(u.cache_read_input_tokens || 0);      // leer caché: 0.1x
+  const tin = base + creacion + lectura;
   const tout = Number(u.output_tokens || 0);
-  return { tin, tout, costo: (tin * pin + tout * pout) / 1e6 };
+  return { tin, tout, costo: ((base + creacion * 1.25 + lectura * 0.1) * pin + tout * pout) / 1e6 };
 }
 
 function correrConNegocio(negocioId, fn) {

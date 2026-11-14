@@ -1,7 +1,7 @@
 -- 006_clima_historico.sql
 -- Tabla para almacenar datos históricos de clima por sucursal
 
-CREATE TABLE clima_historico (
+CREATE TABLE IF NOT EXISTS clima_historico (
   id SERIAL PRIMARY KEY,
   sucursal_id INTEGER NOT NULL REFERENCES mis_sucursales(id) ON DELETE CASCADE,
   fecha DATE NOT NULL,
@@ -13,4 +13,4 @@ CREATE TABLE clima_historico (
 );
 
 -- Índice para consultas por sucursal y fecha
-CREATE INDEX idx_clima_sucursal_fecha ON clima_historico(sucursal_id, fecha DESC);
+CREATE INDEX IF NOT EXISTS idx_clima_sucursal_fecha ON clima_historico(sucursal_id, fecha DESC);

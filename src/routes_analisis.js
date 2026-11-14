@@ -13,7 +13,6 @@ const { gestionarAlertas, registrarFeedback } = require('./alert_manager');
 const { adaptarUmbralPorFeedback, getUmbralesUsuario } = require('./motor_conductual');
 const { calcularCUSUMCompleto, resetBaselinePorCambioConfirmado } = require('./cusum');
 const { calcularERMNegocio, calcularRiesgoEmpleado } = require('./erm');
-const { orchestrate } = require('./orchestrator');
 const { notificarUsuario } = require('./push');
 const pool = require('./db');
 const { auth } = require('./authMiddleware');
@@ -32,14 +31,15 @@ router.post('/transacciones', auth, async (req, res) => {
   try {
     const { monto, tipo, empleado, turno, fecha, metodo_pago, sucursal_id } = req.body;
     const result = await pool.query(
-      'INSERT INTO transacciones(usuario_id, monto, tipo, empleado, turno, fecha, metodo_pago, sucursal_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',
-      [req.user.id, monto, tipo, empleado, turno, fecha || new Date(), metodo_pago || null, sucursal_id || null]
+      'INSERT INTO transacciones(negocio_id, usuario_id, monto, tipo, empleado, turno, fecha, metodo_pago, sucursal_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',
+      [req.user.negocio_id, req.user.id, monto, tipo, empleado, turno, fecha || new Date(), metodo_pago || null, sucursal_id || null]
     );
 
     // Actualizar baseline propio (Capa 2) con cada nueva transacción
     const todas = await pool.query(
-      'SELECT * FROM transacciones WHERE usuario_id = $1 ORDER BY fecha ASC',
-      [req.user.id]
+      `SELECT * FROM transacciones WHERE negocio_id = $1 AND ($2::integer IS NULL OR sucursal_id = $2)
+         AND fecha >= NOW() - INTERVAL '120 days' ORDER BY fecha ASC`,
+      [req.user.negocio_id, sucursal_id || null]
     );
     // Actualizar baseline de la sucursal específica (o global si sucursal_id es null)
     await actualizarBaselineNegocio(req.user.negocio_id, sucursal_id || null, todas.rows);
@@ -62,7 +62,7 @@ router.get('/perfil', auth, async (req, res) => {
     const [benchmarks, baseline, txCount] = await Promise.all([
       tipoNegocio ? getBenchmarkSector(tipoNegocio) : Promise.resolve({}),
       getBaselineNegocio(req.user.negocio_id, null),
-      pool.query('SELECT COUNT(*) FROM transacciones WHERE usuario_id = $1', [req.user.id]),
+      pool.query('SELECT COUNT(*) FROM transacciones WHERE negocio_id = $1', [req.user.negocio_id]),
     ]);
 
     // Formatear benchmarks como array para el frontend
@@ -106,7 +106,7 @@ router.get('/negocio/perfil', auth, async (req, res) => {
   try {
     const [uResult, txResult] = await Promise.all([
       pool.query('SELECT negocio, tipo_negocio FROM usuarios WHERE id = $1', [req.user.id]),
-      pool.query('SELECT COUNT(*) FROM transacciones WHERE usuario_id = $1', [req.user.id]),
+      pool.query('SELECT COUNT(*) FROM transacciones WHERE negocio_id = $1', [req.user.negocio_id]),
     ]);
 
     const { negocio, tipo_negocio } = uResult.rows[0] || {};
@@ -287,10 +287,11 @@ router.post('/alertas/feedback', auth, async (req, res) => {
   try {
     const { alerta_id, confirmada, notas } = req.body;
     if (alerta_id == null) return res.status(400).json({ error: 'alerta_id requerido' });
-    // 1. Registrar feedback
-    await registrarFeedback(alerta_id, { confirmada: !!confirmada, notas });
+    // 1. Registrar feedback (solo alertas de este negocio)
+    const fb = await registrarFeedback(req.user.negocio_id, alerta_id, { confirmada: !!confirmada, notas });
+    if (!fb.ok) return res.status(404).json({ error: 'Alerta no encontrada' });
     // 2. Adaptar umbral EWTA
-    const ewta = await adaptarUmbralPorFeedback(req.user.negocio_id, alerta_id).catch(() => null);
+    const ewta = await adaptarUmbralPorFeedback(req.user.negocio_id, fb.id).catch(() => null);
     // 3. Si es TP confirmado → Baseline Reset Protocol (P8)
     let reset = null;
     if (confirmada) {
@@ -318,15 +319,15 @@ router.get('/ventas-diarias', auth, async (req, res) => {
     const dias = Math.min(parseInt(req.query.dias) || 30, 90);
     const result = await pool.query(
       `SELECT
-         DATE(fecha AT TIME ZONE 'America/Argentina/Buenos_Aires') as dia,
+         (fecha - INTERVAL '3 hours')::date as dia,
          SUM(monto) as total,
          COUNT(*) as transacciones
        FROM transacciones
-       WHERE usuario_id=$1
+       WHERE negocio_id=$1
          AND fecha >= NOW() - INTERVAL '${dias} days'
        GROUP BY dia
        ORDER BY dia ASC`,
-      [req.user.id]
+      [req.user.negocio_id]
     );
     res.json({ dias: result.rows.map(r => ({
       dia: r.dia,
@@ -351,6 +352,8 @@ router.get('/inicio', auth, async (req, res) => {
       negocioEnVivo(negocioId, suc),
       generarRecomendaciones(negocioId, suc).catch(e => { console.error('inicio/recomendaciones:', e.message); return { recomendaciones: [] }; }),
     ]);
+    const motor_ok = !analisis?.error;
+    if (!motor_ok) console.error('[inicio] el motor fallo para negocio', negocioId, ':', analisis.error);
     const resAlertas = await gestionarAlertas(negocioId, analisis.señales || []);
     const ahoraISO = new Date().toISOString();
     // Inconsistencias de caja (críticas/altas) de las recomendaciones, con el mismo formato que las alertas
@@ -361,6 +364,7 @@ router.get('/inicio', auth, async (req, res) => {
     const items = [...(resAlertas.alertas || []), ...deCaja];
     const t = vivo.total || {};
     res.json({
+      motor_ok,
       fecha: vivo.ahora?.fecha, sucursal_id: suc,
       hoy: { disponible: t.esperado_dia != null, esperado_dia: t.esperado_dia ?? null, rango: t.rango_dia ?? null,
              confianza_pct: t.confianza != null ? Math.round(t.confianza * 100) : null },
@@ -578,6 +582,33 @@ async function ejecutarToolNicole(nombre, input, negocioId) {
   }
 }
 
+// ─── Respuestas sin IA ────────────────────────────────────────────────────────
+// Solo preguntas de UN número ya calculable (ventas de hoy / ayer / esta semana / este mes).
+// Si la pregunta pide explicación o consejo (por qué, cómo, qué hago, conviene...), va a la IA.
+async function respuestaSinIA(mensaje, negocioId) {
+  const t = String(mensaje || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  if (t.length > 80) return null;
+  if (/(por que|porque|como |que hago|conviene|deberia|recomend|explica|analiz|compar|mejor|peor|empleado|turno|producto|predic|va a|vamos a|\?.*\?)/.test(t)) return null;
+  if (!/(cuanto|cuanta|total|facture|factur|vend)/.test(t) || !/(vend|factur|venta|caja|recaud)/.test(t)) return null;
+  let rango = null, etiqueta = '';
+  if (/\bhoy\b/.test(t)) { rango = ['0', '0']; etiqueta = 'Hoy'; }
+  else if (/\bayer\b/.test(t)) { rango = ['1', '1']; etiqueta = 'Ayer'; }
+  else if (/esta semana|la semana/.test(t)) { rango = ['semana']; etiqueta = 'Esta semana (desde el lunes)'; }
+  else if (/este mes|el mes/.test(t)) { rango = ['mes']; etiqueta = 'Este mes'; }
+  if (!rango) return null;
+  const DIA = `(fecha - INTERVAL '3 hours')::date`;
+  const HOY = `(NOW() - INTERVAL '3 hours')::date`;
+  const cond = rango[0] === 'semana' ? `${DIA} >= date_trunc('week', ${HOY})::date`
+    : rango[0] === 'mes' ? `${DIA} >= date_trunc('month', ${HOY})::date`
+    : `${DIA} = ${HOY} - ${parseInt(rango[0], 10)}`;
+  const r = await pool.query(
+    `SELECT COUNT(*)::int AS n, COALESCE(SUM(monto),0)::float AS total FROM transacciones
+     WHERE negocio_id=$1 AND ${cond} AND COALESCE(origin,'real') <> 'demo'`, [negocioId]);
+  const { n, total } = r.rows[0];
+  if (!n) return `${etiqueta} todavía no hay ventas cargadas en LumoBi.`;
+  return `${etiqueta} ${etiqueta === "Hoy" || etiqueta.startsWith("Esta") || etiqueta.startsWith("Este") ? "llevás" : "vendiste"} $${Math.round(total).toLocaleString('es-AR')} en ${n} ventas (ticket promedio $${Math.round(total / n).toLocaleString('es-AR')}). El detalle lo ves en Períodos.`;
+}
+
 // POST /api/nicole/chat — chat conversacional con NICOLE
 router.post('/nicole/chat', auth, async (req, res) => {
   try {
@@ -599,7 +630,7 @@ router.post('/nicole/chat', auth, async (req, res) => {
            COUNT(*)                            AS total_tx,
            COALESCE(SUM(monto), 0)             AS total_ventas,
            COALESCE(AVG(monto), 0)             AS ticket_promedio,
-           DATE(fecha AT TIME ZONE 'America/Argentina/Buenos_Aires') AS dia,
+           (fecha - INTERVAL '3 hours')::date AS dia,
            SUM(monto)                          AS venta_dia
          FROM transacciones
          WHERE negocio_id=$1 AND fecha >= NOW() - INTERVAL '30 days'
@@ -634,7 +665,7 @@ router.post('/nicole/chat', auth, async (req, res) => {
         `SELECT fecha_target, valor_predicho, confianza, horizonte, mensaje_nicole, senales_usadas
          FROM predicciones_negocio
          WHERE negocio_id=$1
-           AND fecha_target >= CURRENT_DATE
+           AND fecha_target >= (NOW() - INTERVAL '3 hours')::date
          ORDER BY fecha_prediccion DESC, fecha_target ASC
          LIMIT 1`,
         [req.user.negocio_id]
@@ -658,13 +689,18 @@ router.post('/nicole/chat', auth, async (req, res) => {
         ).join(' | ')
       : 'sin datos de empleados';
 
-    // Alertas reales desde orchestrator
-    const orchResult = await orchestrate({ negocio_id: req.user.negocio_id, uid: null, turno_actual: null }).catch(() => null);
-    const alertasReales = orchResult?.señales_consolidadas?.cusum_alertas ?? [];
-    const riskScore = orchResult?.risk_score_final ?? null;
-    const alertasStr = alertasReales.length
-      ? alertasReales.map(a => `[${a.prioridad}] ${a.mensaje}`).join(' | ')
-      : (riskScore !== null ? `sin alertas activas (score de riesgo: ${riskScore})` : 'sin datos suficientes');
+    // Alertas reales: las que el motor ya registró en las últimas 72 h (Home / Alertas / Vigilante).
+    // Antes se corría el orquestador entero en cada mensaje del chat (lento y caro).
+    const alertasRes = await pool.query(
+      `SELECT prioridad, mensaje FROM alertas_gestionadas
+       WHERE negocio_id=$1 AND created_at >= NOW() - INTERVAL '72 hours'
+         AND COALESCE(feedback_confirmada, true) = true
+       ORDER BY created_at DESC LIMIT 8`,
+      [req.user.negocio_id]
+    ).catch(() => ({ rows: [] }));
+    const alertasStr = alertasRes.rows.length
+      ? alertasRes.rows.map(a => `[${a.prioridad}] ${a.mensaje}`).join(' | ')
+      : 'sin alertas registradas en los últimos 3 días';
 
     // Predicción activa
     const pred = predRes.rows[0];
@@ -680,12 +716,23 @@ router.post('/nicole/chat', auth, async (req, res) => {
 
     const systemPrompt = `Sos NICOLE, la IA de LumoBi. Tu nombre es NICOLE, no sos ChatGPT ni Claude. Solo hablás sobre el negocio del dueño usando los datos reales que te paso. Español rioplatense informal, tono de socia de confianza, nunca decís fraude, siempre en pesos argentinos, máximo 5 líneas por respuesta. No sabés cómo se llama el dueño: nunca lo llames por un nombre ni inventes nombres de personas; los únicos nombres que podés usar son los de los empleados que aparecen en los datos. No uses emojis. Nunca sugieras que una persona robó, mintió o es culpable de algo: hablás de diferencias en la caja, turnos y días, no de culpables. Si los datos no alcanzan para afirmar algo, decilo con claridad (por ejemplo 'con lo que cargaste todavía no alcanza para saberlo') y no inventes números. Para cualquier pregunta con números (ventas por día u hora, medios de pago, empleados, productos, qué mejorar, plata recuperada) usá las herramientas en vez de adivinar: te devuelven los datos reales del negocio. Si una herramienta no trae datos, decilo tal cual. Al final de una respuesta con números, si la herramienta trae 'ver_en', decile al dueño en qué pantalla de LumoBi ve el detalle (por ejemplo Períodos o Catálogo). Las fechas de las herramientas son YYYY-MM-DD y hoy es la fecha indicada abajo. Si el dueño te pide hacer algo (armar una promo, cambiar un precio), explicale que esas acciones las arma LumoBi desde la Radiografía del Inicio y que él decide si las prueba; vos no cambiás nada solo.
 
-DATOS DEL NEGOCIO (hoy ${new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10)}, hora de Argentina):
+<<DATOS>>DATOS DEL NEGOCIO (hoy ${new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10)}, hora de Argentina):
 Perfil: ${u.negocio || 'sin nombre'} · ${u.tipo_negocio || 'tipo desconocido'} · ${u.ciudad || 'sin ciudad'}${u.zona ? ` zona ${u.zona}` : ''}
 Ventas 30d: ${ventasStr}
 Empleados: ${empleadosStr}
-Alertas 7d: ${alertasStr}
+Alertas últimos 3 días: ${alertasStr}
 Predicción: ${predStr}`;
+
+    // Prompt caching: la parte fija (instrucciones + herramientas) se cachea; los datos del día van aparte
+    const [promptFijo, promptDatos] = systemPrompt.split('<<DATOS>>');
+    const systemBloques = [
+      { type: 'text', text: promptFijo.trim(), cache_control: { type: 'ephemeral' } },
+      { type: 'text', text: promptDatos },
+    ];
+
+    // Preguntas de un dato (cuánto vendí hoy/ayer/esta semana): se responden con la base, sin IA
+    const directa = await respuestaSinIA(mensaje, req.user.negocio_id).catch(() => null);
+    if (directa) return res.json({ respuesta: directa, sin_ia: true });
 
     // Normalizar historial — acepta {rol, texto} y {role, content}
     const normalizar = (m) => {
@@ -723,7 +770,7 @@ Predicción: ${predStr}`;
         body: JSON.stringify({
           model: modeloIA,
           max_tokens: 800,
-          system: systemPrompt,
+          system: systemBloques,
           messages: currentMessages,
           tools: [...NICOLE_TOOLS, ...require('./nicole_tools').TOOLS],
         }),
@@ -731,7 +778,8 @@ Predicción: ${predStr}`;
 
       if (!response.ok) {
         const err = await response.text();
-        throw new Error(`Claude API ${response.status}: ${err}`);
+        console.error('[nicole/chat] Claude API', response.status, err.slice(0, 500));
+        throw new Error('NICOLE no está disponible en este momento');
       }
 
       const data = await response.json();

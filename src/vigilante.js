@@ -28,7 +28,8 @@ const pool = require('./db');
 
 const OFFSET_MS = 3 * 60 * 60 * 1000;           // Argentina = UTC-3 (sin horario de verano)
 const FL = `(fecha - INTERVAL '3 hours')`;       // mismo criterio que prediccion_adaptativa
-const MAX_AVISOS_DIA = 8;
+// Sin tope diario (decisión del 11/11/2026). Si algún día hace falta, se pone VIGILANTE_MAX_DIA en Render.
+const MAX_AVISOS_DIA = Number(process.env.VIGILANTE_MAX_DIA) || Infinity;
 const MAX_AVISOS_CORRIDA = 3;                    // si se juntan varios, salen de a 3 por hora (lo mas urgente primero)
 const HORA_DESDE = 8;
 const HORA_HASTA = 22.5;
@@ -115,11 +116,11 @@ function pedirClima(lat, lon) {
   });
 }
 
-async function sucursalConCoordenadas(db, usuarioId) {
+async function sucursalConCoordenadas(db, negocioId) {
   const r = await db.query(
     `SELECT id, latitud, longitud FROM mis_sucursales
-     WHERE usuario_id = $1 AND COALESCE(activo, true) AND latitud IS NOT NULL AND longitud IS NOT NULL
-     ORDER BY id LIMIT 1`, [usuarioId]);
+     WHERE negocio_id = $1 AND COALESCE(activo, true) AND latitud IS NOT NULL AND longitud IS NOT NULL
+     ORDER BY id LIMIT 1`, [negocioId]);
   return r.rows[0] || null;
 }
 
@@ -128,7 +129,7 @@ async function climaDe(db, p) {
   if (p._clima !== undefined) return p._clima;
   p._clima = null;
   try {
-    const s = await sucursalConCoordenadas(db, p.usuarioId);
+    const s = await sucursalConCoordenadas(db, p.negocioId);
     if (s) {
       const c = await p.opts.clima(Number(s.latitud), Number(s.longitud));
       if (c) p._clima = { ...c, sucursal_id: s.id };

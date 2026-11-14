@@ -1,14 +1,6 @@
 require("dotenv").config();
 
-// Debug: listar TODAS las variables de entorno que contengan "ANTHROPIC"
-console.log('=== DEBUG: Variables de entorno con ANTHROPIC al arrancar el servidor ===');
-const anthropicVars = Object.keys(process.env).filter(k => k.toUpperCase().includes('ANTHROPIC'));
-if (anthropicVars.length === 0) {
-  console.log('❌ NO se encontró ninguna variable que contenga "ANTHROPIC"');
-} else {
-  anthropicVars.forEach(k => console.log('Variable encontrada:', JSON.stringify(k)));
-}
-console.log('=== FIN DEBUG ===');
+if (!process.env.ANTHROPIC_API_KEY) console.warn('[arranque] falta ANTHROPIC_API_KEY: NICOLE y el wow moment no van a responder');
 
 const express = require("express");
 const cors = require("cors");
@@ -223,14 +215,6 @@ try {
   console.log("Scanner Dueno OK");
 } catch(e) {
   console.error("Scanner Dueno ERROR:", e.message);
-}
-
-try {
-  const historialRoutes = require("./routes_historial");
-  app.use("/api/historial", historialRoutes);
-  console.log("Historial OK");
-} catch(e) {
-  console.error("Historial ERROR:", e.message);
 }
 
 try {
