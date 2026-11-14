@@ -78,7 +78,7 @@ async function recomendacionesControl(negocioId, sucursalId, db, turnos, nombres
       id: 'CONTROL_FALTANTE_RECURRENTE',
       categoria: 'inconsistencia_operativa',
       prioridad: falt.length >= 4 || total >= 10000 ? 'critica' : 'alta',
-      mensaje: `Posible inconsistencia operativa: los ${DIA_PL[dow]} en el turno ${nombreTurno(tipo)} de ${nombreSuc}, ${falt.length} de ${ts.length} cierres tuvieron faltante ` +
+      mensaje: `Algo para revisar: los ${DIA_PL[dow]} en el turno ${nombreTurno(tipo)} de ${nombreSuc}, ${falt.length} de ${ts.length} cierres tuvieron faltante ` +
         `(promedio ${fmt(total / falt.length)}, ${fmt(total)} en 4 semanas)` +
         (restoProm != null ? `. El resto de los turnos de ${nombreSuc} cierra con una diferencia promedio de ${fmt(restoProm)}.` : '.'),
       accion: `El ${DIA[dow]} ${sigue ? fechaCorta(sigue) : ''} hacé un conteo sorpresa en ese turno ${franjaConteo} y controlá el cierre ese mismo día. ` +

@@ -32,11 +32,11 @@ function generarInsight(alerta) {
 
   let descripcion = '';
   if (tipo === 'TICKET_BAJO') {
-    descripcion = `Se detectó una inconsistencia operativa: los montos del ${franjaTexto} están ${Math.abs(desvio_porcentaje)}% por debajo del patrón histórico esperado`;
+    descripcion = `En el ${franjaTexto} cada cliente está gastando ${Math.abs(desvio_porcentaje)}% menos que lo normal`;
   } else if (tipo === 'TICKET_ALTO') {
-    descripcion = `Se detectó una inconsistencia operativa: los montos del ${franjaTexto} están ${Math.abs(desvio_porcentaje)}% por encima del patrón histórico esperado`;
+    descripcion = `En el ${franjaTexto} cada cliente está gastando ${Math.abs(desvio_porcentaje)}% más que lo normal`;
   } else {
-    descripcion = `Inconsistencia operativa detectada en el ${franjaTexto}`;
+    descripcion = `Algo fuera de lo normal en el ${franjaTexto}`;
   }
 
   if (diaTexto && quincenaTexto) {
@@ -89,8 +89,8 @@ function generarInsightMetrica(alerta) {
     return String(Math.round(x * 100) / 100);
   };
   const difPesos = esPesos && hayNumeros ? ` Son ${pesos(Math.abs(esp - act))} ${bajo ? 'menos' : 'más'}.` : '';
-  const descripcion = `Inconsistencia operativa en ${metricaTexto}: el valor actual (${fmtVal(valor_actual)}) está ${Math.round(Math.abs(desvio_porcentaje))}% ${direccion} ${referenciaTexto} (${fmtVal(valor_esperado)}).${difPesos}`;
-  const contexto = `Esta señal fue corroborada por al menos dos indicadores simultáneos.`;
+  const descripcion = `Algo raro en ${metricaTexto}: el valor actual (${fmtVal(valor_actual)}) está ${Math.round(Math.abs(desvio_porcentaje))}% ${direccion} ${referenciaTexto} (${fmtVal(valor_esperado)}).${difPesos}`;
+  const contexto = `LumoBi lo vio en dos cosas a la vez, por eso te avisa.`;
   const accion_recomendada = ACCIONES[`METRICA_${bajo ? 'BAJA' : 'ALTA'}_${metrica}`] || getAccion(tipo, metrica);
 
   return {

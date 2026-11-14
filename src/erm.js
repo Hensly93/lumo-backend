@@ -203,7 +203,7 @@ async function calcularRiesgoEmpleado(negocioId, nombreEmpleado) {
   if (partes.zscore >= 18) {
     señales.push({
       tipo: 'ZSCORE_PROPIO',
-      descripcion: `Brecha ${Math.abs(zEmpleado.zscore).toFixed(1)} desvíos fuera de su propio patrón histórico`,
+      descripcion: 'La diferencia de caja de este turno es mucho más grande que lo normal para esta persona',
       peso: partes.zscore,
     });
   }

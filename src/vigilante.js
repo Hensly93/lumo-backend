@@ -552,8 +552,8 @@ async function detNicole(db, p) {
   const a = await fuente(p, 'analizar');
   if (!a || a.error || !Array.isArray(a.señales)) return [];
   const MAPA = {
-    critico:        { pref: 'alertas_criticas', prioridad: 0, titulo: 'NICOLE detectó una inconsistencia operativa' },
-    inconsistencia: { pref: 'alertas_criticas', prioridad: 0, titulo: 'NICOLE detectó una inconsistencia operativa' },
+    critico:        { pref: 'alertas_criticas', prioridad: 0, titulo: 'NICOLE vio algo fuera de lo normal' },
+    inconsistencia: { pref: 'alertas_criticas', prioridad: 0, titulo: 'NICOLE vio algo fuera de lo normal' },
     atencion:       { pref: 'alertas_medias',   prioridad: 3, titulo: 'NICOLE encontró algo para revisar' },
     ineficiencia:   { pref: 'alertas_medias',   prioridad: 3, titulo: 'NICOLE encontró algo para mejorar' },
     positivo:       { pref: 'alertas_medias',   prioridad: 8, titulo: 'Buena noticia en tu negocio' },
@@ -582,7 +582,7 @@ async function detERM(db, p) {
     return [{
       tipo: 'erm_rojo', contexto: `rojos-${r.rojos}-${sem}`, pref: 'alertas_criticas', prioridad: 1,
       titulo: r.rojos === 1 ? 'Hay señales repetidas en el turno de una persona del equipo' : `Hay señales repetidas en el turno de ${r.rojos} personas del equipo`,
-      mensaje: 'NICOLE ve diferencias de caja que se repiten (nivel rojo). No es una acusación: es una inconsistencia operativa que conviene revisar con el detalle antes de hablar con nadie.' + (e.alerta_equipo ? ' ' + e.alerta_equipo + '.' : ''),
+      mensaje: 'NICOLE ve diferencias de caja que se repiten No es una acusación: puede ser un error al contar o al cobrar. Miralo con calma antes de hablar con nadie.' + (e.alerta_equipo ? ' ' + e.alerta_equipo + '.' : ''),
       url: '/empleados', boton: 'Ver equipo',
     }];
   }

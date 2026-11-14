@@ -90,14 +90,14 @@ async function analizarTramosTurno(turnoId) {
   if (Math.abs(tramo1.zscore) >= 2.0) {
     señales.push({
       tipo: 'TRAMO1_ANOMALO',
-      descripcion: `Movimiento de caja entre apertura y conteo medio fuera de lo habitual (${tramo1.zscore} desvíos)`,
+      descripcion: 'Entre que se abrió la caja y el conteo del medio, entró o salió mucha más plata que lo normal',
       valor: tramo1.zscore, peso: tramo1.grado,
     });
   }
   if (Math.abs(tramo2.zscore) >= 2.0) {
     señales.push({
       tipo: 'TRAMO2_ANOMALO',
-      descripcion: `Movimiento de caja entre conteo medio y cierre fuera de lo habitual (${tramo2.zscore} desvíos)`,
+      descripcion: 'Entre el conteo del medio y el cierre, entró o salió mucha más plata que lo normal',
       valor: tramo2.zscore, peso: tramo2.grado,
     });
   }
@@ -187,7 +187,7 @@ async function analizarTramo1EnVivo(turnoId) {
   if (Math.abs(tramo1.zscore) >= 2.0) {
     señales.push({
       tipo: 'TRAMO1_ANOMALO',
-      descripcion: `Movimiento de caja entre apertura y conteo medio fuera de lo habitual (${tramo1.zscore} desvíos)`,
+      descripcion: 'Entre que se abrió la caja y el conteo del medio, entró o salió mucha más plata que lo normal',
       valor: tramo1.zscore, peso: tramo1.grado,
     });
   }

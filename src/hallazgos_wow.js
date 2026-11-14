@@ -171,7 +171,7 @@ async function ticketEmpleado(db, negocioId, dias) {
   return {
     id: 'ticket_empleado', icono: '',
     titulo: `Cuando atiende ${alto.empleado}, cada venta es ${pct(dif)}% más alta que con ${bajo.empleado}`,
-    descripcion: `Ticket promedio: ${alto.empleado} ${$(alto.ticket)} · ${bajo.empleado} ${$(bajo.ticket)} (${alto.n} y ${bajo.n} ventas).`,
+    descripcion: `Gasto promedio por cliente: ${alto.empleado} ${$(alto.ticket)} · ${bajo.empleado} ${$(bajo.ticket)} (${alto.n} y ${bajo.n} ventas).`,
     duele: 'Puede ser el horario o el tipo de cliente, pero también cómo se ofrece en la caja.',
     recomendacion: `Mirá qué hace distinto ${alto.empleado} al cobrar (ofrecer algo más, el combo) y compartilo con el equipo. Si se achica un tercio de la diferencia, son unos ${$(impacto)} más por mes.`,
     advertencia: aviso(dias) + ' Son hechos de las ventas, no una evaluación de la persona.', impacto_pesos: impacto, confianza: 70,

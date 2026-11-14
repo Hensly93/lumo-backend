@@ -112,7 +112,7 @@ async function analizarCruceTurno(turnoId) {
   if (zscoreBrecha !== null && Math.abs(zscoreBrecha) >= 2.0) {
     señales.push({
       tipo: 'ZSCORE_BRECHA',
-      descripcion: `La brecha está ${redondear(Math.abs(zscoreBrecha), 1)} desvíos del patrón histórico`,
+      descripcion: 'La diferencia de caja es mucho más grande que lo normal en este negocio',
       valor: zscoreBrecha,
       peso: Math.abs(zscoreBrecha) >= 4.0 ? 'critico' : 'alto',
     });
@@ -131,7 +131,7 @@ async function analizarCruceTurno(turnoId) {
     if (ticketHist > 0 && ticketReal > ticketHist * 2.5) {
       señales.push({
         tipo: 'TICKET_INFLADO',
-        descripcion: 'Ticket promedio del turno es inusualmente alto — pocas transacciones para las ventas declaradas',
+        descripcion: 'Cada venta del turno es mucho más cara que lo normal: hay pocas ventas cargadas para la plata que se declaró',
         valor: redondear(ticketReal),
         peso: 'medio',
       });
