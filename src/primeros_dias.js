@@ -110,10 +110,10 @@ async function informeTurno(negocioId, opts = {}, db = pool) {
               FROM transacciones t WHERE ${filtro}`, params),
     db.query(`SELECT EXTRACT(HOUR FROM ${FL})::int h, SUM(monto)::float total, COUNT(*)::int n
               FROM transacciones t WHERE ${filtro} GROUP BY 1 ORDER BY 1`, params),
-    db.query(`SELECT COALESCE(d.producto_nombre, 'Producto') nombre, SUM(d.cantidad)::float unidades, SUM(d.subtotal)::float total,
+    db.query(`SELECT COALESCE(d.producto_nombre, pr.nombre) nombre, SUM(d.cantidad)::float unidades, SUM(d.subtotal)::float total,
                      SUM(CASE WHEN d.costo_unitario > 0 THEN d.subtotal - d.costo_unitario * d.cantidad END)::float ganancia
-              FROM transacciones_detalle d JOIN transacciones t ON t.id = d.transaccion_id
-              WHERE ${filtro} GROUP BY 1 ORDER BY 3 DESC LIMIT 5`, params).catch(() => ({ rows: [] })),
+              FROM transacciones_detalle d JOIN transacciones t ON t.id = d.transaccion_id LEFT JOIN productos pr ON pr.id = d.producto_id
+              WHERE ${filtro} AND COALESCE(d.producto_nombre, pr.nombre) IS NOT NULL GROUP BY 1 ORDER BY 3 DESC LIMIT 5`, params).catch(() => ({ rows: [] })),
   ]);
   const { n, total, efectivo } = tot.rows[0];
   if (!n) return null;

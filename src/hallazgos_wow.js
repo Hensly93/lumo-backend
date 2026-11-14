@@ -43,6 +43,7 @@ async function comboNatural(db, negocioId, dias) {
        FROM transacciones_detalle d JOIN transacciones t ON t.id=d.transaccion_id
        LEFT JOIN productos p ON p.id = d.producto_id
        WHERE t.negocio_id=$1 AND ${REAL} AND ${FL}::date >= ${HOY} - ${VENTANA}
+         AND COALESCE(d.producto_nombre, p.nombre) IS NOT NULL
      ), tot AS (SELECT COUNT(DISTINCT tx)::float n FROM items),
      solo AS (SELECT nombre, COUNT(*)::float n FROM items GROUP BY nombre),
      pares AS (

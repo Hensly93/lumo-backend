@@ -266,17 +266,34 @@ async function detSinDatos(db, p) {
   const creado = u.created_at ? new Date(u.created_at) : null;
   if (!creado) return [];
   const dias = diasEntre(new Date(creado.getTime() - OFFSET_MS).toISOString().slice(0, 10), reloj.hoy);
-  const etapa = dias >= 6 ? 3 : dias >= 3 ? 2 : dias >= 1 ? 1 : 0;
-  if (!etapa) return [];
+  const horas = (p.ahora.getTime() - creado.getTime()) / 3600000;
+  // etapa 0: el mismo día, a partir de 2 h de registrado (antes el primer aviso llegaba recién al día siguiente)
+  const etapa = dias >= 4 ? 3 : dias >= 2 ? 2 : dias >= 1 ? 1 : horas >= 2 ? 0 : -1;
+  if (etapa < 0) return [];
+  // Qué paso falta, para que el aviso diga exactamente qué hacer
+  let falta = 'caja';
+  try {
+    const r = await db.query(
+      `SELECT EXISTS(SELECT 1 FROM empleados_negocio WHERE negocio_id=$1) AS equipo,
+              EXISTS(SELECT 1 FROM productos WHERE negocio_id=$1) AS productos`, [p.negocioId]);
+    if (!r.rows[0].equipo) falta = 'equipo';
+    else if (!r.rows[0].productos) falta = 'productos';
+  } catch (e) { /* se usa el texto general */ }
+  const paso = {
+    equipo: 'Sumá a quien atiende la caja (nombre y un PIN de 4 números) y abrí la caja del local desde el link que te da LumoBi.',
+    productos: 'Cargá tus productos con la pistola lectora (o a mano) y abrí la caja del local para cobrar.',
+    caja: 'Abrí la caja del local desde el link que te da LumoBi y cobrá la primera venta.',
+  }[falta];
   const textos = {
-    1: 'Todavía no cargaste ventas. En dos minutos podés subir un Excel, un PDF o una foto de tu cuaderno y te mostramos lo primero que vemos en tu negocio.',
-    2: 'Tu cuenta sigue sin ventas. Con 10 ventas en 3 días distintos ya encontramos diferencias entre días, medios de pago y horarios. Subí lo que tengas, aunque sea desordenado.',
-    3: 'Pasaron varios días y NICOLE todavía no tiene datos para trabajar. Subí tus ventas o conectá Mercado Pago y vemos qué está pasando en tu negocio.',
+    0: `Bienvenido a LumoBi. ${paso} Al cerrar el primer turno te mandamos cuánto vendiste, tu hora pico, la diferencia de caja y qué hacer.`,
+    1: `Todavía no hay ventas en LumoBi. ${paso} Desde el primer turno cerrado empezás a ver dónde se te va la plata.`,
+    2: `Tu cuenta sigue sin ventas, y la prueba gratis corre. ${paso} Si te trabaste en algún paso, respondé este mensaje o escribinos por WhatsApp y te ayudamos.`,
+    3: `Pasaron varios días sin ventas en LumoBi. ${paso} Si algo no te cerró, contanos qué fue: nos sirve muchísimo.`,
   };
   return [{
     tipo: 'sin_datos', contexto: 'etapa-' + etapa, pref: 'alertas_medias', prioridad: 6,
-    titulo: 'Cargá tus ventas y empezamos', mensaje: textos[etapa],
-    url: '/primeros-pasos', boton: 'Cargar ventas',
+    titulo: etapa === 0 ? 'Tu primer paso en LumoBi' : 'Abrí la caja y empezamos', mensaje: textos[etapa],
+    url: '/primeros-pasos', boton: 'Ver qué falta',
   }];
 }
 
@@ -289,7 +306,7 @@ async function detDatosViejos(db, p) {
   return [{
     tipo: 'datos_desactualizados', contexto: 'ultima-' + ultimo, pref: 'alertas_medias', prioridad: 5,
     titulo: 'Tus datos están desactualizados',
-    mensaje: `La última venta cargada es del ${ultimo.split('-').reverse().join('/')}, hace ${atraso} días. Sin ventas al día, NICOLE no puede avisarte nada de hoy. Subí lo que falta o conectá Mercado Pago para que se actualice solo.`,
+    mensaje: `La última venta cargada es del ${ultimo.split('-').reverse().join('/')}, hace ${atraso} días. Sin ventas al día, NICOLE no puede avisarte nada de hoy. Fijate que la caja del local esté abierta y cobrando con LumoBi.`,
     url: '/primeros-pasos', boton: 'Actualizar ventas',
   }];
 }

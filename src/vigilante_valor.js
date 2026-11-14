@@ -80,10 +80,10 @@ async function detPicoProximo(db, p) {
   const faltan = f.h - reloj.hora;
   if (faltan < 0.25 || faltan > 1.25) return [];                     // corre cada hora: avisa una vez, ~1 h antes
   const prods = await db.query(
-    `SELECT COALESCE(d.producto_nombre, 'Producto') nombre, SUM(d.cantidad)::float u
-     FROM transacciones_detalle d JOIN transacciones t ON t.id=d.transaccion_id
+    `SELECT COALESCE(d.producto_nombre, pr.nombre) nombre, SUM(d.cantidad)::float u
+     FROM transacciones_detalle d JOIN transacciones t ON t.id=d.transaccion_id LEFT JOIN productos pr ON pr.id=d.producto_id
      WHERE t.negocio_id=$1 AND ${REAL} AND ${FL}::date >= (NOW() - INTERVAL '3 hours')::date - 14
-       AND EXTRACT(HOUR FROM ${FL}) IN ($2, $3)
+       AND EXTRACT(HOUR FROM ${FL}) IN ($2, $3) AND COALESCE(d.producto_nombre, pr.nombre) IS NOT NULL
      GROUP BY 1 ORDER BY 2 DESC LIMIT 3`, [negocioId, f.h, f.h + 1]).catch(() => ({ rows: [] }));
   const lista = prods.rows.map((x) => x.nombre);
   return [{
@@ -193,17 +193,19 @@ async function detPrediccionManana(db, p) {
     if (pre) { esperado = pre.esperado_dia; rango = pre.rango; prelim = true; }
   }
   if (!(esperado > 0)) return [];
-  const normales = dias.filter((d) => d.dia < reloj.hoy).map((d) => d.total);
-  const normal = normales.length ? normales.reduce((a, b) => a + b, 0) / normales.length : null;
-  const dif = normal ? esperado / normal - 1 : 0;
+  const normales = dias.filter((d) => d.dia < reloj.hoy).sort((a, b) => (a.dia < b.dia ? 1 : -1)).slice(0, 14).map((d) => d.total);
+  const ord = [...normales].sort((a, b) => a - b);
+  const normal = ord.length >= 3 ? (ord.length % 2 ? ord[(ord.length - 1) / 2] : (ord[ord.length / 2 - 1] + ord[ord.length / 2]) / 2) : null;
+  let dif = normal ? esperado / normal - 1 : 0;
+  if (dif > 1.5 || dif < -0.8) dif = 0; // diferencia rara (datos de prueba, días cargados a medias): no se compara
   // El día flojo con promo lo cubre el consejero (con 3 semanas de historia)
   if (dias.length >= 21 && dif <= -0.35) return [];
 
   const top = await db.query(
-    `SELECT COALESCE(d.producto_nombre,'Producto') nombre, SUM(d.cantidad)::float u
-     FROM transacciones_detalle d JOIN transacciones t ON t.id=d.transaccion_id
+    `SELECT COALESCE(d.producto_nombre, pr.nombre) nombre, SUM(d.cantidad)::float u
+     FROM transacciones_detalle d JOIN transacciones t ON t.id=d.transaccion_id LEFT JOIN productos pr ON pr.id=d.producto_id
      WHERE t.negocio_id=$1 AND ${REAL} AND ${FL}::date >= (NOW() - INTERVAL '3 hours')::date - 28
-       AND ($2::int IS NULL OR EXTRACT(DOW FROM ${FL}) = $2)
+       AND ($2::int IS NULL OR EXTRACT(DOW FROM ${FL}) = $2) AND COALESCE(d.producto_nombre, pr.nombre) IS NOT NULL
      GROUP BY 1 ORDER BY 2 DESC LIMIT 3`, [negocioId, normales.length >= 14 ? dowM : null]).catch(() => ({ rows: [] }));
   const lista = top.rows.map((x) => x.nombre);
 
