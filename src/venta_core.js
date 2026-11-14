@@ -1,6 +1,7 @@
 // venta_core.js — Cierra la venta del carrito de un turno: crea la transacción, el detalle (con foto del producto), baja el stock y vacía el carrito.
 // Lo usan la caja (finalizar-venta) y el cobro con QR de Mercado Pago. Tiene que correr dentro de una transacción (BEGIN/COMMIT del que llama).
 // extra: { mp_payment_id } cuando el cobro lo confirmó Mercado Pago.
+//        { items:[{producto_id,cantidad,precio_unitario}], fecha } para una venta hecha sin internet (no usa el carrito; fecha = momento real de la venta).
 
 async function cerrarVenta(client, turno_id, metodo_pago, extra) {
   extra = extra || {};
@@ -18,10 +19,9 @@ async function cerrarVenta(client, turno_id, metodo_pago, extra) {
   const { negocio_id, nombre_empleado, tipo_turno, sucursal_id } = turno.rows[0];
 
   // Obtener items del carrito
-  const carrito = await client.query(
-    'SELECT * FROM carrito_items WHERE turno_id=$1',
-    [turno_id]
-  );
+  const carrito = Array.isArray(extra.items)
+    ? { rows: extra.items }
+    : await client.query('SELECT * FROM carrito_items WHERE turno_id=$1', [turno_id]);
 
   if (carrito.rows.length === 0) {
     throw new Error('Carrito vacío');
@@ -35,10 +35,10 @@ async function cerrarVenta(client, turno_id, metodo_pago, extra) {
 
   // Crear transacción con atribución completa para CUSUM/ERM
   const transaccion = await client.query(
-    `INSERT INTO transacciones (negocio_id, monto, tipo, empleado, turno, metodo_pago, sucursal_id, mp_payment_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO transacciones (negocio_id, monto, tipo, empleado, turno, metodo_pago, sucursal_id, mp_payment_id, fecha)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9::timestamptz, NOW()))
      RETURNING id, fecha`,
-    [negocio_id, monto_total, 'venta', nombre_empleado, tipo_turno, metodo_pago, sucursal_id, extra.mp_payment_id || null]
+    [negocio_id, monto_total, 'venta', nombre_empleado, tipo_turno, metodo_pago, sucursal_id, extra.mp_payment_id || null, extra.fecha || null]
   );
 
   const transaccion_id = transaccion.rows[0].id;
@@ -63,7 +63,7 @@ async function cerrarVenta(client, turno_id, metodo_pago, extra) {
   await require('./stock').descontarVenta(client, { negocioId: negocio_id, transaccionId: transaccion_id, items: carrito.rows, empleado: nombre_empleado });
 
   // Vaciar carrito
-  await client.query('DELETE FROM carrito_items WHERE turno_id=$1', [turno_id]);
+  if (!Array.isArray(extra.items)) await client.query('DELETE FROM carrito_items WHERE turno_id=$1', [turno_id]);
 
   return { transaccion_id, monto_total, items_procesados: carrito.rows.length, fecha: transaccion.rows[0].fecha };
 }

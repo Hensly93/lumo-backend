@@ -211,6 +211,7 @@ try {
 
 try {
   app.use("/api/mp-cobro", require("./routes_mp_cobro"));
+  app.use("/api/caja-offline", require("./routes_caja_offline"));
   console.log("Cobro MP OK");
 } catch(e) {
   console.error("Cobro MP ERROR:", e.message);
