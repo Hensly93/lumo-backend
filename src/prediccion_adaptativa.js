@@ -188,14 +188,18 @@ async function calcularPrediccion(negocio_id, sucursal_id = null, db = pool, rie
   const diasDistintos = new Set(obs.map(o => o.dia)).size;
 
   if (diasDistintos < MINIMO_DIAS_CON_VENTAS) {
+    // ¿Hay ventas en la ventana (contando hoy)? Si las hay, solo faltan días; si no, el negocio dejó de cargar.
     const h = await db.query(
-      `SELECT COUNT(*) AS total FROM transacciones
+      `SELECT COUNT(*) AS total,
+              COUNT(*) FILTER (WHERE ${FL}::date >= $3::date) AS recientes
+       FROM transacciones
        WHERE negocio_id = $1 AND ($2::integer IS NULL OR sucursal_id = $2)`,
-      [negocio_id, sucursal_id]
+      [negocio_id, sucursal_id, desde]
     );
+    const total = Number(h.rows[0].total), recientes = Number(h.rows[0].recientes);
     return {
       disponible: false,
-      motivo: Number(h.rows[0].total) > 0 ? 'sin_ventas_recientes' : 'datos_insuficientes',
+      motivo: total === 0 ? 'datos_insuficientes' : recientes > 0 ? 'pocos_dias' : 'sin_ventas_recientes',
       minimo_requerido: MINIMO_DIAS_CON_VENTAS,
       dias_con_ventas: diasDistintos,
       ventana_dias: VENTANA_DIAS,

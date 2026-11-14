@@ -35,9 +35,9 @@ async function negocioDe(db, usuario_id) {
   return null;
 }
 
-async function calculateWowMoment(usuario_id, db = pool) {
+async function patronesBasicos(usuario_id, db = pool, negocioForzado = null) {
   try {
-    const negocio_id = await negocioDe(db, usuario_id);
+    const negocio_id = negocioForzado || await negocioDe(db, usuario_id);
 
     const txRes = await db.query(
       `SELECT t.monto::float AS monto, t.metodo_pago,
@@ -54,7 +54,7 @@ async function calculateWowMoment(usuario_id, db = pool) {
 
     const todas = txRes.rows;
     if (todas.length === 0) {
-      return { patrones: [], mensaje: 'Todavía no hay ventas cargadas. Subí tus ventas o conectá Mercado Pago.' };
+      return { patrones: [], mensaje: 'Todavía no hay ventas. Abrí la caja del local y cobrá la primera venta: desde el primer turno cerrado LumoBi empieza a contarte qué pasa en tu negocio.' };
     }
 
     const hasta = todas[0].dia;
@@ -176,7 +176,9 @@ async function calculateWowMoment(usuario_id, db = pool) {
       if (r.dia >= ini7) { rec += r.monto; dRec.add(r.dia); }
       else if (r.dia >= ini14) { ant += r.monto; dAnt.add(r.dia); }
     });
+    // Se compara por día con ventas: si la semana anterior tiene menos días cargados no parece una suba
     if (dRec.size >= 3 && dAnt.size >= 3 && ant > 0) {
+      rec = (rec / dRec.size) * 7; ant = (ant / dAnt.size) * 7;
       const cambio = rec - ant;
       const p = (cambio / ant) * 100;
       if (Math.abs(p) >= 8) {
@@ -235,6 +237,24 @@ async function calculateWowMoment(usuario_id, db = pool) {
     console.error('[WOW_MOMENT ERROR]', e);
     return { patrones: [], error: e.message };
   }
+}
+
+// v3 (14/11/2026): primero los hallazgos con plata (hallazgos_wow.js); los patrones básicos completan.
+async function calculateWowMoment(usuario_id, db = pool, negocioId = null) {
+  const negocio_id = negocioId || await negocioDe(db, usuario_id);
+  const [nuevos, basicos] = await Promise.all([
+    require('./hallazgos_wow').hallazgosWow(negocio_id, db).catch((e) => { console.error('[wow] v3:', e.message); return []; }),
+    patronesBasicos(usuario_id, db, negocio_id),
+  ]);
+  const ids = new Set(nuevos.map((h) => h.id));
+  // concentracion_pico y hora_pico dicen lo mismo: queda el nuevo
+  const resto = (basicos.patrones || []).filter((p) => !ids.has(p.id) && !(ids.has('concentracion_pico') && p.id === 'hora_pico'));
+  const patrones = [...nuevos, ...resto];
+  return {
+    ...basicos,
+    patrones,
+    mensaje: patrones.length ? undefined : basicos.mensaje,
+  };
 }
 
 module.exports = { calculateWowMoment };

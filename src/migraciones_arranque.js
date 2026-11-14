@@ -15,6 +15,9 @@ async function ejecutar() {
   await pool.query('ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS trial_fin TIMESTAMP');
   await pool.query('ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS celular VARCHAR(20)');
 
+  // 14/11/2026: tablas de Mercado Pago desde el arranque (antes nacían en el primer sync y Fugas fallaba en negocios nuevos)
+  try { const { asegurarTablas } = require('./mp_sync'); await asegurarTablas(pool); } catch (e) { console.error('[migraciones] pagos_mp:', e.message); }
+
   // 13/11/2026: cada venta de la caja queda atada a su turno (ver ventas_turno.js)
   await pool.query('ALTER TABLE transacciones ADD COLUMN IF NOT EXISTS turno_id INTEGER');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_tx_turno ON transacciones(turno_id) WHERE turno_id IS NOT NULL');

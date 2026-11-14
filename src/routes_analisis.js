@@ -210,7 +210,15 @@ router.get('/predicciones', auth, async (req, res) => {
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
 
     const prediccion = await calcularPrediccion(req.user.negocio_id, sucursalId);
-    if (!prediccion.disponible) return res.json(prediccion);
+    if (!prediccion.disponible) {
+      // Menos de 3 días: se acompaña con la estimación preliminar y lo que falta
+      const pd = require('./primeros_dias');
+      const [preliminar, proyeccion] = await Promise.all([
+        pd.prediccionPreliminar(req.user.negocio_id, sucursalId).catch(() => null),
+        pd.proyeccionHoy(req.user.negocio_id, sucursalId).catch(() => null),
+      ]);
+      return res.json({ ...prediccion, preliminar, proyeccion_hoy: proyeccion });
+    }
 
     // Obtener datos del negocio para el mensaje de NICOLE
     const uRes = await pool.query(
@@ -347,10 +355,16 @@ router.get('/inicio', auth, async (req, res) => {
     const negocioId = req.user.negocio_id;
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
     const suc = Number.isNaN(sucursalId) ? null : sucursalId;
-    const [analisis, vivo, recs] = await Promise.all([
+    const pd = require('./primeros_dias');
+    const nada = (nombre) => (e) => { console.error('inicio/' + nombre + ':', e.message); return null; };
+    const [analisis, vivo, recs, aprendizaje, informe, proyeccion, preliminar] = await Promise.all([
       analizarNegocio(negocioId, suc),
       negocioEnVivo(negocioId, suc),
       generarRecomendaciones(negocioId, suc).catch(e => { console.error('inicio/recomendaciones:', e.message); return { recomendaciones: [] }; }),
+      pd.aprendizaje(negocioId, suc).catch(nada('aprendizaje')),
+      pd.informeTurno(negocioId, { sucursalId: suc }).catch(nada('informe_turno')),
+      pd.proyeccionHoy(negocioId, suc).catch(nada('proyeccion')),
+      pd.prediccionPreliminar(negocioId, suc).catch(nada('preliminar')),
     ]);
     const motor_ok = !analisis?.error;
     if (!motor_ok) console.error('[inicio] el motor fallo para negocio', negocioId, ':', analisis.error);
@@ -363,11 +377,21 @@ router.get('/inicio', auth, async (req, res) => {
                    timestamp: ahoraISO, datos: r.datos, origen: 'recomendaciones', id: r.id }));
     const items = [...(resAlertas.alertas || []), ...deCaja];
     const t = vivo.total || {};
+    // Sin predicción completa todavía (menos de 3 días): estimación preliminar con los días que haya
+    const hoy = t.esperado_dia != null
+      ? { disponible: true, esperado_dia: t.esperado_dia, rango: t.rango_dia ?? null,
+          confianza_pct: t.confianza != null ? Math.round(t.confianza * 100) : null, preliminar: false }
+      : preliminar
+        ? { disponible: true, esperado_dia: preliminar.esperado_dia, rango: preliminar.rango, confianza_pct: preliminar.confianza_pct,
+            preliminar: true, texto: preliminar.texto }
+        : { disponible: false, esperado_dia: null, rango: null, confianza_pct: null };
     res.json({
       motor_ok,
       fecha: vivo.ahora?.fecha, sucursal_id: suc,
-      hoy: { disponible: t.esperado_dia != null, esperado_dia: t.esperado_dia ?? null, rango: t.rango_dia ?? null,
-             confianza_pct: t.confianza != null ? Math.round(t.confianza * 100) : null },
+      hoy,
+      proyeccion_hoy: proyeccion,
+      informe_turno: informe,
+      aprendizaje,
       en_vivo: vivo,
       revisar: {
         criticas: items.filter(a => ['critico', 'inconsistencia'].includes(a.prioridad)).length,

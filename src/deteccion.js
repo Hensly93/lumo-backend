@@ -100,6 +100,7 @@ function detectarAnomalias(turnosAgregados, umbralZScore = 2.0) {
   const MIN_TURNOS_BASE = 5;
   const porNombreTurno = {};
   const grupo = (t) => `${t.turno || "sin_turno"}|${t.sucursal_id ?? ""}`;
+  const hoyAR = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
   for (const t of turnosAgregados) {
     const k = grupo(t);
     (porNombreTurno[k] = porNombreTurno[k] || []).push(t);
@@ -109,6 +110,7 @@ function detectarAnomalias(turnosAgregados, umbralZScore = 2.0) {
     const base = {};
     for (const k of Object.keys(porNombreTurno)) {
       const valores = porNombreTurno[k]
+        .filter((t) => !(metrica === "ventas_por_turno" && t.fecha === hoyAR))
         .map((t) => t[metrica])
         .filter((v) => v !== null && v !== undefined && !isNaN(v));
       if (valores.length < MIN_TURNOS_BASE) continue;
@@ -124,6 +126,10 @@ function detectarAnomalias(turnosAgregados, umbralZScore = 2.0) {
 
       const mediana = b.mediana;
       const mad = b.mad;
+      // Las ventas del turno de HOY están incompletas (el turno puede seguir abierto): no se juzgan como "bajas"
+      if (metrica === "ventas_por_turno" && turno.fecha === hoyAR) continue;
+      // Hoy, con pocas ventas, el ticket y el % de efectivo todavía no dicen nada
+      if (turno.fecha === hoyAR && (turno.cantidad || 0) < 10) continue;
       const zscore = robustZScore(valor, mediana, mad, b.respaldo);
       const esAnomalia = Math.abs(zscore) > umbralZScore;
 

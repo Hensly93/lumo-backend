@@ -502,7 +502,7 @@ router.post('/upload-historial', auth, upload.single('archivo'), async (req, res
 // Devuelve top 3 patrones impactantes del negocio (últimos 30 días)
 router.get('/wow-moment', auth, async (req, res) => {
   try {
-    const resultado = await calculateWowMoment(req.user.id, pool);
+    const resultado = await calculateWowMoment(req.user.id, pool, req.user.negocio_id);
     res.json(resultado);
   } catch (e) {
     console.error('wow-moment error:', e.message);

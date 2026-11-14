@@ -791,7 +791,7 @@ async function detMP(db, p) {
   return [];
 }
 
-const DETECTORES = [detTurnoSinAbrir, detCajaAbierta, detSinVentasHoy, detRitmo, detNicole, detERM, detLluvia, detFugas, detHallazgos, detRentabilidad, detBriefing, detDatosViejos, detSinDatos, detResumenDiario, detPago, detPrueba, detCancelacion, detMP, ...require('./consejero').DETECTORES];
+const DETECTORES = [detTurnoSinAbrir, detCajaAbierta, detSinVentasHoy, detRitmo, detNicole, detERM, detLluvia, detFugas, detHallazgos, detRentabilidad, detBriefing, detDatosViejos, detSinDatos, detResumenDiario, detPago, detPrueba, detCancelacion, detMP, ...require('./consejero').DETECTORES, ...require('./vigilante_valor').DETECTORES];
 
 // ─── Un negocio ─────────────────────────────────────────────────────────────
 
@@ -849,7 +849,8 @@ async function procesarNegocio(db, u, ahora, reloj, opts) {
       if (n === undefined || n > 0) { canales.push('push'); estadoPush = 'entregado'; }
       else estadoPush = 'sin_suscripcion_o_apagado';
     } catch (e) { estadoPush = 'error: ' + e.message; }
-    try {
+    // Los avisos del momento (franja fuerte, producto que se vende de más, ritmo del día) van solo al celu
+    if (!a.solo_push) try {
       const ok = await opts.email({
         nombre: u.nombre, email: u.email, negocio: u.negocio_nombre,
         titulo: a.titulo, mensaje: a.mensaje, url: BASE_URL + a.url, boton: a.boton,

@@ -229,6 +229,22 @@ async function generarRecomendaciones(negocioId, sucursalId = null) {
   );
 
   { const nuevas = await recomendacionesEcosistema(negocioId, sucursalId).catch(e => { console.error('Recomendar v2 falló:', e.message); return []; }); const reemplazadas = new Set(nuevas.flatMap(n => n.reemplaza || [])); for (let i = resultados.length - 1; i >= 0; i--) if (reemplazadas.has(resultados[i].id)) resultados.splice(i, 1); resultados.push(...nuevas); }
+  // Negocio nuevo: mientras el motor junta historia, la recomendación sale del último turno cerrado
+  let aprendiendo = null;
+  try {
+    const pd = require('./primeros_dias');
+    aprendiendo = await pd.aprendizaje(negocioId, sucursalId);
+    if (!aprendiendo.completo && !resultados.some(r => ['critica', 'alta'].includes(r.prioridad))) {
+      const inf = await pd.informeTurno(negocioId, { sucursalId });
+      for (const h of (inf ? inf.hechos : []).filter(h => h.accion).slice(0, 2)) {
+        resultados.push({
+          id: 'turno_' + h.id, categoria: 'ultimo_turno', prioridad: h.id === 'caja' ? 'alta' : 'media',
+          mensaje: h.texto, accion: h.accion, datos: { turno_id: inf.turno_id, impacto_pesos: h.impacto_pesos },
+        });
+      }
+    }
+  } catch (e) { console.error('Recomendaciones primeros dias:', e.message); }
+
   // Ordenar por prioridad
   const orden = { critica: 0, alta: 1, media: 2, info: 3 };
   resultados.sort((a, b) => (orden[a.prioridad] ?? 4) - (orden[b.prioridad] ?? 4));
@@ -249,9 +265,16 @@ async function generarRecomendaciones(negocioId, sucursalId = null) {
       ? criticas[0].accion
       : altas.length > 0
         ? altas[0].accion
-        : info.length > 0
-          ? info[0].mensaje
-          : 'Todo dentro del rango esperado. Mantener el seguimiento habitual.',
+        : medias.length > 0
+          ? medias[0].accion || medias[0].mensaje
+          : info.length > 0
+            ? info[0].mensaje
+            : aprendiendo && !aprendiendo.completo
+              ? (aprendiendo.ventas_total === 0
+                  ? 'Todavía no hay ventas: abrí la caja del local y cobrá la primera venta. Desde el primer turno cerrado LumoBi te dice qué pasó y qué hacer.'
+                  : `LumoBi todavía está aprendiendo cómo vende tu negocio (${aprendiendo.listas} de ${aprendiendo.total} funciones listas). ${aprendiendo.siguiente.falta} para: ${aprendiendo.siguiente.nombre.toLowerCase()}.`)
+              : 'Todo dentro del rango esperado. Mantener el seguimiento habitual.',
+    aprendizaje: aprendiendo ? { listas: aprendiendo.listas, total: aprendiendo.total, siguiente: aprendiendo.siguiente } : null,
   };
 }
 
