@@ -307,6 +307,8 @@ async function analizarTurnoConContexto(turnoId) {
   if (t.estado !== 'cerrado') return { error: 'El turno aún no está cerrado' };
 
   const ctx = getContextoTemporal(t.hora_apertura);
+  // El turno es el que se abrió (mañana/tarde/noche), no el que sale de la hora: un turno mañana que abre a las 5 no es "noche"
+  if (t.tipo_turno) ctx.turno = String(t.tipo_turno).toLowerCase().replace('ñ', 'n');
   const coords = await resolverCoordenadasSucursal(t.negocio_id, t.sucursal_id);
   const clima = await fetchClima(ctx.fecha_str, coords?.lat, coords?.lon, coords?.sucursal_id);
   const { factor, componentes } = factoresAjuste(ctx, clima);
