@@ -41,7 +41,7 @@ const DIAS_ES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes'
 const TURNOS_ES = { manana: 'mañana', tarde: 'tarde', noche: 'noche' };
 
 // Si el dueño no tocó el interruptor, estos avisos van encendidos (el resumen diario incluido).
-const DEFAULTS_PREF = { alertas_criticas: true, alertas_medias: true, resumen_diario: true };
+const DEFAULTS_PREF = require('./push').PREF_DEFAULTS; // los mismos que push.js y Ajustes
 
 // ─── Utilidades ─────────────────────────────────────────────────────────────
 

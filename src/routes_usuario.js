@@ -241,13 +241,7 @@ router.get('/notificaciones', auth, async (req, res) => {
       'SELECT notificaciones_config FROM usuarios WHERE id=$1',
       [req.user.id]
     );
-    const defaults = {
-      alertas_criticas:  true,
-      alertas_medias:    true,
-      conteos_perdidos:  true,
-      resumen_diario:    false,
-      cierres_limpios:   false,
-    };
+    const defaults = require('./push').PREF_DEFAULTS; // los mismos que usan push.js y el Vigilante
     res.json({ ...defaults, ...(r.rows[0]?.notificaciones_config || {}) });
   } catch (e) {
     res.status(500).json({ error: e.message });

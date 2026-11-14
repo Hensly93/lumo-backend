@@ -848,13 +848,47 @@ router.post('/push/subscribe', auth, async (req, res) => {
     await pool.query(
       `INSERT INTO push_subscriptions(usuario_id, endpoint, p256dh, auth)
        VALUES($1,$2,$3,$4)
-       ON CONFLICT (endpoint) DO UPDATE SET p256dh=$3, auth=$4`,
+       ON CONFLICT (endpoint) DO UPDATE SET usuario_id=$1, p256dh=$3, auth=$4`,
       [req.user.id, endpoint, keys.p256dh, keys.auth]
     );
     res.json({ ok: true });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// GET /api/push/estado — por qué llegan o no los avisos: suscripciones, preferencias y últimos envíos
+router.get('/push/estado', auth, async (req, res) => {
+  try {
+    const { PREF_DEFAULTS } = require('./push');
+    const [subs, pref, envios] = await Promise.all([
+      pool.query('SELECT id, endpoint, created_at FROM push_subscriptions WHERE usuario_id=$1 ORDER BY id DESC', [req.user.id]),
+      pool.query('SELECT notificaciones_config FROM usuarios WHERE id=$1', [req.user.id]),
+      pool.query(`SELECT tipo, titulo, canales, creado FROM vigilante_envios WHERE negocio_id=$1 ORDER BY creado DESC LIMIT 15`,
+        [req.user.negocio_id]).catch(() => ({ rows: [] })),
+    ]);
+    const config = pref.rows[0]?.notificaciones_config || {};
+    const efectivas = Object.fromEntries(Object.keys(PREF_DEFAULTS).map(k => [k, config[k] ?? PREF_DEFAULTS[k]]));
+    res.json({
+      suscripciones: subs.rows.map(r => { let host = ''; try { host = new URL(r.endpoint).host; } catch (e) {} return { id: r.id, servicio: host, desde: r.created_at }; }),
+      preferencias: efectivas,
+      ultimos_avisos: envios.rows,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/push/probar — manda un aviso de prueba a todos los celus del usuario y dice qué pasó con cada uno
+router.post('/push/probar', auth, async (req, res) => {
+  try {
+    const { notificarUsuario } = require('./push');
+    const detalle = [];
+    const n = await notificarUsuario(req.user.id, {
+      title: 'Aviso de prueba de LumoBi',
+      body: 'Si ves esto, los avisos llegan a este celu.',
+      url: '/ajustes',
+    }, pool, null, detalle);
+    res.json({ entregados: n, celus: detalle });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // DELETE /api/push/subscribe — cancelar suscripción
