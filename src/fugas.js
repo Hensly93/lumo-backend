@@ -182,6 +182,11 @@ async function calcularFugas(negocioId, db = pool, opts = {}) {
     mpEvaluado = mp.evaluado;
     fugas = fugas.concat(mp.fugas);
   } catch (e) { avisos.push('mercadopago: ' + e.message); }
+  try {
+    const sv = await require('./fugas_mp').fugasDeCobrosSinVenta(negocioId, db, ahora);
+    const agregada = fugas.some((f) => f.id === 'mp_vs_caja');
+    for (const f of sv) { if (agregada) f.incluida_en = 'mp_vs_caja'; fugas.push(f); }   // si la comparación semanal ya cuenta esta plata, no se suma dos veces
+  } catch (e) { avisos.push('cobros sin venta: ' + e.message); }
   try { fugas = fugas.concat(fugasDeRentabilidad(await fuentes.rentabilidad(negocioId))); }
   catch (e) { avisos.push('rentabilidad: ' + e.message); }
 

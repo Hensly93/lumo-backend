@@ -38,6 +38,9 @@ async function asegurarTablas(db) {
        actualizado TIMESTAMP DEFAULT NOW(),
        UNIQUE (negocio_id, mp_payment_id))`
   );
+  // de dónde vino el cobro (posnet Point, QR, link…) y la referencia que le puso quien lo creó (LumoBi usa la suya)
+  await db.query('ALTER TABLE pagos_mp ADD COLUMN IF NOT EXISTS origen TEXT');
+  await db.query('ALTER TABLE pagos_mp ADD COLUMN IF NOT EXISTS referencia TEXT');
   await db.query('CREATE INDEX IF NOT EXISTS idx_pagos_mp_negocio_fecha ON pagos_mp(negocio_id, fecha)');
   await db.query(
     `CREATE TABLE IF NOT EXISTS sync_mp_estado(
@@ -127,12 +130,15 @@ async function sincronizarNegocio(db, negocioId, token, opts) {
       if (monto === null || !p.id || !fecha) continue;
       const { comision, neto } = comisionDe(p);
       const r = await db.query(
-        `INSERT INTO pagos_mp(negocio_id, mp_payment_id, monto, comision, neto, metodo, estado, fecha)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+        `INSERT INTO pagos_mp(negocio_id, mp_payment_id, monto, comision, neto, metodo, estado, fecha, origen, referencia)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
          ON CONFLICT (negocio_id, mp_payment_id) DO UPDATE
-           SET monto=$3, comision=$4, neto=$5, metodo=$6, estado=$7, fecha=$8, actualizado=NOW()
+           SET monto=$3, comision=$4, neto=$5, metodo=$6, estado=$7, fecha=$8, origen=COALESCE($9, pagos_mp.origen),
+               referencia=COALESCE($10, pagos_mp.referencia), actualizado=NOW()
          RETURNING (xmax = 0) AS nuevo`,
-        [negocioId, p.id, monto, comision, neto, p.payment_type_id || null, p.status || null, aUtcNaive(fecha)]
+        [negocioId, p.id, monto, comision, neto, p.payment_type_id || null, p.status || null, aUtcNaive(fecha),
+          p.point_of_interaction && p.point_of_interaction.type ? String(p.point_of_interaction.type).toLowerCase().slice(0, 40) : null,
+          p.external_reference ? String(p.external_reference).slice(0, 120) : null]
       );
       if (r.rows[0] && r.rows[0].nuevo) nuevos++; else actualizados++;
     }
