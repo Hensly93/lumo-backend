@@ -209,6 +209,15 @@ router.get('/importar', authWithQuery, async (req, res) => {
 
         // Evita duplicar: el indice unico es por (usuario_id, mp_payment_id) y aca no se guarda usuario_id,
         // asi que se controla por negocio antes de insertar.
+        // Un cobro que ya cerró la caja de LumoBi (QR o posnet) no se importa de nuevo, aunque no se haya guardado su id de pago.
+        if (pago.external_reference) {
+          let deCaja = false;
+          try {
+            const rc = await pool.query("SELECT 1 FROM cobros_mp WHERE negocio_id = $1 AND ref = $2 AND estado = 'pagado' LIMIT 1", [req.user.negocio_id, String(pago.external_reference)]);
+            deCaja = rc.rowCount > 0;
+          } catch (e) { /* la tabla puede no existir todavía */ }
+          if (deCaja) { omitidos++; continue; }
+        }
         const yaEsta = await pool.query(
           'SELECT 1 FROM transacciones WHERE negocio_id = $1 AND mp_payment_id = $2 LIMIT 1',
           [req.user.negocio_id, pago.id]
