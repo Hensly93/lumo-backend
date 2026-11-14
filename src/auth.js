@@ -66,6 +66,8 @@ router.post("/register", async (req, res) => {
 
     // Mail de bienvenida — fire-and-forget
     enviarBienvenida({ nombre, email, negocio, tipo_negocio }).catch(() => {});
+    // Aviso al dueño de LumoBi (ADMIN_EMAILS): hay un registro nuevo para acompañar
+    require('./aviso_fundador').registroNuevo({ negocioId: negocio_id, negocio, tipo_negocio, provincia, ciudad, zona, nombre, email, celular }).catch(() => {});
 
     res.json({ token, usuario: { ...usuario, negocio, tipo_negocio, negocio_id, rol: 'owner' }, plan: { estado: usuario.subscription_status, trial_fin: usuario.trial_fin, ya_uso_prueba: yaUsoPrueba } });
   } catch (e) {

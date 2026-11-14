@@ -932,6 +932,11 @@ async function correrVigilante(db = pool, opts = {}) {
       resumen.detalle.push({ negocio_id: u.negocio_id, error: e.message });
     }
   }
+  // Avisos para el dueño de LumoBi: registros, primeras ventas, clientes trabados, pruebas por vencer
+  if (!opts.dry) {
+    try { resumen.fundador = await require('./aviso_fundador').pasadaFundador(db, reloj); }
+    catch (e) { console.error('[VIGILANTE] fundador', e.message); }
+  }
   console.log('[VIGILANTE] fin de corrida: avisos enviados=' + resumen.enviados + ' negocios revisados=' + resumen.negocios);
   return resumen;
 }
