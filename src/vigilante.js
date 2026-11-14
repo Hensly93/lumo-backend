@@ -285,7 +285,7 @@ async function detSinDatos(db, p) {
     caja: 'Abrí la caja del local desde el link que te da LumoBi y cobrá la primera venta.',
   }[falta];
   const textos = {
-    0: `Bienvenido a LumoBi. ${paso} Al cerrar el primer turno te mandamos cuánto vendiste, tu hora pico, la diferencia de caja y qué hacer.`,
+    0: `Te damos la bienvenida a LumoBi. ${paso} Al cerrar el primer turno te mandamos cuánto vendiste, tu hora pico, la diferencia de caja y qué hacer.`,
     1: `Todavía no hay ventas en LumoBi. ${paso} Desde el primer turno cerrado empezás a ver dónde se te va la plata.`,
     2: `Tu cuenta sigue sin ventas, y la prueba gratis corre. ${paso} Si te trabaste en algún paso, respondé este mensaje o escribinos por WhatsApp y te ayudamos.`,
     3: `Pasaron varios días sin ventas en LumoBi. ${paso} Si algo no te cerró, contanos qué fue: nos sirve muchísimo.`,
