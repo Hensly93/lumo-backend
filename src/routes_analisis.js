@@ -857,6 +857,12 @@ router.post('/push/subscribe', auth, async (req, res) => {
   }
 });
 
+// GET /api/guia/estado — qué está listo y qué falta para cada parte de LumoBi (guía de cada pantalla)
+router.get('/guia/estado', auth, async (req, res) => {
+  try { res.json(await require('./guia').estadoGuia(req.user.negocio_id, req.user.id)); }
+  catch (e) { console.error('guia/estado:', e.message); res.status(500).json({ error: 'No se pudo calcular la guía' }); }
+});
+
 // GET /api/push/estado — por qué llegan o no los avisos: suscripciones, preferencias y últimos envíos
 router.get('/push/estado', auth, async (req, res) => {
   try {
