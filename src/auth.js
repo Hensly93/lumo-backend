@@ -22,7 +22,7 @@ router.post("/register", async (req, res) => {
     }
     const existe = await client.query("SELECT id FROM usuarios WHERE LOWER(email)=$1", [email]);
     if (existe.rows.length > 0) {
-      return res.status(400).json({ error: "Email ya registrado" });
+      return res.status(400).json({ error: "Ese email ya tiene una cuenta. Tocá \"Iniciar sesión\" o, si no te acordás la contraseña, \"¿Olvidaste tu contraseña?\"." });
     }
 
     await client.query('BEGIN');
@@ -38,6 +38,11 @@ router.post("/register", async (req, res) => {
       [nombre, email, hash, negocio, yaUsoPrueba ? 'expired' : 'trial', yaUsoPrueba ? new Date() : trial.finDePrueba(), trial.normCelular(celular) ? String(celular).replace(/[^0-9+ ()-]/g, '').slice(0, 20) : null, trial.normCuit(cuit)]
     );
     const usuario = userResult.rows[0];
+    // El registro nuevo pregunta el rubro: con eso ya no hace falta la pantalla de datos del negocio
+    if (tipo_negocio) {
+      await client.query('UPDATE usuarios SET tipo_negocio=$1, onboarding_done=true WHERE id=$2', [tipo_negocio, usuario.id]);
+      usuario.onboarding_done = true;
+    }
 
     // 2. Crear negocio
     const negocioResult = await client.query(
