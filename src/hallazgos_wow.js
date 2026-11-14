@@ -15,6 +15,7 @@
 //   { id, icono, titulo, descripcion, duele, recomendacion, advertencia, impacto_pesos, confianza, detalle }
 
 const pool = require('./db');
+const CF = require('./caja_faltante');
 
 const FL = `(t.fecha - INTERVAL '3 hours')`;
 const HOY = `(NOW() - INTERVAL '3 hours')::date`;
@@ -136,18 +137,18 @@ async function faltaStock(db, negocioId) {
 
 async function diferenciasCaja(db, negocioId) {
   const r = await db.query(
-    `SELECT COUNT(*)::int turnos, COUNT(*) FILTER (WHERE ABS(brecha) >= 200)::int con_dif,
-            COALESCE(SUM(GREATEST(brecha,0)),0)::float faltante,
+    `SELECT COUNT(*)::int turnos, COUNT(*) FILTER (WHERE ${CF.sqlFaltante()} > 0)::int con_dif,
+            COALESCE(SUM(${CF.sqlFaltante()}),0)::float faltante,
             COUNT(DISTINCT (hora_apertura - INTERVAL '3 hours')::date)::int dias
      FROM turnos_caja WHERE negocio_id=$1 AND estado='cerrado' AND brecha IS NOT NULL
-       AND hora_apertura >= NOW() - INTERVAL '${VENTANA} days'`, [negocioId]);
+       AND hora_cierre >= NOW() - INTERVAL '${VENTANA} days'`, [negocioId]);
   const x = r.rows[0];
   if (!x.turnos || x.faltante < 1000 || x.con_dif < 2) return null;
   const mes = Math.round((x.faltante / Math.max(x.dias, 1)) * 30);
   return {
     id: 'diferencias_caja', icono: '',
-    titulo: `Faltaron ${$(x.faltante)} en la caja en ${x.dias} día${x.dias === 1 ? '' : 's'}`,
-    descripcion: `${x.con_dif} de ${x.turnos} cierres no cuadraron con lo vendido.`,
+    titulo: `Faltaron ${$(x.faltante)} en la caja en los últimos ${VENTANA} días`,
+    descripcion: `${x.con_dif} de ${x.turnos} cierres terminaron con plata de menos (no contamos diferencias chicas de cambio).`,
     duele: `A este ritmo son unos ${$(mes)} por mes que se van sin que nadie lo vea.`,
     recomendacion: 'Revisá cada cierre con diferencia el mismo día: egresos sin cargar, vueltos mal dados o ventas sin registrar. En Equipo ves cada turno.',
     advertencia: 'Suma real de las diferencias de tus cierres de caja.', impacto_pesos: mes, confianza: 90,

@@ -13,6 +13,8 @@ const MIN_DIAS = 14;         // con menos días con ventas no se muestra radiogr
 const DOW = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 const fmt = (n) => '$' + Math.round(Math.abs(n)).toLocaleString('es-AR');
 const prom = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0);
+// "Un día normal" = mediana (igual que los avisos): un día cargado a medias no arrastra el número
+const mediana = (a) => { if (!a.length) return 0; const o = [...a].sort((x, y) => x - y); const m = Math.floor(o.length / 2); return o.length % 2 ? o[m] : (o[m - 1] + o[m]) / 2; };
 
 // ── Detectores puros (reciben filas ya leídas; se pueden probar sin base) ──
 
@@ -23,7 +25,7 @@ function hallazgoDiaDebil(dias) {
     if (!porDow.has(x.dow)) porDow.set(x.dow, []);
     porDow.get(x.dow).push(x.total);
   }
-  const validos = [...porDow.entries()].filter(([, v]) => v.length >= 3).map(([dow, v]) => ({ dow, n: v.length, avg: prom(v) }));
+  const validos = [...porDow.entries()].filter(([, v]) => v.length >= 3).map(([dow, v]) => ({ dow, n: v.length, avg: mediana(v) }));
   if (validos.length < 4) return null;
   const peor = validos.reduce((a, b) => (b.avg < a.avg ? b : a));
   const resto = validos.filter((v) => v.dow !== peor.dow);
@@ -39,7 +41,7 @@ function hallazgoDiaDebil(dias) {
     id: 'dia_debil_' + peor.dow,
     tipo: 'estimado',
     titulo: `Los ${plural} vendés ${pct}% menos que el resto de la semana`,
-    detalle: `Un ${nombre} promedia ${fmt(peor.avg)} y los demás días ${fmt(ref)}.`,
+    detalle: `Un ${nombre} normal vendés ${fmt(peor.avg)} y un día normal del resto de la semana ${fmt(ref)}.`,
     evidencia: [
       `Se miraron ${peor.n} ${plural} de las últimas 8 semanas.`,
       `Si recuperás un tercio de la diferencia con los demás días, serían unos ${fmt(monto)} más por mes (estimación prudente: igualarlos sería ${fmt(monto * 3)}).`,
@@ -105,7 +107,7 @@ function hallazgoTicket(dias, hoyISO) {
   return {
     id: baja ? 'ticket_baja' : 'ticket_sube',
     tipo: 'calculado',
-    titulo: baja ? `Tu ticket promedio bajó ${pct}%` : `Tu ticket promedio subió ${pct}%`,
+    titulo: baja ? `Cada cliente gasta ${pct}% menos que antes` : `Cada cliente gasta ${pct}% más que antes`,
     detalle: `Pasó de ${fmt(vP)} a ${fmt(vA)} por venta, en los últimos 28 días contra los 28 anteriores.`,
     evidencia: [
       `${tA} ventas en los últimos 28 días y ${tP} en los 28 anteriores.`,

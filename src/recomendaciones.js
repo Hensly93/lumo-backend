@@ -9,6 +9,7 @@
 //   - La predicción siempre dispara una acción concreta
 
 const pool = require('./db');
+const CF = require('./caja_faltante');
 const { recomendacionesEcosistema } = require('./recomendaciones_ecosistema');
 
 // ─── Reglas de recomendación ──────────────────────────────────────────────────
@@ -151,30 +152,32 @@ const REGLAS = [
     prioridad: 'media',
     evaluar: async (negocioId) => {
       const res = await pool.query(
-        `SELECT tipo_turno, AVG(ABS(brecha)) as brecha_media, COUNT(*) as n
-         FROM turnos_caja
-         WHERE negocio_id=$1 AND estado='cerrado' AND brecha IS NOT NULL
-           AND hora_apertura >= NOW() - INTERVAL '30 days'
-         GROUP BY tipo_turno
+        `SELECT t.tipo_turno, t.sucursal_id, s.nombre AS sucursal,
+                AVG(${CF.sqlFaltante('t')}) AS brecha_media, COUNT(*) AS n
+         FROM turnos_caja t LEFT JOIN mis_sucursales s ON s.id = t.sucursal_id
+         WHERE t.negocio_id=$1 AND t.estado='cerrado' AND t.brecha IS NOT NULL
+           AND t.hora_cierre >= NOW() - INTERVAL '30 days'
+         GROUP BY t.tipo_turno, t.sucursal_id, s.nombre
          HAVING COUNT(*) >= 5`,
         [negocioId]
       );
       if (res.rows.length < 2) return [];
-      const turnos = res.rows.map(r => ({ turno: r.tipo_turno, brecha: parseFloat(r.brecha_media), n: parseInt(r.n) }));
+      const varias = new Set(res.rows.map(r => r.sucursal_id)).size > 1;
+      const NOMBRE = { manana: 'mañana', 'mañana': 'mañana', tarde: 'tarde', noche: 'noche' };
+      const turnos = res.rows.map(r => ({
+        turno: 'turno ' + (NOMBRE[String(r.tipo_turno).toLowerCase()] || r.tipo_turno) + (varias && r.sucursal ? ' de ' + r.sucursal : ''),
+        brecha: parseFloat(r.brecha_media) || 0, n: parseInt(r.n),
+      }));
       turnos.sort((a, b) => b.brecha - a.brecha);
-      const ratio = turnos[0].brecha / (turnos[turnos.length - 1].brecha || 1);
-      if (ratio < 2.5) return [];
-      return [{
-        turno_mayor: turnos[0].turno,
-        turno_menor: turnos[turnos.length - 1].turno,
-        brecha_mayor: Math.round(turnos[0].brecha),
-        ratio: Math.round(ratio * 10) / 10,
-      }];
+      const peor = turnos[0], mejor = turnos[turnos.length - 1];
+      // Solo si el peor pierde de verdad (promedio de $300+ por turno) y bastante más que el mejor
+      if (peor.brecha < 300 || peor.brecha - mejor.brecha < 300) return [];
+      return [{ turno_mayor: peor.turno, turno_menor: mejor.turno, brecha_mayor: Math.round(peor.brecha), brecha_menor: Math.round(mejor.brecha) }];
     },
-    mensaje: ({ turno_mayor, brecha_mayor, ratio }) =>
-      `El turno ${turno_mayor} tiene ${ratio}x más brecha promedio que el mejor turno. Brecha promedio: $${brecha_mayor.toLocaleString('es-AR')}.`,
-    accion: ({ turno_mayor }) =>
-      `Revisá qué está pasando en el turno ${turno_mayor}. Compará los procesos con el turno de mejor desempeño.`,
+    mensaje: ({ turno_mayor, turno_menor, brecha_mayor, brecha_menor }) =>
+      `En el ${turno_mayor} faltan en promedio $${brecha_mayor.toLocaleString('es-AR')} por cierre; en el ${turno_menor}, $${brecha_menor.toLocaleString('es-AR')}.`,
+    accion: ({ turno_mayor, turno_menor }) =>
+      `Mirá cómo abre, cuenta y cierra la caja el ${turno_menor} y pedile al ${turno_mayor} que lo haga igual.`,
   },
 
   // R6: Egresos sin patrón claro (muchos egresos, bajo monto promedio)

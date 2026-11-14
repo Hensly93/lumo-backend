@@ -149,7 +149,7 @@ function construirAlertasMetricas(señalesMetricas, metricasRecientes, benchmark
 // el benchmark del sector para ese turno, o al menos 1 métrica global anómala.
 
 const DIAS_RECIENTES = 3;
-const NOMBRE_METRICA = { ventas_por_turno: 'las ventas', ticket_promedio: 'el ticket promedio', ratio_efectivo: 'la parte cobrada en efectivo' };
+const NOMBRE_METRICA = { ventas_por_turno: 'las ventas', ticket_promedio: 'lo que gasta cada cliente', ratio_efectivo: 'la parte cobrada en efectivo' };
 const NOMBRE_TURNO = { manana: 'mañana', tarde: 'tarde', noche: 'noche' };
 
 function construirAlertasSegmento(resultados, agregados, señalesSectorPorTurno, señalesMetricas, pesos, nombresLocal = {}) {
@@ -188,7 +188,7 @@ function construirAlertasSegmento(resultados, agregados, señalesSectorPorTurno,
       const turnoTxt = (NOMBRE_TURNO[a.turno] || a.turno) + (a.sucursal_id != null && nombresLocal[a.sucursal_id] ? ` (${nombresLocal[a.sucursal_id]})` : '');
       const insight = subeVenta
         ? `Turno ${turnoTxt} del ${a.fecha}: las ventas estuvieron ${Math.abs(desvio)}% por encima de lo normal para ese turno (unos $${impacto.toLocaleString('es-AR')} más).`
-        : `Posible inconsistencia operativa en el turno ${turnoTxt} del ${a.fecha}: ${NOMBRE_METRICA[a.metrica]} ${a.direccion === 'bajo' ? (a.metrica === 'ventas_por_turno' ? 'bajaron' : 'bajó') : (a.metrica === 'ventas_por_turno' ? 'subieron' : 'subió')} ${Math.abs(desvio)}% contra lo normal de ese turno. Impacto estimado: $${impacto.toLocaleString('es-AR')}.`;
+        : `Algo raro en el turno ${turnoTxt} del ${a.fecha}: ${NOMBRE_METRICA[a.metrica]} ${a.direccion === 'bajo' ? (a.metrica === 'ventas_por_turno' ? 'bajaron' : 'bajó') : (a.metrica === 'ventas_por_turno' ? 'subieron' : 'subió')} ${Math.abs(desvio)}% contra lo normal de ese turno. Impacto estimado: $${impacto.toLocaleString('es-AR')}.`;
 
       return {
         tipo: subeVenta ? 'TURNO_VENTAS_ALTAS' : 'ANOMALIA_TURNO',
@@ -260,7 +260,7 @@ async function analizarNegocio(usuarioId, sucursalId = null) {
       return {
         alertas:            [],
         señales:            [],
-        mensaje:            'Orquestador: score insuficiente para emitir señales',
+        mensaje:            'Hoy no vimos nada fuera de lo normal',
         total_transacciones: transacciones.length,
         risk_score_final,
         data_quality_score: { ...data_quality, ...orchQuality },

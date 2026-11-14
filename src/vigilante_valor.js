@@ -58,7 +58,7 @@ async function detInformeTurno(db, p) {
     const turno = TURNOS_ES[inf.tipo_turno] || inf.tipo_turno;
     const caja = inf.hechos.find((h) => h.id === 'caja');
     const otros = inf.hechos.filter((h) => h.id !== 'caja' && h.id !== 'caja_ok').slice(0, 2).map((h) => h.texto);
-    const partes = [`${pesos(inf.total)} en ${inf.ventas} ventas, ticket promedio ${pesos(inf.ticket_promedio)}.`];
+    const partes = [`${pesos(inf.total)} en ${inf.ventas} ventas, gasto promedio por cliente ${pesos(inf.ticket_promedio)}.`];
     if (caja) partes.push(caja.texto);
     partes.push(...otros);
     if (inf.accion) partes.push('Qué hacer: ' + inf.accion);
@@ -231,6 +231,7 @@ async function detHallazgoWow(db, p) {
   for (const h of lista) {
     if (!(h.impacto_pesos > 0)) continue;
     if (h.id === 'ticket_empleado') continue; // trae nombres: se ve en la pantalla, no en el aviso del celu
+    if (h.id === 'diferencias_caja') continue; // la caja ya llega como aviso de fuga: no mandar lo mismo dos veces
     const ya = await db.query(
       `SELECT 1 FROM vigilante_envios WHERE negocio_id=$1 AND tipo='hallazgo_wow' AND left(contexto, char_length($2)) = $2
          AND creado >= NOW() - INTERVAL '7 days' LIMIT 1`, [negocioId, h.id + '|']);

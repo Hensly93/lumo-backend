@@ -15,6 +15,7 @@
 // Todas las consultas filtran por negocio_id (y sucursal si se elige).
 
 const pool = require('./db');
+const CF = require('./caja_faltante');
 
 const FL = `(fecha - INTERVAL '3 hours')`;               // hora Argentina (la base está en UTC)
 const FL_CIERRE = `(hora_cierre - INTERVAL '3 hours')`;
@@ -149,9 +150,9 @@ async function ventasPorMes(db, negocioId, sucursalId, r) {
 async function caja(db, negocioId, sucursalId, r) {
   const q = await db.query(
     `SELECT COUNT(*)::int AS turnos,
-            COUNT(*) FILTER (WHERE brecha > 0)::int AS turnos_con_faltante,
-            COALESCE(SUM(GREATEST(brecha, 0)),0)::float AS faltante,
-            COALESCE(SUM(GREATEST(-brecha, 0)),0)::float AS sobrante
+            COUNT(*) FILTER (WHERE ${CF.sqlFaltante()} > 0)::int AS turnos_con_faltante,
+            COALESCE(SUM(${CF.sqlFaltante()}),0)::float AS faltante,
+            COALESCE(SUM(${CF.sqlSobrante()}),0)::float AS sobrante
      FROM turnos_caja
      WHERE negocio_id = $1 AND ($2::integer IS NULL OR sucursal_id = $2)
        AND hora_cierre IS NOT NULL AND brecha IS NOT NULL

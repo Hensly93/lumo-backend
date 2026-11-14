@@ -20,8 +20,7 @@ const pool = require('./db');
 const DIAS = 30;                 // ventana de cada periodo
 const MIN_TURNOS_CON_FALTANTE = 3;
 const MIN_MONTO_CAJA = 5000;     // por debajo de esto no es una fuga, es ruido de cambio/redondeo
-const TOLERANCIA_MIN = 500;      // una diferencia menor a esto en un turno no cuenta
-const TOLERANCIA_PCT = 0.005;    // ni menor al 0,5% del efectivo esperado
+const { faltanteTurno } = require('./caja_faltante'); // misma regla de faltante en todas las pantallas
 
 const fmt = (n) => '$' + Math.round(Math.abs(Number(n) || 0)).toLocaleString('es-AR');
 const mediana = (a) => {
@@ -55,12 +54,7 @@ async function fugasDeCaja(negocioId, db, ahora) {
   const nGrupos = new Set(r.rows.map((t) => t.sucursal_id || 0)).size;
   const fugas = [];
   for (const g of grupos.values()) {
-    const faltante = (t) => {
-      if (t.gasto_inesperado) return 0; // el dueño ya confirmo que fue un gasto no cargado
-      const b = Number(t.brecha) || 0;
-      const tol = Math.max(TOLERANCIA_MIN, (Number(t.caja_esperada) || 0) * TOLERANCIA_PCT);
-      return b > tol ? b : 0;
-    };
+    const faltante = faltanteTurno;
     const fa = g.act.map(faltante);
     const conFalta = fa.filter((x) => x > 0);
     const total = conFalta.reduce((s, x) => s + x, 0);
@@ -92,7 +86,7 @@ async function fugasDeCaja(negocioId, db, ahora) {
         'Cerrar el turno con dos personas presentes (quien entrega y quien recibe) y firmar el conteo.',
         'Retirar efectivo a la caja fuerte cada vez que la caja supere un monto fijo, y anotarlo como egreso.',
         'Anotar como egreso cada pago a proveedores y cada retiro: si no se carga, aparece como faltante.',
-        'Si un faltante se explica por un gasto real, marcá "gasto inesperado" en ese cierre y deja de contar como fuga.',
+        'Si un faltante fue un gasto real que no se cargó, en Equipo abrí a la persona y tocá "Fue un gasto que no se cargó" en ese cierre: deja de contar como fuga.',
       ],
       recuperado,
       url: '/empleados',

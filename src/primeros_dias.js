@@ -191,7 +191,7 @@ async function informeTurno(negocioId, opts = {}, db = pool) {
   if (rubro && ticket < rubro.ticket_min * 0.8) {
     hechos.push({
       id: 'ticket', peso: n * (rubro.ticket_min - ticket) * 0.05,
-      texto: `Tu ticket promedio (${$(ticket)}) está por debajo del rango de referencia de ${rubro.nombre}.`,
+      texto: `Lo que gasta cada cliente en promedio (${$(ticket)}) está por debajo del rango de referencia de ${rubro.nombre}.`,
       accion: 'Sumar un producto chico al lado de la caja sube el ticket sin conseguir clientes nuevos.',
       impacto_pesos: Math.round(n * (rubro.ticket_min - ticket) * 0.2),
     });

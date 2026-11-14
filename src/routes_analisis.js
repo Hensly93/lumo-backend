@@ -368,14 +368,8 @@ router.get('/inicio', auth, async (req, res) => {
     ]);
     const motor_ok = !analisis?.error;
     if (!motor_ok) console.error('[inicio] el motor fallo para negocio', negocioId, ':', analisis.error);
-    const resAlertas = await gestionarAlertas(negocioId, analisis.señales || []);
-    const ahoraISO = new Date().toISOString();
-    // Inconsistencias de caja (críticas/altas) de las recomendaciones, con el mismo formato que las alertas
-    const deCaja = (recs.recomendaciones || [])
-      .filter(r => r.categoria === 'inconsistencia_operativa' && (r.prioridad === 'critica' || r.prioridad === 'alta'))
-      .map(r => ({ tipo: 'Caja', prioridad: r.prioridad === 'critica' ? 'critico' : 'atencion', mensaje: r.mensaje, accion: r.accion,
-                   timestamp: ahoraISO, datos: r.datos, origen: 'recomendaciones', id: r.id }));
-    const items = [...(resAlertas.alertas || []), ...deCaja];
+    const rev = await require('./revisar').itemsRevisar(negocioId, suc, analisis, recs);
+    const items = rev.items;
     const t = vivo.total || {};
     // Sin predicción completa todavía (menos de 3 días): estimación preliminar con los días que haya
     const hoy = t.esperado_dia != null
@@ -469,7 +463,7 @@ router.get('/zonas', auth, async (req, res) => {
       const total = otras.reduce((s, f) => s + (f.monto || 0), 0);
       if (otras.length && total > 0) zonas.push({ id: 'fugas', nombre: 'Fugas de plata', estado: 'atencion', texto: 'Se te van ~' + fmt(total) + ' en ' + otras.length + (otras.length === 1 ? ' fuga' : ' fugas') + ' (' + fg.resumen.periodo + ').', url: '/fugas' });
       else if (fg.resumen && fg.resumen.recuperado > 0) zonas.push({ id: 'fugas', nombre: 'Fugas de plata', estado: 'ok', texto: 'Ya recuperaste ~' + fmt(fg.resumen.recuperado) + ' y no hay fugas activas.', url: '/fugas' });
-      else zonas.push({ id: 'fugas', nombre: 'Fugas de plata', estado: 'ok', texto: 'No detectamos fugas activas con los datos que cargaste.', url: '/fugas' });
+      else zonas.push({ id: 'fugas', nombre: 'Fugas de plata', estado: 'ok', texto: (fg.fugas || []).some((f) => f.categoria === 'caja' && f.estado === 'activa') ? 'Fuera de la caja, no vimos otras fugas de plata.' : 'No detectamos fugas activas con los datos que cargaste.', url: '/fugas' });
     }
 
     // Ganancia (ultimo mes cerrado) y punto de equilibrio (mes en curso)
@@ -557,8 +551,10 @@ router.get('/alertas', auth, async (req, res) => {
   try {
     const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
     const analisis = await analizarNegocio(req.user.negocio_id, sucursalId);
-    const resultado = await gestionarAlertas(req.user.negocio_id, analisis.señales || []);
-    res.json({ ...resultado, cusum: analisis.cusum });
+    // Misma lista que el Inicio: motor + fugas de caja + equipo + recomendaciones de caja
+    const recs = await generarRecomendaciones(req.user.negocio_id, sucursalId).catch(() => ({ recomendaciones: [] }));
+    const rev = await require('./revisar').itemsRevisar(req.user.negocio_id, sucursalId, analisis, recs);
+    res.json({ alertas: rev.items, suprimidas: rev.suprimidas, stats: rev.stats, cusum: analisis.cusum });
   } catch(e) {
     res.status(500).json({ error: e.message });
   }

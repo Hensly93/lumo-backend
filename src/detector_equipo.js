@@ -36,7 +36,7 @@ async function detCaja(negocioId, db, opts) {
   return {
     id: 'equipo_caja', tipo: 'calculado', ignora_suficiente: true,
     titulo: `La caja cerró con faltantes repetidos: ${fmt(total)} en ${DIAS} días`,
-    detalle: `${turnos} ${turnos === 1 ? 'turno cerró' : 'turnos cerraron'} con menos plata de la esperada${rojos ? ' y hay señales fuertes en el equipo' : ''}. No es una acusación: es una inconsistencia para revisar con el detalle.`,
+    detalle: `${turnos} ${turnos === 1 ? 'turno cerró' : 'turnos cerraron'} con menos plata de la esperada${rojos ? ' y hay señales fuertes en el equipo' : ''}. No es una acusación: puede ser un error al contar o al cobrar. Miralo con el detalle.`,
     evidencia: [
       `Faltaron ${fmt(total)} en ${turnos} ${turnos === 1 ? 'cierre' : 'cierres'} de caja de los últimos ${DIAS} días, en turnos de personas con señales repetidas.`,
       ...r.rows.slice(0, 4).map((x) => `${x.empleado}: ${fmt(x.falto)} de faltante en ${x.turnos} ${x.turnos === 1 ? 'turno' : 'turnos'} (nivel ${nivel.get(x.empleado)}).`),

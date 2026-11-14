@@ -663,15 +663,16 @@ router.get('/patrones', auth, async (req, res) => {
 router.post('/gasto-inesperado', auth, async (req, res) => {
   if (!(await turnoDelNegocio(req.body?.turno_id, req.user.negocio_id))) return res.status(404).json({ error: 'Turno no encontrado' });
   try {
-    const { turno_id, usuario_id } = req.body;
-    if (!turno_id || !usuario_id) {
-      return res.status(400).json({ error: 'turno_id y usuario_id requeridos' });
-    }
+    // El dueño marca (o desmarca) que la diferencia de ese cierre fue un gasto que no se cargó:
+    // deja de contar como faltante en Fugas, Períodos, Alertas y avisos (caja_faltante.js)
+    const { turno_id } = req.body;
+    const valor = req.body.valor === false ? false : true;
+    if (!turno_id) return res.status(400).json({ error: 'turno_id requerido' });
     const r = await pool.query(
-      `UPDATE turnos_caja SET gasto_inesperado=true
-       WHERE id=$1 AND usuario_id=$2 AND estado='cerrado'
-       RETURNING id, nombre_empleado, brecha`,
-      [turno_id, usuario_id]
+      `UPDATE turnos_caja SET gasto_inesperado=$3
+       WHERE id=$1 AND negocio_id=$2 AND estado='cerrado'
+       RETURNING id, nombre_empleado, brecha, gasto_inesperado`,
+      [turno_id, req.user.negocio_id, valor]
     );
     if (r.rowCount === 0) return res.status(404).json({ error: 'Turno no encontrado' });
     res.json({ ok: true, turno: r.rows[0] });

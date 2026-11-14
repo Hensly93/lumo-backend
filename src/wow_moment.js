@@ -87,7 +87,8 @@ async function patronesBasicos(usuario_id, db = pool, negocioForzado = null) {
     });
     const dows = Object.keys(porDow).filter((d) => porDow[d].length >= 2).map((d) => {
       const v = porDow[d];
-      return { dia: Number(d), prom: v.reduce((a, b) => a + b, 0) / v.length, n: v.length };
+      const o = [...v].sort((a, b) => a - b), m = Math.floor(o.length / 2);
+      return { dia: Number(d), prom: o.length % 2 ? o[m] : (o[m - 1] + o[m]) / 2, n: v.length }; // mediana, igual que los avisos
     });
     if (dows.length >= 2) {
       dows.sort((a, b) => b.prom - a.prom);
@@ -100,7 +101,7 @@ async function patronesBasicos(usuario_id, db = pool, negocioForzado = null) {
           id: 'dia_semana',
           icono: '',
           titulo: cap(DIAS[mejor.dia]) + ' es tu día más fuerte: vende ' + pct(p) + '% más que ' + DIAS[peor.dia],
-          descripcion: 'En promedio, un ' + DIAS[mejor.dia] + ' vendés ' + peso(mejor.prom) + ' (sobre ' + mejor.n + ' días) y un ' + DIAS[peor.dia] + ' ' + peso(peor.prom) + ' (sobre ' + peor.n + ' días).',
+          descripcion: 'En los últimos ' + ventanaDias + ' días, un ' + DIAS[mejor.dia] + ' normal vendés ' + peso(mejor.prom) + ' (sobre ' + mejor.n + ' días) y un ' + DIAS[peor.dia] + ' ' + peso(peor.prom) + ' (sobre ' + peor.n + ' días).',
           duele: 'Cada ' + DIAS[peor.dia] + ' vendés en promedio ' + peso(dif) + ' menos que cada ' + DIAS[mejor.dia] + '.',
           recomendacion: 'Mirá qué pasa los ' + DIAS[peor.dia] + ': personal, horarios abiertos, stock o promociones. Confirmalo con más semanas antes de cambiar algo grande.',
           advertencia: advertencia,
@@ -122,7 +123,10 @@ async function patronesBasicos(usuario_id, db = pool, negocioForzado = null) {
       const f = FRANJAS.find((x) => r.hora >= x.desde && r.hora <= x.hasta);
       if (f) { f.total += r.monto; f.n += 1; }
     });
-    const franjas = FRANJAS.filter((f) => f.n >= 3).sort((a, b) => b.total - a.total);
+    // Una franja con menos del 3% de las ventas es horario en que el local casi no abre:
+    // no se compara ni se recomienda "reforzarla" (antes decía "revisá la dotación de la noche" a locales que cierran a las 18)
+    const totalFranjas = FRANJAS.reduce((a, f) => a + f.total, 0) || 1;
+    const franjas = FRANJAS.filter((f) => f.n >= 3 && f.total / totalFranjas >= 0.03).sort((a, b) => b.total - a.total);
     if (franjas.length >= 2) {
       const mejor = franjas[0];
       const peor = franjas[franjas.length - 1];

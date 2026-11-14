@@ -33,7 +33,7 @@ const MAX_AVISOS_DIA = Number(process.env.VIGILANTE_MAX_DIA) || Infinity;
 const MAX_AVISOS_CORRIDA = 3;                    // si se juntan varios, salen de a 3 por hora (lo mas urgente primero)
 const HORA_DESDE = 8;
 const HORA_HASTA = 22.5;
-const DIAS_VENTANA = 45;
+const DIAS_VENTANA = 56; // 8 semanas: misma ventana que la Radiografía para "un día normal"
 const MIN_DIAS_HISTORIAL = 8;
 const BASE_URL = process.env.FRONTEND_URL || 'https://lumo-psi.vercel.app';
 
