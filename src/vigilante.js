@@ -293,7 +293,7 @@ async function detSinDatos(db, p) {
   return [{
     tipo: 'sin_datos', contexto: 'etapa-' + etapa, pref: 'alertas_medias', prioridad: 6,
     titulo: etapa === 0 ? 'Tu primer paso en LumoBi' : 'Abrí la caja y empezamos', mensaje: textos[etapa],
-    url: '/primeros-pasos', boton: 'Ver qué falta',
+    url: '/primeros-pasos?paso=caja', boton: 'Abrir mi caja',
   }];
 }
 
