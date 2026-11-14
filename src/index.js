@@ -228,7 +228,8 @@ try {
 try {
   const { triggerManual } = require("./job_nocturno");
   app.post("/api/job/trigger", async (req, res) => {
-    if (!process.env.INTERNAL_KEY || req.headers['x-internal-key'] !== process.env.INTERNAL_KEY) {
+    const claveEsperada = String(process.env.VIGILANTE_KEY || process.env.INTERNAL_KEY || '').trim();
+    if (!claveEsperada || String(req.headers['x-internal-key'] || '').trim() !== claveEsperada) {
       return res.status(401).json({ error: 'No autorizado' });
     }
     try {
