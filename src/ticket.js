@@ -24,6 +24,9 @@ async function armar(turno, transaccionId, db = pool) {
   const pagos = t.metodo_pago === 'mixto' && t.monto_efectivo != null
     ? [{ medio: 'Efectivo', monto: t.monto_efectivo }, { medio: MEDIO[t.metodo_resto] || t.metodo_resto, monto: t.total - t.monto_efectivo }]
     : [{ medio: MEDIO[t.metodo_pago] || t.metodo_pago, monto: t.total }];
+  // Nombres cargados con comillas o espacios de más ("" surcursal moron"") salen limpios
+  const limpio = (x) => (x == null ? null : String(x).replace(/["“”']/g, '').replace(/\s+/g, ' ').replace(/\s+·/g, ' ·').trim() || null);
+  t.negocio = limpio(t.negocio); t.sucursal = limpio(t.sucursal); t.direccion = limpio(t.direccion);
   return {
     numero: t.id, fecha: t.fecha, negocio: t.negocio, sucursal: t.sucursal, direccion: t.direccion, atendio: t.empleado,
     items, total: t.total, pagos, leyenda: 'Comprobante no válido como factura',
