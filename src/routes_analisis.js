@@ -397,6 +397,17 @@ router.get('/inicio', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Pedidos: qué pedir, cuánto y a quién (pedidos.js)
+router.get('/pedidos', auth, async (req, res) => {
+  try {
+    const P = require('./pedidos');
+    const r = await P.calcular(req.user.negocio_id);
+    const n = (await pool.query('SELECT nombre FROM negocios WHERE id = $1', [req.user.negocio_id])).rows[0];
+    r.por_proveedor = r.por_proveedor.map((g) => ({ ...g, texto: P.textoPedido(g, n && n.nombre) }));
+    res.json(r);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Fichas: todo lo de un producto o de una persona del equipo, conectado (ficha.js)
 router.get('/ficha/producto/:id', auth, async (req, res) => {
   try {

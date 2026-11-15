@@ -246,7 +246,24 @@ async function detHallazgoWow(db, p) {
   return [];
 }
 
+// ── 7) Qué pedir hoy: productos agotados o que alcanzan para 3 días o menos (pedidos.js) ──
+async function detPedido(db, p) {
+  const { reloj, negocioId } = p;
+  if (reloj.hora < 9 || reloj.hora > 11.5) return [];
+  const r = await require('./pedidos').calcular(negocioId, db).catch(() => null);
+  if (!r) return [];
+  const ya = r.items.filter((x) => x.urgencia !== 'esta_semana');
+  if (!ya.length) return [];
+  const lista = ya.slice(0, 3).map((x) => `${x.nombre} (${x.urgencia === 'agotado' ? 'agotado' : `para ${x.alcanza_dias} ${x.alcanza_dias === 1 ? 'día' : 'días'}`})`).join(', ');
+  return [{
+    tipo: 'pedido', contexto: reloj.hoy, pref: 'alertas_medias', prioridad: 3,
+    titulo: ya.length === 1 ? 'Hoy tenés que pedir 1 producto' : `Hoy tenés que pedir ${ya.length} productos`,
+    mensaje: recorte(`${lista}${ya.length > 3 ? ` y ${ya.length - 3} más` : ''}. LumoBi ya te armó cuánto pedir de cada uno.`),
+    url: '/pedidos', boton: 'Ver el pedido',
+  }];
+}
+
 module.exports = {
-  DETECTORES: [detInformeTurno, detPicoProximo, detProductoCaliente, detProyeccionDia, detPrediccionManana, detHallazgoWow],
+  DETECTORES: [detInformeTurno, detPicoProximo, detProductoCaliente, detProyeccionDia, detPrediccionManana, detHallazgoWow, detPedido],
   franjaFuerte,
 };
