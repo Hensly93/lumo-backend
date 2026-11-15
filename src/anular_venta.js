@@ -45,6 +45,7 @@ async function datosParaGuardia(turno, transaccionId, db = pool) {
 
 async function anular(turno, transaccionId, motivo, db = pool) {
   await asegurar(db);
+  await require('./caja_extra').asegurar(db);
   const client = await db.connect();
   try {
     await client.query('BEGIN');
@@ -55,21 +56,22 @@ async function anular(turno, transaccionId, motivo, db = pool) {
     if (ya.rows.length) { await client.query('ROLLBACK'); return { ok: false, error: 'Esa venta ya estaba anulada.' }; }
 
     const nueva = (await client.query(
-      `INSERT INTO transacciones (negocio_id, monto, tipo, empleado, turno, metodo_pago, sucursal_id, fecha, turno_id, anula_id, motivo)
-       VALUES ($1, $2, 'anulacion', $3, $4, $5, $6, NOW(), $7, $8, $9) RETURNING id`,
-      [o.negocio_id, -Number(o.monto), o.empleado, o.turno, o.metodo_pago, o.sucursal_id, turno.id, o.id, motivo || null])).rows[0];
+      `INSERT INTO transacciones (negocio_id, monto, tipo, empleado, turno, metodo_pago, sucursal_id, fecha, turno_id, anula_id, motivo, monto_efectivo, metodo_resto)
+       VALUES ($1, $2, 'anulacion', $3, $4, $5, $6, NOW(), $7, $8, $9, $10, $11) RETURNING id`,
+      [o.negocio_id, -Number(o.monto), o.empleado, o.turno, o.metodo_pago, o.sucursal_id, turno.id, o.id, motivo || null,
+       o.monto_efectivo != null ? -Number(o.monto_efectivo) : null, o.metodo_resto || null])).rows[0];
 
     // El detalle también en negativo: así "lo que más se vende" y la ganancia por producto descuentan la anulación
     const det = (await client.query(`SELECT * FROM transacciones_detalle WHERE transaccion_id = $1`, [o.id])).rows;
     for (const d of det) {
       await client.query(
-        `INSERT INTO transacciones_detalle (transaccion_id, producto_id, cantidad, precio_unitario, subtotal)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [nueva.id, d.producto_id, -Number(d.cantidad), d.precio_unitario, -Number(d.subtotal)]);
+        `INSERT INTO transacciones_detalle (transaccion_id, producto_id, cantidad, precio_unitario, subtotal, tipo_linea, producto_nombre)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [nueva.id, d.producto_id, -Number(d.cantidad), d.precio_unitario, -Number(d.subtotal), d.tipo_linea || 'producto', d.producto_id ? null : d.producto_nombre]);
     }
     await client.query(
       `UPDATE transacciones_detalle n SET producto_nombre = o.producto_nombre, producto_marca = o.producto_marca, costo_unitario = o.costo_unitario
-         FROM transacciones_detalle o WHERE n.transaccion_id = $1 AND o.transaccion_id = $2 AND o.producto_id IS NOT DISTINCT FROM n.producto_id`,
+         FROM transacciones_detalle o WHERE n.transaccion_id = $1 AND o.transaccion_id = $2 AND n.producto_id IS NOT NULL AND o.producto_id = n.producto_id`,
       [nueva.id, o.id]).catch(() => {});
 
     // El stock vuelve

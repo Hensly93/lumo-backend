@@ -8,6 +8,7 @@ async function cerrarVenta(client, turno_id, metodo_pago, extra) {
   await require('./catalogo_marca').asegurar();
   // Las tablas de stock se aseguran ANTES de tocar la venta: si se hace adentro, el ALTER espera a esta misma transacción y la primera venta tras un deploy se cuelga.
   try { await require('./stock').asegurar(); } catch (e) { console.error('stock/asegurar:', e.message); }
+  await require('./caja_extra').asegurar();
   // Obtener datos del turno para atribución completa
   const turno = await client.query(
     'SELECT negocio_id, nombre_empleado, tipo_turno, sucursal_id FROM turnos_caja WHERE id=$1 AND estado=$2',
@@ -42,15 +43,19 @@ async function cerrarVenta(client, turno_id, metodo_pago, extra) {
   );
 
   const transaccion_id = transaccion.rows[0].id;
+  // Pago mixto: cuánto entró en efectivo (lo que va a la caja) y con qué se pagó el resto
+  if (metodo_pago === 'mixto' && extra.monto_efectivo != null) {
+    await client.query(`UPDATE transacciones SET monto_efectivo = $2, metodo_resto = $3 WHERE id = $1`, [transaccion_id, extra.monto_efectivo, extra.metodo_resto || null]);
+  }
 
   // Insertar detalle de cada item
   for (const item of carrito.rows) {
     const subtotal = parseFloat(item.cantidad) * parseFloat(item.precio_unitario);
     await client.query(
       `INSERT INTO transacciones_detalle
-       (transaccion_id, producto_id, cantidad, precio_unitario, subtotal)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [transaccion_id, item.producto_id, item.cantidad, item.precio_unitario, subtotal]
+       (transaccion_id, producto_id, cantidad, precio_unitario, subtotal, tipo_linea, producto_nombre)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [transaccion_id, item.producto_id || null, item.cantidad, item.precio_unitario, subtotal, item.tipo_linea || 'producto', item.producto_id ? null : (item.descripcion || null)]
     );
   }
 

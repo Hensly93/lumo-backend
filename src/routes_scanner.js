@@ -247,12 +247,13 @@ router.get('/carrito/:turno_id', authTurno, async (req, res) => {
   try {
     const turno_id = req.turno.id;
 
+    await require('./caja_extra').asegurar();
     const items = await pool.query(
-      `SELECT c.*, p.nombre as producto_nombre, p.codigo_barras
+      `SELECT c.*, COALESCE(p.nombre, c.descripcion) as producto_nombre, p.codigo_barras
        FROM carrito_items c
-       JOIN productos p ON c.producto_id = p.id
+       LEFT JOIN productos p ON c.producto_id = p.id
        WHERE c.turno_id = $1
-       ORDER BY c.creado_en DESC`,
+       ORDER BY (c.tipo_linea = 'descuento'), c.creado_en DESC`,
       [turno_id]
     );
 
@@ -326,6 +327,37 @@ router.delete('/carrito/:turno_id/:item_id', authTurno, async (req, res) => {
 // Convierte carrito en transacción + transacciones_detalle y vacía carrito
 // Body: { turno_id, metodo_pago }
 // ─────────────────────────────────────────────────────────────────────
+// ── Varios con precio libre y descuentos (caja_extra.js) ──
+router.post('/carrito-varios', authTurno, async (req, res) => {
+  try {
+    const r = await require('./caja_extra').agregarVarios(req.turno.id, req.body || {});
+    if (!r.ok) return res.status(400).json({ error: r.error });
+    res.json(r);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/descuento', authTurno, async (req, res) => {
+  try {
+    const CE = require('./caja_extra');
+    await CE.asegurar();
+    const b = req.body || {};
+    const sub = await CE.subtotal(req.turno.id);
+    const d = CE.calcularDescuento(sub, { modo: b.modo === 'pct' ? 'pct' : 'monto', valor: b.valor });
+    if (!d) return res.status(400).json({ error: sub > 0 ? 'Escribí cuánto descontar.' : 'Primero cargá productos en el carrito.' });
+    if (!(await guardia(req, res, { tipo: 'descuento', clave: 'desc:' + Math.round(d.monto), valor: d.monto, pct: d.pct }))) return;
+    const motivo = String(b.motivo || '').trim().slice(0, 60) || null;
+    const r = await CE.ponerDescuento(req.turno.id, { monto: d.monto, pct: d.pct, motivo });
+    registrarHecho({ negocio_id: req.turno.negocio_id, turno_id: req.turno.id, empleado: req.turno.nombre_empleado, tipo: 'descuento',
+      valor: d.monto, detalle: { pct: Math.round(d.pct * 10) / 10, subtotal: sub, motivo } }).catch(() => {});
+    res.json({ ok: true, monto: d.monto, pct: d.pct, descripcion: r.descripcion });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete('/descuento', authTurno, async (req, res) => {
+  try { await require('./caja_extra').sacarDescuento(req.turno.id); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Anular / devolver una venta del turno (anular_venta.js) ──
 router.get('/ventas-turno', authTurno, async (req, res) => {
   try { res.json({ ventas: await require('./anular_venta').ventasDelTurno(req.turno.id) }); }
@@ -357,13 +389,21 @@ router.post('/finalizar-venta', authTurno, async (req, res) => {
     if (!turno_id || !metodo_pago) {
       return res.status(400).json({ error: 'Faltan campos requeridos' });
     }
-    if (!['efectivo', 'debito', 'credito', 'transferencia', 'mp', 'qr'].includes(String(metodo_pago))) {
+    if (!['efectivo', 'debito', 'credito', 'transferencia', 'mp', 'qr', 'mixto'].includes(String(metodo_pago))) {
       return res.status(400).json({ error: 'Medio de pago no válido' });
+    }
+    const CE = require('./caja_extra');
+    await CE.asegurar();
+    let extra = {};
+    if (metodo_pago === 'mixto') {
+      const m = await CE.validarMixto(turno_id, req.body);
+      if (!m.ok) return res.status(400).json({ error: m.error });
+      extra = { monto_efectivo: m.monto_efectivo, metodo_resto: m.metodo_resto };
     }
 
     await client.query('BEGIN');
 
-    const v = await require('./venta_core').cerrarVenta(client, turno_id, metodo_pago);
+    const v = await require('./venta_core').cerrarVenta(client, turno_id, metodo_pago, extra);
 
     await client.query('COMMIT');
 

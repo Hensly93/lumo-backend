@@ -5,6 +5,7 @@
 //   · bajar_precio     bajar un precio de venta desde la caja
 //   · egreso           sacar plata de la caja
 //   · anular_venta     anular o devolver una venta ya cobrada
+//   · descuento        hacer un descuento sobre el total
 // Cada pedido queda guardado (aprobado, rechazado, vencido o cancelado): así también queda registrado lo que se intentó.
 // Si algo falla acá adentro, la caja sigue funcionando (nunca se frena una venta por un error del control).
 const pool = require('./db');
@@ -19,7 +20,7 @@ const BLOQUEO_PIN_MIN = 15;
 const DIAS_BASE = 30;
 const TTL_RIESGO_MS = 30 * 60 * 1000;
 
-const TIPOS = ['sacar_producto', 'bajar_precio', 'egreso', 'anular_venta'];
+const TIPOS = ['sacar_producto', 'bajar_precio', 'egreso', 'anular_venta', 'descuento'];
 const fmt = (n) => '$' + Math.round(Math.abs(Number(n) || 0)).toLocaleString('es-AR');
 const mediana = (v) => { if (!v.length) return 0; const s = [...v].sort((a, b) => a - b); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 
@@ -121,6 +122,16 @@ async function evaluar(accion, db = pool, opts = {}) {
     const limite = Math.max(10000, 3 * (base.prom || 0)) * f;
     if (valor >= limite) return { requiere: true, motivo: `Sacar ${fmt(valor)} de la caja es más de lo habitual.` };
     if (turno.n >= 3 && valor >= 3000 * f) return { requiere: true, motivo: `Ya se hicieron ${turno.n} egresos en este turno.` };
+    return { requiere: false };
+  }
+  if (tipo === 'descuento') {
+    // Un descuento chico es parte de vender. Pide autorización si es grande o si se repite mucho en el turno.
+    const pct = Number(accion.pct) || 0;
+    const previos = (await db.query(
+      `SELECT COUNT(*)::int AS n FROM hechos_caja WHERE negocio_id = $1 AND turno_id = $2 AND tipo = 'descuento'`, [negocio_id, turno_id])).rows[0].n;
+    if (pct >= 25 * f) return { requiere: true, motivo: `Un descuento del ${Math.round(pct)}% necesita autorización.` };
+    if (valor >= 20000 * f) return { requiere: true, motivo: `Un descuento de ${fmt(valor)} necesita autorización.` };
+    if (previos >= (riesgo ? 2 : 4)) return { requiere: true, motivo: `Ya se hicieron ${previos} descuentos en este turno.` };
     return { requiere: false };
   }
   if (tipo === 'anular_venta') {

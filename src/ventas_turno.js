@@ -17,7 +17,7 @@ async function ventasDelTurno(db, t) {
   const r = await db.query(
     `SELECT
        COALESCE(SUM(monto),0) AS total_ventas,
-       COALESCE(SUM(CASE WHEN ${SQL_ES_DIGITAL} THEN monto ELSE 0 END),0) AS total_mp,
+       COALESCE(SUM(CASE WHEN metodo_pago = 'mixto' THEN monto - COALESCE(monto_efectivo, 0) WHEN ${SQL_ES_DIGITAL} THEN monto ELSE 0 END),0) AS total_mp,
        -- una venta anulada no cuenta como venta (la anulación es una fila en negativo: anular_venta.js)
        GREATEST(COUNT(*) FILTER (WHERE COALESCE(tipo,'venta') <> 'anulacion') - COUNT(*) FILTER (WHERE tipo = 'anulacion'), 0) AS cantidad_tx,
        COALESCE(SUM(monto) / NULLIF(GREATEST(COUNT(*) FILTER (WHERE COALESCE(tipo,'venta') <> 'anulacion') - COUNT(*) FILTER (WHERE tipo = 'anulacion'), 0), 0), 0) AS ticket_promedio
