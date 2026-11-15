@@ -397,6 +397,14 @@ router.get('/inicio', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /sala — "Tu negocio en vivo": lo que pasó, lo que está pasando y lo que viene (sala.js)
+router.get('/sala', auth, async (req, res) => {
+  try {
+    const suc = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
+    res.json(await require('./sala').sala(req.user.negocio_id, Number.isNaN(suc) ? null : suc));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /radiografia — hallazgos mas valiosos del negocio (con plata y evidencia). Ver radiografia.js
 router.get('/radiografia', auth, async (req, res) => {
   try {
