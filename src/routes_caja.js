@@ -488,6 +488,8 @@ router.post('/cierre', authTurno, async (req, res) => {
       'INSERT INTO conteos_caja(turno_id, tipo, monto_declarado) VALUES($1,$2,$3)',
       [turno_id, 'cierre', caja_cierre]
     );
+    // Ventas que quedaron en espera sin cobrar: se descartan y el dueño las ve en la actividad de la caja
+    await require('./venta_espera').descartarAlCerrar(req.turno);
 
     const estado = Math.abs(brechaPorc) > 10 ? 'critico' : Math.abs(brechaPorc) > 5 ? 'atencion' : 'ok';
     const brechaAbs = Math.abs(brecha);

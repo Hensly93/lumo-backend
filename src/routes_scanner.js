@@ -77,6 +77,16 @@ router.get('/producto', authTurno, async (req, res) => {
       [negocio_id, codigo]
     );
 
+    if (producto.rows.length === 0 && /^2\d{12}$/.test(String(codigo))) {
+      // Etiqueta de balanza: trae adentro el producto y el precio o el peso (balanza.js)
+      try {
+        const b = await require('./balanza').resolver(negocio_id, codigo);
+        if (b && b.producto && b.cantidad_kg > 0) return res.json({ existe: true, producto: b.producto, cantidad: b.cantidad_kg, balanza: { kg: Math.round(b.cantidad_kg * 1000) / 1000, importe: b.importe } });
+        if (b && b.sin_producto) return res.json({ existe: false, codigo, balanza_sin_producto: true, plu: b.plu,
+          error: `Es una etiqueta de balanza del producto ${b.plu}, pero ese número no está cargado. Cargá el producto con código ${b.plu} y su precio por kilo.` });
+        if (b && b.sin_precio) return res.json({ existe: false, codigo, error: `${b.producto.nombre} no tiene precio por kilo cargado.` });
+      } catch (e) { console.error('balanza:', e.message); }
+    }
     if (producto.rows.length === 0) {
       // Código que se unió a otro producto: se encuentra igual
       try { await require('./producto_identidad').asegurar(); const al = await pool.query('SELECT p.id, p.nombre, p.marca, p.categoria, p.precio_venta, p.unidad, p.codigo_barras FROM producto_codigos c JOIN productos p ON p.id=c.producto_id WHERE c.negocio_id=$1 AND c.codigo=$2 AND COALESCE(p.activo,true)', [negocio_id, codigo]); if (al.rows.length) return res.json({ existe: true, producto: al.rows[0] }); } catch (e) { /* sigue como código nuevo */ }
@@ -327,6 +337,25 @@ router.delete('/carrito/:turno_id/:item_id', authTurno, async (req, res) => {
 // Convierte carrito en transacción + transacciones_detalle y vacía carrito
 // Body: { turno_id, metodo_pago }
 // ─────────────────────────────────────────────────────────────────────
+// ── Venta en espera (venta_espera.js) ──
+router.post('/espera', authTurno, async (req, res) => {
+  try {
+    const r = await require('./venta_espera').guardar(req.turno.id, req.body && req.body.nota);
+    if (!r.ok) return res.status(400).json({ error: r.error });
+    res.json(r);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.get('/espera', authTurno, async (req, res) => {
+  try { res.json({ ventas: await require('./venta_espera').listar(req.turno.id) }); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.post('/espera/:id/retomar', authTurno, async (req, res) => {
+  try {
+    const r = await require('./venta_espera').retomar(req.turno.id, parseInt(req.params.id, 10));
+    if (!r.ok) return res.status(400).json({ error: r.error });
+    res.json(r);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Varios con precio libre y descuentos (caja_extra.js) ──
 router.post('/carrito-varios', authTurno, async (req, res) => {
   try {

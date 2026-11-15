@@ -650,4 +650,12 @@ IMPORTANTE: Devolvé SOLO el JSON, sin markdown ni texto adicional.`;
   }
 });
 
+// Balanza: cómo imprime sus etiquetas la balanza del negocio (balanza.js)
+router.get('/balanza', auth, async (req, res) => {
+  try { res.json(await require('./balanza').config(req.user.negocio_id)); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.put('/balanza', auth, express.json(), async (req, res) => {
+  try { res.json(await require('./balanza').guardarConfig(req.user.negocio_id, req.body || {})); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 module.exports = router;

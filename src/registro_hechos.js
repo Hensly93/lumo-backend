@@ -8,7 +8,7 @@
 // Registrar NUNCA rompe la caja: si algo falla, se ignora y la venta sigue.
 const pool = require('./db');
 
-const TIPOS = ['item_borrado', 'cantidad_reducida', 'precio_cambiado', 'producto_creado', 'egreso', 'venta_anulada', 'descuento'];
+const TIPOS = ['item_borrado', 'cantidad_reducida', 'precio_cambiado', 'producto_creado', 'egreso', 'venta_anulada', 'descuento', 'espera_descartada'];
 
 let lista = null;
 function asegurar(db = pool) {
