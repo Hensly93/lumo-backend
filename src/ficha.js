@@ -64,7 +64,7 @@ async function fichaProducto(negocioId, productoId, db = pool) {
 
   // Frases: lo importante primero
   const frases = [];
-  if (v.unidades > 0) frases.push(`En ${VENTANA} días vendiste ${d1(v.unidades)} ${p.unidad === 'kg' ? 'kg' : 'unidades'} (${$(v.plata)}), unas ${d1(porDiaU * 7)} por semana.`);
+  if (v.unidades > 0) frases.push(`En ${VENTANA} días vendiste ${d1(v.unidades)} ${p.unidad === 'kg' ? 'kg' : 'unidades'} (${$(v.plata)}), unas ${d1(porDiaU * 7)} ${p.unidad === 'kg' ? 'kg' : ''} por semana.`.replace('  ', ' '));
   else frases.push(`No se vendió en los últimos ${VENTANA} días.`);
   if (ganancia) frases.push(`Te deja ${$(ganancia.por_unidad)} por unidad (${ganancia.pct}%): en el mes, ${$(ganancia.mes)}.`);
   else frases.push('Cargá el costo para saber cuánto te deja.');
@@ -141,9 +141,12 @@ async function fichaEmpleado(negocioId, nombre, db = pool) {
   const comparar = (mio, equipoVal) => (equipoVal == null || equipoVal === 0 ? null : Math.round((mio / equipoVal - 1) * 100));
   const senales = [];
   const vsAnul = comparar(cuenta('venta_anulada') / turnos, porTurnoEquipo(['venta_anulada']));
+  const nadieMas = (tipos) => porTurnoEquipo(tipos) === 0;
   if (cuenta('venta_anulada') >= 2 && vsAnul != null && vsAnul >= 100) senales.push(`Anula ${vsAnul}% más ventas por turno que el resto del equipo.`);
+  else if (cuenta('venta_anulada') >= 3 && nadieMas(['venta_anulada'])) senales.push(`Anuló ${cuenta('venta_anulada')} ventas (${$(plataDe('venta_anulada'))}); el resto del equipo, ninguna.`);
   const vsDesc = comparar(cuenta('descuento') / turnos, porTurnoEquipo(['descuento']));
   if (cuenta('descuento') >= 3 && vsDesc != null && vsDesc >= 100) senales.push(`Hace ${vsDesc}% más descuentos por turno que el resto.`);
+  else if (cuenta('descuento') >= 3 && nadieMas(['descuento'])) senales.push(`Hizo ${cuenta('descuento')} descuentos (${$(plataDe('descuento'))}); el resto del equipo, ninguno.`);
   const sacados = cuenta('item_borrado') + cuenta('cantidad_reducida');
   const vsSac = comparar(sacados / turnos, porTurnoEquipo(['item_borrado', 'cantidad_reducida']));
   if (sacados >= 5 && vsSac != null && vsSac >= 100) senales.push(`Saca productos del carrito ${vsSac}% más que el resto.`);

@@ -47,6 +47,27 @@ async function itemsRevisar(negocioId, sucursalId, analisis, recs) {
     }
   } catch (e) { console.error('revisar/erm:', e.message); }
 
+  // 3b. Lo que hace cada persona en la caja: anulaciones, descuentos, ventas en espera sin cobrar (ficha.js)
+  try {
+    const db = require('./db');
+    const quienes = (await db.query(
+      `SELECT DISTINCT empleado FROM hechos_caja
+        WHERE negocio_id = $1 AND empleado IS NOT NULL AND creado >= NOW() - INTERVAL '30 days'
+          AND tipo IN ('venta_anulada','descuento','espera_descartada','item_borrado','cantidad_reducida')`, [negocioId])).rows;
+    for (const q of quienes.slice(0, 15)) {
+      const f = await require('./ficha').fichaEmpleado(negocioId, q.empleado);
+      // Las diferencias de caja y los conteos ya llegan por Fugas y Equipo: acá solo lo nuevo de la caja
+      const nuevas = ((f && f.senales) || []).filter((x) => !/cierres terminaron|conteo/.test(x));
+      if (!nuevas.length) continue;
+      items.push({
+        tipo: 'Caja', prioridad: 'atencion',
+        mensaje: `${q.empleado}: ${nuevas[0].charAt(0).toLowerCase() + nuevas[0].slice(1)}`,
+        accion: nuevas.length > 1 ? `Y ${nuevas.length - 1} cosa${nuevas.length > 2 ? 's' : ''} más. Miralo con calma: puede tener una buena razón.` : 'Miralo con calma y preguntá: puede tener una buena razón.',
+        timestamp: ts, datos: null, origen: 'caja', id: 'caja:' + q.empleado, url: '/ficha/persona/' + encodeURIComponent(q.empleado),
+      });
+    }
+  } catch (e) { console.error('revisar/caja:', e.message); }
+
   // 4. Recomendaciones de caja (solo si ninguna fuga de caja ya lo dice)
   if (!fugasCaja.length) {
     for (const r of (recs && recs.recomendaciones) || []) {

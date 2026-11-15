@@ -185,10 +185,11 @@ function construirAlertasSegmento(resultados, agregados, señalesSectorPorTurno,
       const nivel = confianza_pct > 80 ? 'ALTA' : confianza_pct > 50 ? 'MEDIA' : 'BAJA';
       const subeVenta = a.metrica === 'ventas_por_turno' && a.direccion === 'alto';
       const desvio = a.mediana ? Math.round(((a.valor - a.mediana) / a.mediana) * 100) : 0;
+      const fechaTxt = /^\d{4}-\d{2}-\d{2}/.test(String(a.fecha)) ? String(a.fecha).slice(8, 10) + '/' + String(a.fecha).slice(5, 7) : a.fecha; // 14/11, no 2026-11-14
       const turnoTxt = (NOMBRE_TURNO[a.turno] || a.turno) + (a.sucursal_id != null && nombresLocal[a.sucursal_id] ? ` (${nombresLocal[a.sucursal_id]})` : '');
       const insight = subeVenta
-        ? `Turno ${turnoTxt} del ${a.fecha}: las ventas estuvieron ${Math.abs(desvio)}% por encima de lo normal para ese turno (unos $${impacto.toLocaleString('es-AR')} más).`
-        : `Algo raro en el turno ${turnoTxt} del ${a.fecha}: ${NOMBRE_METRICA[a.metrica]} ${a.direccion === 'bajo' ? (a.metrica === 'ventas_por_turno' ? 'bajaron' : 'bajó') : (a.metrica === 'ventas_por_turno' ? 'subieron' : 'subió')} ${Math.abs(desvio)}% contra lo normal de ese turno. Impacto estimado: $${impacto.toLocaleString('es-AR')}.`;
+        ? `Turno ${turnoTxt} del ${fechaTxt}: las ventas estuvieron ${Math.abs(desvio)}% por encima de lo normal para ese turno (unos $${impacto.toLocaleString('es-AR')} más).`
+        : `Algo raro en el turno ${turnoTxt} del ${fechaTxt}: ${NOMBRE_METRICA[a.metrica]} ${a.direccion === 'bajo' ? (a.metrica === 'ventas_por_turno' ? 'bajaron' : 'bajó') : (a.metrica === 'ventas_por_turno' ? 'subieron' : 'subió')} ${Math.abs(desvio)}% contra lo normal de ese turno. Impacto estimado: $${impacto.toLocaleString('es-AR')}.`;
 
       return {
         tipo: subeVenta ? 'TURNO_VENTAS_ALTAS' : 'ANOMALIA_TURNO',
