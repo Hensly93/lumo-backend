@@ -51,6 +51,41 @@ const TOOLS = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'ficha_producto',
+    description: 'La ficha completa de UN producto, con los mismos números que la pantalla de la ficha: cuánto se vende y cuándo, cuánto deja, para cuántos días alcanza el stock, si el proveedor lo subió, quién cambió su precio y quién lo vende. Usar para preguntas sobre un producto puntual (cómo viene la yerba, para cuánto me alcanza la coca, cuánto me deja el café).',
+    input_schema: { type: 'object', properties: { nombre: { type: 'string', description: 'Nombre del producto, como lo dice el dueño.' } }, required: ['nombre'] },
+  },
+  {
+    name: 'ficha_persona',
+    description: 'La ficha de UNA persona del equipo (últimos 30 días): cuánto vende, cómo cierra la caja y qué hace en la caja (anulaciones, descuentos, productos sacados), comparada con el resto del equipo. Hablá de hechos de la caja, nunca de culpas.',
+    input_schema: { type: 'object', properties: { nombre: { type: 'string', description: 'Nombre del empleado.' } }, required: ['nombre'] },
+  },
+  {
+    name: 'ficha_turno',
+    description: 'La cuenta de la caja de UN turno paso a paso (con cuánto abrió, ventas en efectivo, gastos, cuánto tenía que haber y cuánto contó) y lo que pasó en la caja. Sin datos trae el último turno cerrado. Usar para preguntas como por qué faltó plata en un turno o cómo cerró el último turno.',
+    input_schema: { type: 'object', properties: { turno_id: { type: 'integer', description: 'Número de turno, opcional.' }, empleado: { type: 'string', description: 'Trae el último turno cerrado de esa persona, opcional.' } } },
+  },
+  {
+    name: 'ficha_proveedor',
+    description: 'La ficha de UN proveedor: cada cuánto se le compra, cuánto, qué productos subió en la última compra y cuánta ganancia sacan esas subas por mes.',
+    input_schema: { type: 'object', properties: { nombre: { type: 'string', description: 'Nombre del proveedor.' } }, required: ['nombre'] },
+  },
+  {
+    name: 'que_pedir',
+    description: 'Qué productos se van a terminar pronto y cuánto pedir para cubrir 2 semanas, agrupado por proveedor (pantalla Pedidos).',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'que_mirar_hoy',
+    description: 'Lo que el dueño tiene que mirar hoy (la misma lista que el Inicio y la pantalla En vivo) más cómo viene el día y cómo se espera mañana.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'precision_lumobi',
+    description: 'Qué tan bien viene acertando LumoBi en este negocio: cuántas predicciones acertó, cuántos avisos le sirvieron al dueño, cuántos consejos funcionaron y qué avisos se ajustó solo. Usar cuando preguntan si pueden confiar en LumoBi o qué tan bien predice.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
     name: 'plata_recuperada',
     description: 'Cuánta plata recuperó el dueño con las acciones que probó, y cuáles se están midiendo todavía.',
     input_schema: { type: 'object', properties: {} },
@@ -143,6 +178,72 @@ async function marcasTop(negocioId, input, db) {
   };
 }
 
+// ── Fichas: NICOLE usa EXACTAMENTE el mismo código que las pantallas, así nunca dice un número distinto ──
+const sinTildes = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+// Busca por nombre sin importar mayúsculas ni tildes. Una sola coincidencia → esa; varias → las lista para preguntar.
+function elegir(lista, texto, clave = (x) => x) {
+  const q = sinTildes(texto);
+  if (!q) return { vacio: true };
+  const exactos = lista.filter((x) => sinTildes(clave(x)) === q);
+  if (exactos.length === 1) return { uno: exactos[0] };
+  const parecidos = (exactos.length ? exactos : lista.filter((x) => sinTildes(clave(x)).includes(q)));
+  if (parecidos.length === 1) return { uno: parecidos[0] };
+  return parecidos.length ? { varios: parecidos.slice(0, 6) } : { ninguno: true };
+}
+const resumirProducto = (f) => ({ producto: f.producto.nombre, frases: f.frases, vendidas_por_semana: f.ventas.por_semana, mejor_dia: f.cuando.mejor_dia, hora_pico: f.cuando.hora_pico,
+  ganancia: f.ganancia, stock: f.stock, proveedor_suba_pct: f.proveedor.suba_pct, ultimos_cambios_de_precio: (f.cambios_precio || []).slice(0, 3), quien_lo_vende: f.quien_lo_vende.slice(0, 3), ver_en: `/ficha/producto/${f.producto.id}` });
+
+async function fichas(nombre, input, negocioId, db) {
+  const F = require('./ficha');
+  if (nombre === 'ficha_producto') {
+    const l = (await db.query('SELECT id, nombre FROM productos WHERE negocio_id = $1 AND COALESCE(activo, true)', [negocioId])).rows;
+    const e = elegir(l, input.nombre, (x) => x.nombre);
+    if (e.uno) return resumirProducto(await F.fichaProducto(negocioId, e.uno.id, db));
+    if (e.varios) return { aclarar: 'Hay varios productos parecidos. Preguntale a cuál se refiere.', opciones: e.varios.map((x) => x.nombre) };
+    return { error: 'No encontré ese producto en el catálogo.' };
+  }
+  if (nombre === 'ficha_persona') {
+    const l = (await db.query(`SELECT DISTINCT nombre_empleado AS n FROM turnos_caja WHERE negocio_id = $1 AND nombre_empleado IS NOT NULL`, [negocioId])).rows;
+    const e = elegir(l, input.nombre, (x) => x.n);
+    if (e.varios) return { aclarar: 'Hay varias personas con ese nombre.', opciones: e.varios.map((x) => x.n) };
+    if (!e.uno) return { error: 'No encontré a esa persona entre los turnos de caja.' };
+    const f = await F.fichaEmpleado(negocioId, e.uno.n, db);
+    if (!f) return { error: 'Esa persona no tiene turnos en los últimos 30 días.' };
+    return { persona: f.empleado, frases: f.frases, senales: f.senales, ventas: f.ventas, caja: f.caja, acciones_en_la_caja: f.acciones, turnos_recientes: (f.turnos_recientes || []).slice(0, 5), ver_en: `/ficha/persona/${encodeURIComponent(f.empleado)}` };
+  }
+  if (nombre === 'ficha_turno') {
+    let id = Number(input.turno_id) || null;
+    if (!id) {
+      const emp = input.empleado ? (await db.query(`SELECT DISTINCT nombre_empleado AS n FROM turnos_caja WHERE negocio_id = $1 AND nombre_empleado IS NOT NULL`, [negocioId])).rows : null;
+      const e = emp ? elegir(emp, input.empleado, (x) => x.n) : null;
+      if (emp && !e.uno) return { error: 'No encontré a esa persona.' };
+      const r = await db.query(`SELECT id FROM turnos_caja WHERE negocio_id = $1 AND estado = 'cerrado' AND ($2::text IS NULL OR nombre_empleado = $2) ORDER BY hora_apertura DESC LIMIT 1`, [negocioId, e ? e.uno.n : null]);
+      id = r.rows[0] && r.rows[0].id;
+    }
+    const f = id ? await F.fichaTurno(negocioId, id, db) : null;
+    if (!f) return { error: 'No encontré ese turno.' };
+    return { turno: f.turno, frases: f.frases, senales: f.senales, cuenta: f.cuenta.map((c) => `${c.paso}: $${c.monto}`), totales: f.totales, lo_que_paso_en_la_caja: f.hechos.slice(0, 8).map((h) => `${h.hora} ${h.tipo}${h.detalle ? ' (' + h.detalle + ')' : ''}`), mas_vendidos: f.mas_vendidos, ver_en: `/ficha/turno/${f.turno.id}` };
+  }
+  if (nombre === 'ficha_proveedor') {
+    const l = (await db.query(`SELECT DISTINCT proveedor AS n FROM compras WHERE negocio_id = $1 AND proveedor IS NOT NULL`, [negocioId]).catch(() => ({ rows: [] }))).rows;
+    const e = elegir(l, input.nombre, (x) => x.n);
+    if (e.varios) return { aclarar: 'Hay varios proveedores parecidos.', opciones: e.varios.map((x) => x.n) };
+    if (!e.uno) return { error: 'No encontré ese proveedor en las facturas cargadas.' };
+    const f = await F.fichaProveedor(negocioId, e.uno.n, db);
+    return { proveedor: f.proveedor, frases: f.frases, resumen: f.resumen, subieron: f.subieron.slice(0, 5), ver_en: `/ficha/proveedor/${encodeURIComponent(f.proveedor)}` };
+  }
+  if (nombre === 'precision_lumobi') return { ...(await require('./precision').precision(negocioId, db)), ver_en: '/oportunidades' };
+  if (nombre === 'que_pedir') {
+    const r = await require('./pedidos').calcular(negocioId, db);
+    return { ...r, por_proveedor: (r.por_proveedor || []).slice(0, 5).map((g) => ({ ...g, items: (g.items || []).slice(0, 6) })), ver_en: '/pedidos' };
+  }
+  if (nombre === 'que_mirar_hoy') {
+    const s = await require('./sala').sala(negocioId, null, db);
+    return { fecha: s.fecha, para_mirar: s.revisar, ahora: s.ahora, viene: s.viene, ver_en: '/en-vivo' };
+  }
+  return null;
+}
+
 async function ejecutar(nombre, input, negocioId, db = pool) {
   input = input && typeof input === 'object' ? input : {};
   if (nombre === 'ventas_periodo') return ventasPeriodo(negocioId, input, db);
@@ -158,6 +259,7 @@ async function ejecutar(nombre, input, negocioId, db = pool) {
       })),
     };
   }
+  if (['ficha_producto', 'ficha_persona', 'ficha_turno', 'ficha_proveedor', 'que_pedir', 'que_mirar_hoy', 'precision_lumobi'].includes(nombre)) return fichas(nombre, input, negocioId, db);
   if (nombre === 'plata_recuperada') return require('./hallazgos').resumenRecuperado(negocioId);
   return { error: 'tool desconocida: ' + nombre };
 }

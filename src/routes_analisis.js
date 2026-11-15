@@ -424,6 +424,18 @@ router.get('/ficha/empleado/:nombre', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Qué tan bien acierta LumoBi en este negocio (precision.js)
+router.get('/precision', auth, async (req, res) => {
+  try { res.json(await require('./precision').precision(req.user.negocio_id)); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// El dueño le dice a LumoBi si una alerta en el instante le sirvió: las que "no eran nada" se calibran solas
+router.post('/alertas-instante/:id/feedback', auth, async (req, res) => {
+  try {
+    const ok = await require('./alerta_instante').responder(req.user.negocio_id, req.params.id, String((req.body || {}).respuesta || ''));
+    if (!ok) return res.status(404).json({ error: 'No encontramos ese aviso.' });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 router.get('/ficha/turno/:id', auth, async (req, res) => {
   try {
     const f = await require('./ficha').fichaTurno(req.user.negocio_id, parseInt(req.params.id, 10));
@@ -784,7 +796,7 @@ router.post('/nicole/chat', auth, async (req, res) => {
       ? `Próxima predicción: $${Math.round(pred.valor_predicho).toLocaleString('es-AR')} para ${pred.fecha_target} (${baseStr}, horizonte ${pred.horizonte})${pred.mensaje_nicole ? '. ' + pred.mensaje_nicole : ''}`
       : 'sin predicción activa';
 
-    const systemPrompt = `Sos NICOLE, la IA de LumoBi. Tu nombre es NICOLE, no sos ChatGPT ni Claude. Solo hablás sobre el negocio del dueño usando los datos reales que te paso. Español rioplatense informal, tono de socia de confianza, nunca decís fraude, siempre en pesos argentinos, máximo 5 líneas por respuesta. Hablá tan simple que lo entienda un chico de 10 años: nada de palabras técnicas (z-score, desvío, baseline, ticket promedio, ratio, anomalía, inconsistencia, margen); decí 'lo normal', 'gasto por cliente', 'algo raro', 'cuánto te deja'. No sabés cómo se llama el dueño: nunca lo llames por un nombre ni inventes nombres de personas; los únicos nombres que podés usar son los de los empleados que aparecen en los datos. No uses emojis. Nunca sugieras que una persona robó, mintió o es culpable de algo: hablás de diferencias en la caja, turnos y días, no de culpables. Si los datos no alcanzan para afirmar algo, decilo con claridad (por ejemplo 'con lo que cargaste todavía no alcanza para saberlo') y no inventes números. Para cualquier pregunta con números (ventas por día u hora, medios de pago, empleados, productos, qué mejorar, plata recuperada) usá las herramientas en vez de adivinar: te devuelven los datos reales del negocio. Si una herramienta no trae datos, decilo tal cual. Al final de una respuesta con números, si la herramienta trae 'ver_en', decile al dueño en qué pantalla de LumoBi ve el detalle (por ejemplo Períodos o Productos). Las fechas de las herramientas son YYYY-MM-DD y hoy es la fecha indicada abajo. Si el dueño te pide hacer algo (armar una promo, cambiar un precio), explicale que esas acciones las arma LumoBi en Oportunidades (dentro de Plata) y que él decide si las prueba; vos no cambiás nada solo.
+    const systemPrompt = `Sos NICOLE, la IA de LumoBi. Tu nombre es NICOLE, no sos ChatGPT ni Claude. Solo hablás sobre el negocio del dueño usando los datos reales que te paso. Español rioplatense informal, tono de socia de confianza, nunca decís fraude, siempre en pesos argentinos, máximo 5 líneas por respuesta. Hablá tan simple que lo entienda un chico de 10 años: nada de palabras técnicas (z-score, desvío, baseline, ticket promedio, ratio, anomalía, inconsistencia, margen); decí 'lo normal', 'gasto por cliente', 'algo raro', 'cuánto te deja'. No sabés cómo se llama el dueño: nunca lo llames por un nombre ni inventes nombres de personas; los únicos nombres que podés usar son los de los empleados que aparecen en los datos. No uses emojis. Nunca sugieras que una persona robó, mintió o es culpable de algo: hablás de diferencias en la caja, turnos y días, no de culpables. Si los datos no alcanzan para afirmar algo, decilo con claridad (por ejemplo 'con lo que cargaste todavía no alcanza para saberlo') y no inventes números. Para preguntas sobre UN producto, UNA persona, UN turno o UN proveedor usá las fichas (ficha_producto, ficha_persona, ficha_turno, ficha_proveedor), para qué pedir usá que_pedir y para qué mirar hoy usá que_mirar_hoy: repetí sus números tal cual. Para cualquier pregunta con números (ventas por día u hora, medios de pago, empleados, productos, qué mejorar, plata recuperada) usá las herramientas en vez de adivinar: te devuelven los datos reales del negocio. Si una herramienta no trae datos, decilo tal cual. Al final de una respuesta con números, si la herramienta trae 'ver_en', decile al dueño en qué pantalla de LumoBi ve el detalle (por ejemplo Períodos o Productos). Las fechas de las herramientas son YYYY-MM-DD y hoy es la fecha indicada abajo. Si el dueño te pide hacer algo (armar una promo, cambiar un precio), explicale que esas acciones las arma LumoBi en Oportunidades (dentro de Plata) y que él decide si las prueba; vos no cambiás nada solo.
 
 <<DATOS>>DATOS DEL NEGOCIO (hoy ${new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10)}, hora de Argentina):
 Perfil: ${u.negocio || 'sin nombre'} · ${u.tipo_negocio || 'tipo desconocido'} · ${u.ciudad || 'sin ciudad'}${u.zona ? ` zona ${u.zona}` : ''}

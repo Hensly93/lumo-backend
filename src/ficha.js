@@ -64,12 +64,14 @@ async function fichaProducto(negocioId, productoId, db = pool) {
 
   // Frases: lo importante primero
   const frases = [];
-  if (v.unidades > 0) frases.push(`En ${VENTANA} días vendiste ${d1(v.unidades)} ${p.unidad === 'kg' ? 'kg' : 'unidades'} (${$(v.plata)}), unas ${d1(porDiaU * 7)} ${p.unidad === 'kg' ? 'kg' : ''} por semana.`.replace('  ', ' '));
+  const uni = p.unidad === 'kg' ? 'kg' : (Math.abs(v.unidades - 1) < 0.001 ? 'unidad' : 'unidades');
+  if (v.unidades > 0) frases.push(`En ${VENTANA} días vendiste ${d1(v.unidades)} ${uni} (${$(v.plata)}), unas ${d1(porDiaU * 7)}${p.unidad === 'kg' ? ' kg' : ''} por semana.`);
   else frases.push(`No se vendió en los últimos ${VENTANA} días.`);
-  if (ganancia) frases.push(`Te deja ${$(ganancia.por_unidad)} por unidad (${ganancia.pct}%): en el mes, ${$(ganancia.mes)}.`);
+  if (ganancia && ganancia.por_unidad < 0) frases.push(`Lo vendés por debajo de lo que te cuesta: perdés ${$(-ganancia.por_unidad)} por cada unidad (${$(-ganancia.mes)} en el mes). Revisá el precio o el costo cargado.`);
+  else if (ganancia) frases.push(`Te deja ${$(ganancia.por_unidad)} por unidad (${d1(ganancia.pct)}%): en el mes, ${$(ganancia.mes)}.`);
   else frases.push('Cargá el costo para saber cuánto te deja.');
   if (diasStock != null) frases.push(diasStock <= 3 ? `Te quedan ${d1(p.stock)}: alcanzan para ${diasStock} ${diasStock === 1 ? 'día' : 'días'}. Pedí ya.` : diasStock > 90 ? `Te quedan ${d1(p.stock)}: tenés para más de 3 meses, no hace falta pedir.` : `Te quedan ${d1(p.stock)}: alcanzan para unos ${diasStock} días.`);
-  if (subaProveedor != null && subaProveedor >= 3) frases.push(`${ultCompra.proveedor || 'El proveedor'} lo subió ${subaProveedor}% en la última compra.${ganancia ? '' : ''}`);
+  if (subaProveedor != null && subaProveedor >= 3) frases.push(`${ultCompra.proveedor || 'El proveedor'} lo subió ${d1(subaProveedor)}% en la última compra.`);
   if (tendencia != null && Math.abs(tendencia) >= 20) frases.push(`Esta semana se vendió ${Math.abs(tendencia)}% ${tendencia > 0 ? 'más' : 'menos'} que la anterior.`);
   if (anul.rows[0].n > 0) frases.push(`Se anularon ${anul.rows[0].n} ${anul.rows[0].n === 1 ? 'venta' : 'ventas'} con este producto (${d1(anul.rows[0].u)} unidades).`);
 
@@ -222,6 +224,7 @@ async function fichaTurno(negocioId, turnoId, db = pool) {
                 FROM hechos_caja WHERE negocio_id = $1 AND turno_id = $2 ORDER BY creado`, [negocioId, t.id]).catch(() => ({ rows: [] })),
   ]);
 
+  const avisosTurno = (await db.query(`SELECT id, titulo, cuerpo, feedback, to_char(creado - INTERVAL '3 hours','HH24:MI') AS hora FROM alertas_instante WHERE negocio_id = $1 AND turno_id = $2 ORDER BY id`, [negocioId, t.id]).catch(() => ({ rows: [] }))).rows;
   const egr = egresos.rows.reduce((s, e) => s + e.monto, 0);
   const apertura = Number(t.caja_apertura) || 0;
   const efectivoVentas = v.total_ventas - v.total_mp;
@@ -276,6 +279,7 @@ async function fichaTurno(negocioId, turnoId, db = pool) {
     egresos: egresos.rows,
     conteos: conteos.rows,
     hechos: hechos.rows.map((h) => ({ ...h, detalle: detalleHecho(h) })),
+    avisos: avisosTurno,
   };
 }
 

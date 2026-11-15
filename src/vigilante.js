@@ -467,11 +467,27 @@ async function detBriefing(db, p) {
     } else if (cl.tmax >= 33) partes.push(`Hoy hace mucho calor (máxima de ${Math.round(cl.tmax)}°).`);
     else if (cl.tmax <= 8) partes.push(`Hoy hace mucho frío (máxima de ${Math.round(cl.tmax)}°).`);
   }
+  // Palantir: el resumen de la mañana también dice qué mirar hoy y qué pedir (mismas listas que Inicio, En vivo y Pedidos)
+  let url = '/predicciones', boton = 'Ver predicciones';
+  try {
+    const analisis = await require('./motor').analizarNegocio(p.negocioId, null);
+    const rev = (await require('./revisar').itemsRevisar(p.negocioId, null, analisis, null)).items.filter((x) => ['critico', 'inconsistencia', 'atencion'].includes(x.prioridad));
+    if (rev.length) {
+      partes.push(`Para mirar hoy: ${rev[0].mensaje}${rev.length > 1 ? ` Y ${rev.length - 1} ${rev.length - 1 === 1 ? 'cosa más' : 'cosas más'}.` : ''}`);
+      url = '/en-vivo'; boton = 'Ver qué mirar';
+    }
+    const ped = await require('./pedidos').calcular(p.negocioId, db);
+    const ya = (ped.items || []).filter((x) => x.urgencia === 'ya');
+    if (ya.length) {
+      partes.push(`${ya.length === 1 ? 'Se termina' : 'Se terminan'} en 3 días o menos: ${ya.slice(0, 3).map((x) => x.nombre).join(', ')}${ya.length > 3 ? ` y ${ya.length - 3} más` : ''}.`);
+      if (!rev.length) { url = '/pedidos'; boton = 'Ver qué pedir'; }
+    }
+  } catch (e) { console.error('[VIGILANTE] briefing/revisar:', e.message); }
   if (!partes.length) return [];
   return [{
     tipo: 'briefing_matutino', contexto: reloj.hoy, pref: 'resumen_diario', prioridad: 4,
     titulo: nombre ? `Buen día, ${nombre}: así viene hoy` : 'Buen día: así viene hoy',
-    mensaje: partes.join(' '), url: '/predicciones', boton: 'Ver predicciones',
+    mensaje: partes.join(' '), url, boton,
   }];
 }
 
@@ -941,4 +957,4 @@ async function correrVigilante(db = pool, opts = {}) {
   return resumen;
 }
 
-module.exports = { correrVigilante, relojAR, mediana, preferenciaActiva, detPrueba, detCancelacion, detPago, detMP, detHallazgos };
+module.exports = { detBriefing, correrVigilante, relojAR, mediana, preferenciaActiva, detPrueba, detCancelacion, detPago, detMP, detHallazgos };
