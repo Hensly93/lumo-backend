@@ -514,7 +514,7 @@ async function detRitmo(db, p) {
       tipo: 'ritmo_bajo', contexto: reloj.hoy, pref: 'alertas_medias', prioridad: 2,
       titulo: 'Hoy vas más flojo de lo normal',
       mensaje: `Llevás ${pesos(hoyD.total)} y un ${dia} normal, a esta hora, llevás unos ${pesos(t.tipico)}: ${Math.round((1 - ratio) * 100)}% menos. Fijate si hay algo puntual (clima, falta de personal, stock) o si falta cargar ventas.`,
-      url: '/', boton: 'Ver mi negocio',
+      url: '/en-vivo', boton: 'Ver en vivo',
     }];
   }
   if (ratio >= 1.4) {
@@ -522,7 +522,7 @@ async function detRitmo(db, p) {
       tipo: 'ritmo_alto', contexto: reloj.hoy, pref: 'alertas_medias', prioridad: 6,
       titulo: 'Hoy viene fuerte',
       mensaje: `Llevás ${pesos(hoyD.total)} y un ${dia} normal, a esta hora, llevás unos ${pesos(t.tipico)}: ${Math.round((ratio - 1) * 100)}% más. Revisá que tengas stock y personal para lo que queda del día.`,
-      url: '/', boton: 'Ver mi negocio',
+      url: '/en-vivo', boton: 'Ver en vivo',
     }];
   }
   return [];

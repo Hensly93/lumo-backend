@@ -92,7 +92,7 @@ async function detPicoProximo(db, p) {
     mensaje: recorte(`Ahí entra el ${Math.round(f.share * 100)}% de lo del día, unos ${pesos(f.por_dia)}.`
       + (lista.length ? ` Lo que más sale en esa franja: ${lista.join(', ')} — fijate que no falte.` : '')
       + ' Caja con cambio y nadie de descanso.'),
-    url: '/', boton: 'Ver mi negocio',
+    url: '/en-vivo', boton: 'Ver en vivo',
   }];
 }
 
@@ -166,7 +166,7 @@ async function detProyeccionDia(db, p) {
     mensaje: recorte(`Llevás ${pesos(pr.hasta_ahora)}. ${pr.texto} `
       + (baja ? 'Si no hay un motivo claro (clima, horario), probá una promo en lo que queda del día o revisá que se estén registrando todas las ventas.'
               : 'Revisá que no te falte mercadería para lo que queda del día.')),
-    url: '/', boton: 'Ver mi negocio',
+    url: '/en-vivo', boton: 'Ver en vivo',
   }];
 }
 
@@ -240,7 +240,7 @@ async function detHallazgoWow(db, p) {
       tipo: 'hallazgo_wow', contexto: `${h.id}|${reloj.hoy}`, pref: 'alertas_medias', prioridad: 4,
       titulo: recorte(h.titulo, 110),
       mensaje: recorte(`${h.descripcion} ${h.recomendacion}`),
-      url: '/', boton: 'Ver el hallazgo',
+      url: '/oportunidades', boton: 'Ver la oportunidad',
     }];
   }
   return [];

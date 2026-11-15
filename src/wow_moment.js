@@ -140,9 +140,9 @@ async function patronesBasicos(usuario_id, db = pool, negocioForzado = null) {
         titulo: cap(mejor.nombre) + ' concentra el ' + pct(pMejor) + '% de tus ventas',
         descripcion: franjas.map((f) => cap(f.nombre) + ': ' + peso(f.total) + ' (' + pct((f.total / base) * 100) + '%)').join('. ') + '.',
         duele: cap(peor.nombre) + ' es la franja más baja: aporta el ' + pct(pPeor) + '% de lo que vendés.',
-        recomendacion: 'Revisá si ' + peor.nombre + ' tiene la dotación y el stock que necesita. NICOLE lo va a seguir midiendo turno a turno.',
+        recomendacion: 'En ' + mejor.nombre + ' tené todo listo: caja abierta, cambio y mercadería repuesta. Usá ' + peor.nombre + ' para reponer y ordenar.',
         advertencia: advertencia,
-        impacto_pesos: gap,
+        impacto_pesos: 0, // es cómo se reparte la venta en el día, no plata perdida (antes mostraba millones sin sentido)
         confianza: confianza,
         detalle: { franjas: franjas.map((f) => ({ franja: f.id, total: Math.round(f.total), ventas: f.n })) },
       });

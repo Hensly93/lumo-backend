@@ -47,7 +47,7 @@ const TOOLS = [
   },
   {
     name: 'hallazgos_negocio',
-    description: 'Lo más importante que detectó LumoBi hoy en el negocio (la Radiografía): problemas y oportunidades con su monto estimado, y las acciones que LumoBi puede armar. Usar cuando el dueño pregunta dónde pierde plata o qué debería mejorar.',
+    description: 'Lo más importante que detectó LumoBi hoy en el negocio (pantalla Oportunidades, dentro de Plata): problemas y oportunidades con su monto estimado, y las acciones que LumoBi puede armar. Usar cuando el dueño pregunta dónde pierde plata o qué debería mejorar.',
     input_schema: { type: 'object', properties: {} },
   },
   {
@@ -151,7 +151,7 @@ async function ejecutar(nombre, input, negocioId, db = pool) {
   if (nombre === 'hallazgos_negocio') {
     const r = await require('./hallazgos').radiografia(negocioId);
     return {
-      datos_suficientes: r.suficiente, ver_en: '/',
+      datos_suficientes: r.suficiente, ver_en: '/oportunidades',
       hallazgos: (r.hallazgos || []).map((h) => ({
         titulo: h.titulo, detalle: h.detalle, monto: h.monto_texto || h.monto, es_buena_noticia: !!h.positivo,
         acciones_que_lumobi_puede_armar: (h.acciones || []).map((a) => a.titulo),
