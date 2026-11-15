@@ -337,6 +337,16 @@ router.delete('/carrito/:turno_id/:item_id', authTurno, async (req, res) => {
 // Convierte carrito en transacción + transacciones_detalle y vacía carrito
 // Body: { turno_id, metodo_pago }
 // ─────────────────────────────────────────────────────────────────────
+// ── Ticket de una venta del turno (ticket.js) ──
+router.get('/ticket/:id', authTurno, async (req, res) => {
+  try {
+    const T = require('./ticket');
+    const tk = await T.armar(req.turno, parseInt(req.params.id, 10));
+    if (!tk) return res.status(404).json({ error: 'No encontramos esa venta en este turno.' });
+    res.json({ ...tk, texto: T.texto(tk) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Venta en espera (venta_espera.js) ──
 router.post('/espera', authTurno, async (req, res) => {
   try {
