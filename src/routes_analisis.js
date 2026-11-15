@@ -397,6 +397,22 @@ router.get('/inicio', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Fichas: todo lo de un producto o de una persona del equipo, conectado (ficha.js)
+router.get('/ficha/producto/:id', auth, async (req, res) => {
+  try {
+    const f = await require('./ficha').fichaProducto(req.user.negocio_id, parseInt(req.params.id, 10));
+    if (!f) return res.status(404).json({ error: 'No encontramos ese producto.' });
+    res.json(f);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.get('/ficha/empleado/:nombre', auth, async (req, res) => {
+  try {
+    const f = await require('./ficha').fichaEmpleado(req.user.negocio_id, String(req.params.nombre).slice(0, 80));
+    if (!f) return res.status(404).json({ error: 'No hay turnos de esa persona en los últimos 30 días.' });
+    res.json(f);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /sala — "Tu negocio en vivo": lo que pasó, lo que está pasando y lo que viene (sala.js)
 router.get('/sala', auth, async (req, res) => {
   try {
