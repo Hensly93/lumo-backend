@@ -226,7 +226,7 @@ async function informeTurno(negocioId, opts = {}, db = pool) {
     turno_anterior_total: anterior != null ? Math.round(anterior) : null,
     rubro,
     hechos: hechos.map(({ peso, ...h }) => h),
-    titulo: `Turno ${turnoTxt}${t.nombre_empleado ? ' de ' + t.nombre_empleado : ''}: ${$(total)} en ${n} ventas`,
+    titulo: `Turno ${turnoTxt}${t.nombre_empleado ? ' de ' + t.nombre_empleado : ''}: ${$(total)} en ${n} ${n === 1 ? "venta" : "ventas"}`,
     resumen: [hechos[0], hechos[1]].filter(Boolean).map((h) => h.texto).join(' '),
     accion: principal ? principal.accion : '',
   };

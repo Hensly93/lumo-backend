@@ -278,12 +278,13 @@ async function promoParaHallazgo(negocioId, id, accionId, db = pool) {
 // un hallazgo que "desaparece" porque dejaron de entrar ventas no es plata recuperada.
 async function evaluarRecuperos(negocioId, db = pool, ahora = new Date(), ctx = null) {
   await asegurarTabla(db);
-  if (!ctx || !ctx.suficiente) return 0;
+  if (!ctx) { await obtener(negocioId, db).catch(() => null); ctx = (cache.get(negocioId) || {}).ctx; } // tras un reinicio no hay memoria: se recalcula
+  if (!ctx || !ctx.suficiente) return [];
   const r = await db.query(
-    `SELECT id, detector, monto_al_resolver::float AS antes, monto::float AS actual, vigente FROM hallazgos
+    `SELECT id, detector, titulo, accion_titulo, monto_al_resolver::float AS antes, monto::float AS actual, vigente FROM hallazgos
       WHERE negocio_id = $1 AND estado = 'resuelto' AND resuelto_en IS NOT NULL AND evaluado_en IS NULL
         AND resuelto_en <= $2::timestamptz - ($3::int * INTERVAL '1 day')`, [negocioId, ahora, DIAS_MEDIR]);
-  let n = 0;
+  const medidos = [];
   for (const h of r.rows) {
     let rec = null, medir = null;
     if (MENSUALES.includes(h.detector) && h.antes > 0) {
@@ -292,9 +293,9 @@ async function evaluarRecuperos(negocioId, db = pool, ahora = new Date(), ctx = 
       rec = mejora >= h.antes * MIN_MEJORA ? Math.round(mejora) : 0;
     }
     await db.query('UPDATE hallazgos SET recuperado = $2, monto_al_medir = $3, evaluado_en = NOW() WHERE id = $1', [h.id, rec, medir]);
-    n++;
+    medidos.push({ id: h.id, titulo: h.titulo, accion: h.accion_titulo, antes: h.antes, ahora: medir, recuperado: rec });
   }
-  return n;
+  return medidos;
 }
 
 async function resumenRecuperado(negocioId, db = pool, opts = {}) {

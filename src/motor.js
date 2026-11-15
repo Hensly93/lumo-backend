@@ -211,7 +211,7 @@ function construirAlertasSegmento(resultados, agregados, señalesSectorPorTurno,
         cantidad_transacciones: a.cantidad_transacciones,
         es_positiva: subeVenta,
         insight,
-        accion: subeVenta ? '' : `Revisá el cierre y los tickets del turno ${turnoTxt} del ${a.fecha}.`,
+        accion: subeVenta ? '' : `Revisá el cierre y los tickets del turno ${turnoTxt} del ${fechaTxt}.`,
       };
     });
 }

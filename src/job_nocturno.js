@@ -296,6 +296,45 @@ async function snapshotsERM(db) {
 
 // ─── Paso 6: Snapshots Goteo diarios + notificaciones ────────────────────────
 
+// Cerrar el círculo: 4 semanas después de que el dueño marcó "Ya lo resolví", LumoBi mide si la pérdida bajó
+// y le cuenta el resultado (hallazgos.evaluarRecuperos). Antes solo se medía si el dueño abría Oportunidades.
+async function medirConsejos(db) {
+  const H = require('./hallazgos');
+  const negs = await db.query(`SELECT id FROM negocios WHERE deletion_scheduled_at IS NULL`);
+  let medidos = 0, avisos = 0;
+  for (const { id } of negs.rows) {
+    try {
+      const lista = await H.evaluarRecuperos(id, db);
+      medidos += lista.length;
+      const ok = lista.filter((x) => x.recuperado > 0);
+      const owner = ok.length ? await ownerDeNegocio(id, db) : null;
+      if (owner) {
+        const total = ok.reduce((s, x) => s + x.recuperado, 0);
+        await notificarUsuario(owner, {
+          title: `Recuperaste ${'$' + Math.round(total).toLocaleString('es-AR')} por mes`,
+          body: ok.length === 1
+            ? `Desde que resolviste "${String(ok[0].titulo).slice(0, 80)}", se te van ${'$' + Math.round(ok[0].recuperado).toLocaleString('es-AR')} menos por mes.`
+            : `Resolviste ${ok.length} cosas que LumoBi te marcó y funcionó: se te van ${'$' + Math.round(total).toLocaleString('es-AR')} menos por mes.`,
+          url: '/oportunidades',
+        }, db, 'resumen_diario');
+        avisos++;
+      }
+      // Lo que no mejoró también se cuenta (sin vueltas): así el dueño sabe que hay que probar otra cosa
+      const no = lista.filter((x) => x.recuperado === 0);
+      const owner2 = no.length ? (owner || await ownerDeNegocio(id, db)) : null;
+      if (owner2) {
+        await notificarUsuario(owner2, {
+          title: 'Un cambio todavía no dio resultado',
+          body: `"${String(no[0].titulo).slice(0, 80)}" sigue igual 4 semanas después. Mirá en Oportunidades qué otra cosa probar.`,
+          url: '/oportunidades',
+        }, db, 'alertas_medias');
+        avisos++;
+      }
+    } catch (e) { console.error('[JOB NOCTURNO] medir_consejos negocio', id, e.message); }
+  }
+  return { paso: 'medir_consejos', medidos, avisos };
+}
+
 async function snapshotsGoteo(db) {
   const hoy = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
 
@@ -390,6 +429,7 @@ async function runJobNocturno(db = pool) {
     ['recordatorio_precios_catalogo', recordatorioPreciosCatalogo],
     ['snapshots_erm', snapshotsERM],
     ['snapshots_goteo', snapshotsGoteo],
+    ['medir_consejos', medirConsejos],
   ];
   let fallidos = 0;
   for (const [nombre, fn] of PASOS) {
