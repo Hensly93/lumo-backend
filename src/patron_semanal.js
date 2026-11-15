@@ -23,16 +23,16 @@ async function detectarPatronesSemana(usuarioId, sucursalId = null) {
   // Ventas agrupadas por (dia_semana, turno, día calendario) — últimos 60 días
   const res = await pool.query(
     `SELECT
-       EXTRACT(DOW FROM fecha)::integer AS dia_semana,
+       EXTRACT(DOW FROM fecha - INTERVAL '3 hours')::integer AS dia_semana, -- día de Argentina, no de UTC
        COALESCE(turno, 'sin_turno') AS turno,
-       DATE(fecha) AS dia,
+       DATE(fecha - INTERVAL '3 hours') AS dia,
        SUM(monto) AS total_ventas
      FROM transacciones
      WHERE negocio_id = $1
        AND ($2::integer IS NULL OR sucursal_id = $2)
        AND fecha >= NOW() - INTERVAL '60 days'
        AND monto > 0
-     GROUP BY EXTRACT(DOW FROM fecha)::integer, COALESCE(turno, 'sin_turno'), DATE(fecha)`,
+     GROUP BY EXTRACT(DOW FROM fecha - INTERVAL '3 hours')::integer, COALESCE(turno, 'sin_turno'), DATE(fecha - INTERVAL '3 hours')`,
     [usuarioId, sucursalId]
   );
   if (res.rows.length < N_MIN_OCURRENCIAS) return [];

@@ -15,6 +15,7 @@
 //   para incorporar el nuevo nivel sin perder memoria larga.
 
 const pool = require('./db');
+const diaAR = (f) => new Date(new Date(f).getTime() - 3 * 3600000).toISOString().slice(0, 10); // fecha de Argentina (el servidor está en UTC)
 
 const K_FACTOR = 0.5;   // slack como fracción de σ
 const H_FACTOR = 4.5;   // umbral alarma como múltiplo de σ
@@ -221,7 +222,7 @@ async function resetBaselinePorCambioConfirmado(negocioId) {
 
     const porTurno = {};
     rows.forEach(t => {
-      const dia = new Date(t.fecha).toISOString().split('T')[0];
+      const dia = diaAR(t.fecha);
       const clave = `${t.turno || 'SIN_TURNO'}_${dia}`;
       porTurno[clave] = (porTurno[clave] || 0) + parseFloat(t.monto);
     });

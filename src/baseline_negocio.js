@@ -1,4 +1,6 @@
 const pool = require('./db');
+const diaAR = (f) => new Date(new Date(f).getTime() - 3 * 3600000).toISOString().slice(0, 10); // fecha de Argentina (el servidor está en UTC)
+const dowAR = () => new Date(Date.now() - 3 * 3600000).getUTCDay(); // día de la semana en Argentina
 
 // dia_semana convención: 0=domingo…6=sábado, 7=global (sin segmentación)
 const DIA_GLOBAL = 7;
@@ -36,7 +38,7 @@ function calcularMetricasNegocio(transacciones) {
   // std del ratio: calculado sobre los ratios por turno+día (no sobre txs individuales)
   const porTurnoRatio = {};
   conMetodo.forEach(t => {
-    const clave = `${t.turno || 'ST'}_${new Date(t.fecha).toISOString().split('T')[0]}`;
+    const clave = `${t.turno || 'ST'}_${diaAR(t.fecha)}`;
     if (!porTurnoRatio[clave]) porTurnoRatio[clave] = { ef: 0, total: 0 };
     porTurnoRatio[clave].total++;
     if (t.metodo_pago?.toLowerCase() === 'efectivo') porTurnoRatio[clave].ef++;
@@ -48,7 +50,7 @@ function calcularMetricasNegocio(transacciones) {
 
   const porTurno = {};
   transacciones.forEach(t => {
-    const dia = new Date(t.fecha).toISOString().split('T')[0];
+    const dia = diaAR(t.fecha);
     const clave = `${t.turno || 'SIN_TURNO'}_${dia}`;
     porTurno[clave] = (porTurno[clave] || 0) + Number(t.monto);
   });
@@ -125,7 +127,7 @@ async function actualizarBaselineNegocio(negocioId, sucursalId, transacciones) {
 // Si sucursalId tiene valor pero no hay baseline específico → fallback al global del negocio (sucursal_id IS NULL)
 // El baseline diario tiene prioridad sobre el global cuando tiene ≥ MIN_TX_USAR transacciones.
 async function getBaselineNegocio(negocioId, sucursalId, diaSemana = null) {
-  const dia = diaSemana ?? new Date().getDay();
+  const dia = diaSemana ?? dowAR();
 
   // Intentar obtener baseline de la sucursal específica (si sucursalId tiene valor)
   let result = await pool.query(

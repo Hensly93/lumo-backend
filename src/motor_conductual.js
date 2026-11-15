@@ -13,6 +13,7 @@
 //     Activa con ≥ 5 feedbacks en esa celda.
 
 const pool = require('./db');
+const dowAR = () => new Date(Date.now() - 3 * 3600000).getUTCDay(); // día de la semana en Argentina
 
 const UMBRAL_GLOBAL_DEFAULT = 2.5;
 const UMBRAL_MIN = 0.5;
@@ -187,7 +188,7 @@ async function getUmbralesUsuario(negocioId) {
 // Reemplaza el z-score fijo del motor. Recibe valor observado + contexto.
 
 async function evaluarConUmbralDinamico(negocioId, valor, baseline, tipoTurno, ctx) {
-  const diaSemana = ctx?.diaSemana ?? new Date().getDay();
+  const diaSemana = ctx?.diaSemana ?? dowAR();
   const condicion = condicionDesdeContexto(ctx);
   const umbral = await calcularUmbralCelda(negocioId, tipoTurno, diaSemana, condicion);
 

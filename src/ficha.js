@@ -47,7 +47,7 @@ async function fichaProducto(negocioId, productoId, db = pool) {
     db.query(`SELECT COALESCE(-SUM(d.cantidad),0)::float AS u, COUNT(DISTINCT t.id)::int AS n
                 FROM transacciones_detalle d JOIN transacciones t ON t.id = d.transaccion_id
                WHERE t.negocio_id = $1 AND d.producto_id = $2 AND t.tipo = 'anulacion' AND t.fecha >= NOW() - ($3::int * INTERVAL '1 day')`, [negocioId, productoId, VENTANA]),
-    db.query(`SELECT (CURRENT_DATE - ${FL}::date) / 7 AS semana, SUM(d.cantidad)::float AS u
+    db.query(`SELECT ((NOW() - INTERVAL '3 hours')::date - ${FL}::date) / 7 AS semana, SUM(d.cantidad)::float AS u
                 FROM transacciones_detalle d JOIN transacciones t ON t.id = d.transaccion_id
                WHERE t.negocio_id = $1 AND d.producto_id = $2 AND t.fecha >= NOW() - INTERVAL '28 days' GROUP BY 1`, [negocioId, productoId]),
   ]);

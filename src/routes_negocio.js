@@ -8,6 +8,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { actualizarBaselineNegocio, getBaselineNegocio } = require('./baseline_negocio');
 const { calculateWowMoment } = require('./wow_moment');
 const { auth } = require('./authMiddleware');
+const diaAR = (f) => new Date(new Date(f).getTime() - 3 * 3600000).toISOString().slice(0, 10); // fecha de Argentina (el servidor está en UTC)
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -423,7 +424,7 @@ router.post('/upload-historial', auth, upload.single('archivo'), async (req, res
            COUNT(*) as total,
            COALESCE(SUM(CASE WHEN metodo_pago='efectivo' THEN monto ELSE 0 END), 0) as total_efectivo,
            COALESCE(SUM(CASE WHEN metodo_pago IS NOT NULL AND metodo_pago<>'efectivo' THEN monto ELSE 0 END), 0) as total_mp,
-           COUNT(DISTINCT DATE(fecha)) as dias_datos,
+           COUNT(DISTINCT DATE(fecha - INTERVAL '3 hours')) as dias_datos,
            ROUND(AVG(monto)::numeric, 2) as ticket_promedio
          FROM transacciones
          WHERE (negocio_id=$1 OR (negocio_id IS NULL AND usuario_id=$2))
@@ -537,7 +538,7 @@ router.get('/wow-moment-ai', auth, async (req, res) => {
     // Preparar resumen por día
     const porDia = {};
     txRes.rows.forEach(tx => {
-      const fecha = tx.fecha.toISOString().split('T')[0];
+      const fecha = diaAR(tx.fecha);
       if (!porDia[fecha]) {
         porDia[fecha] = {
           total: 0,

@@ -7,6 +7,7 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const pool = require('./db');
+const CF = require('./caja_faltante');
 const { negocioPorCodigo, obtenerOCrearCodigo, asignarCodigoNuevo, formatearCodigo } = require('./codigo_negocio');
 const { auth } = require('./authMiddleware');
 const { geocodificarDireccion } = require('./geocoding');
@@ -95,11 +96,12 @@ router.get('/red', auth, async (req, res) => {
             `SELECT COALESCE(SUM(monto),0) as total, COUNT(*) as tx
              FROM transacciones
              WHERE negocio_id=$1 AND sucursal_id=$2
-               AND DATE_TRUNC('month', fecha) = DATE_TRUNC('month', NOW())`,
+               AND DATE_TRUNC('month', fecha - INTERVAL '3 hours') = DATE_TRUNC('month', NOW() - INTERVAL '3 hours')`,
             [req.user.negocio_id, s.id]
           ),
           pool.query(
-            `SELECT COALESCE(AVG(ABS(brecha)),0) as brecha_prom, COUNT(*) as n_turnos
+            // Misma regla de faltante que Fugas, Períodos y Alertas (caja_faltante.js): promedio que falta por cierre
+            `SELECT COALESCE(AVG(${CF.sqlFaltante()}),0) as brecha_prom, COUNT(*) as n_turnos
              FROM turnos_caja
              WHERE negocio_id=$1 AND sucursal_id=$2 AND estado='cerrado'
                AND hora_apertura >= NOW() - INTERVAL '30 days'`,
@@ -142,7 +144,12 @@ router.get('/red', auth, async (req, res) => {
       })
     );
 
-    const totalVentas = kpis.reduce((a, b) => a + b.ventas_mes, 0);
+    // Ventas del mes sin local asignado (cargadas a mano, de Mercado Pago sin caja…): también son del negocio
+    const sinLocal = parseFloat((await pool.query(
+      `SELECT COALESCE(SUM(monto),0) AS t FROM transacciones WHERE negocio_id=$1 AND sucursal_id IS NULL
+         AND DATE_TRUNC('month', fecha - INTERVAL '3 hours') = DATE_TRUNC('month', NOW() - INTERVAL '3 hours')`,
+      [req.user.negocio_id])).rows[0].t) || 0;
+    const totalVentas = kpis.reduce((a, b) => a + b.ventas_mes, 0) + sinLocal;
     const sucursalesRojo = kpis.filter(k => k.semaforo === 'rojo').length;
     const sucursalesMasVentas = [...kpis].sort((a, b) => b.ventas_mes - a.ventas_mes)[0];
 
@@ -151,6 +158,7 @@ router.get('/red', auth, async (req, res) => {
       resumen: {
         total_sucursales: kpis.length,
         ventas_red_mes: Math.round(totalVentas),
+        ventas_sin_local: Math.round(sinLocal),
         sucursales_en_rojo: sucursalesRojo,
         local_mas_ventas: sucursalesMasVentas?.ventas_mes > 0 ? sucursalesMasVentas.nombre : null,
       },
