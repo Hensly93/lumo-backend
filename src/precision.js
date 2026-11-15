@@ -22,7 +22,7 @@ async function prediccion(negocioId, db) {
     const a = await require('./aciertos_prediccion').calcularAciertos(db, negocioId, null, 30);
     if (!a || a.error_medio_pct == null) return { medido: false, dias: a ? a.dias : 0, minimo: a ? a.minimo : 3, frase: 'Todavía no hay suficientes días para medir qué tan bien predice LumoBi. Se mide solo, comparando lo que esperaba con lo que vendiste.' };
     return { medido: true, dias: a.dias, acertados: a.acertados, tolerancia_pct: a.tolerancia_pct, error_medio_pct: a.error_medio_pct,
-      frase: `En los últimos ${a.dias} días, LumoBi acertó ${a.acertados} veces (la venta quedó a menos del ${a.tolerancia_pct}% de lo que esperaba). En promedio se equivocó ${String(a.error_medio_pct).replace('.', ',')}%.` };
+      frase: `En los últimos ${a.dias} días, LumoBi acertó ${a.acertados} veces (la venta quedó a menos del ${a.tolerancia_pct}% de lo que esperaba). Un día típico se equivocó ${String(a.error_medio_pct).replace('.', ',')}%.${a.acertados === 0 ? ' Todavía está aprendiendo tu negocio: mejora con cada semana de ventas cargadas.' : ''}` };
   } catch (e) { return { medido: false, dias: 0, frase: 'Todavía no hay predicciones para medir.' }; }
 }
 

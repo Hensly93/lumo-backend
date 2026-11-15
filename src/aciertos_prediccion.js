@@ -33,7 +33,13 @@ async function calcularAciertos(pool, negocio_id, sucursal_id = null, dias = 30)
      ORDER BY p.dia DESC`,
     [negocio_id, sucursal_id, d]
   );
-  const detalle = r.rows.map(x => {
+  // Un día con casi nada cargado (el primer día de uso, un día de prueba, ventas sin cargar) no mide la predicción:
+  // contra lo que se esperaba daría errores de miles de por ciento. Se descartan los días que vendieron menos del 25% de un día típico.
+  const ventas = r.rows.map(x => Number(x.vendido)).sort((a, b) => a - b);
+  const tipico = ventas.length ? ventas[Math.floor(ventas.length / 2)] : 0;
+  const filas = r.rows.filter(x => Number(x.vendido) >= tipico * 0.25);
+  const descartados = r.rows.length - filas.length;
+  const detalle = filas.map(x => {
     const predicho = Math.round(Number(x.predicho));
     const vendido = Math.round(Number(x.vendido));
     return { fecha: x.fecha, predicho, vendido, error_pct: Math.round(((predicho - vendido) / vendido) * 1000) / 10, anticipacion: Number(x.anticipacion), dentro_rango: (x.rmin == null || x.rmax == null) ? null : (vendido >= Number(x.rmin) && vendido <= Number(x.rmax)) };
@@ -41,9 +47,10 @@ async function calcularAciertos(pool, negocio_id, sucursal_id = null, dias = 30)
   const n = detalle.length;
   if (n < MIN_DIAS) return { dias: n, minimo: MIN_DIAS, detalle };
   const abs = detalle.map(x => Math.abs(x.error_pct));
-  const prom = (a) => Math.round((a.reduce((s, v) => s + v, 0) / a.length) * 10) / 10;
+  const prom = (a) => { const o = [...a].sort((x, y) => x - y); const m = Math.floor(o.length / 2); return Math.round((o.length % 2 ? o[m] : (o[m - 1] + o[m]) / 2) * 10) / 10; }; // mediana: un día raro no arruina el promedio
   return {
     dias: n,
+    descartados,
     minimo: MIN_DIAS,
     tolerancia_pct: TOLERANCIA * 100,
     error_medio_pct: prom(abs),
