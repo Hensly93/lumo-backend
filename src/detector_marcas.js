@@ -96,7 +96,7 @@ async function armarPrecios(negocioId, db = pool) {
   try {
     await require('./catalogo_marca').asegurar(db);
     filas = (await db.query(
-      `SELECT p.nombre, p.marca, p.precio_venta::float AS pv, p.precio_costo::float AS costo, SUM(d.cantidad)::float AS u
+      `SELECT p.id AS producto_id, p.nombre, p.marca, p.precio_venta::float AS pv, p.precio_costo::float AS costo, SUM(d.cantidad)::float AS u
          FROM productos p JOIN transacciones_detalle d ON d.producto_id = p.id JOIN transacciones t ON t.id = d.transaccion_id
         WHERE p.negocio_id = $1 AND t.negocio_id = $1 AND COALESCE(p.activo, true) AND p.precio_venta > 0 AND p.precio_costo > 0
           AND p.precio_costo / p.precio_venta > $2::float AND ${FL}::date >= ${HOY_AR} - 89
@@ -108,7 +108,7 @@ async function armarPrecios(negocioId, db = pool) {
     const ideal = x.costo / (1 - MARGEN_OBJETIVO);
     const tope = x.pv * 1.2;
     const nuevo = Math.ceil(Math.min(ideal, tope) / paso) * paso;
-    return { nombre: cap(x.nombre), marca: x.marca, pv: x.pv, nuevo, subida: Math.round((nuevo / x.pv - 1) * 100), margen_hoy: Math.round((1 - x.costo / x.pv) * 100), margen_nuevo: Math.round((1 - x.costo / nuevo) * 100), en_pasos: ideal > tope };
+    return { producto_id: x.producto_id, nombre: cap(x.nombre), marca: x.marca, pv: x.pv, nuevo, subida: Math.round((nuevo / x.pv - 1) * 100), margen_hoy: Math.round((1 - x.costo / x.pv) * 100), margen_nuevo: Math.round((1 - x.costo / nuevo) * 100), en_pasos: ideal > tope };
   }).filter((x) => x.nuevo > x.pv);
   if (!items.length) return { sin_promo: true, motivo: 'Con los costos cargados, tus precios ya dejan un margen sano. No hace falta cambiar nada.' };
   return {
@@ -119,8 +119,9 @@ async function armarPrecios(negocioId, db = pool) {
       items.some((x) => x.en_pasos) ? 'En los que la suba completa sería muy grande, subí hasta el 20% ahora y mirá cómo responden las ventas antes de seguir.' : null,
       `El objetivo es un margen de al menos ${Math.round(MARGEN_OBJETIVO * 100)}% sobre el precio.`,
     ].filter(Boolean),
-    aviso: 'LumoBi no cambia tus precios solo: los cargás vos en el catálogo. Si el costo de algún producto está mal cargado, corregilo primero.',
+    aviso: 'LumoBi no toca tus precios sin que vos lo pidas. Si el costo de algún producto está mal cargado, corregilo primero.',
     textos: { lista: 'Precios nuevos:\n' + items.map((x) => `${x.nombre}: ${fmt(x.nuevo)}`).join('\n') },
+    aplicar: { tipo: 'precios', boton: 'Poner estos precios en mi catálogo', cambios: items.map((x) => ({ producto_id: x.producto_id, nombre: x.nombre, antes: x.pv, nuevo: x.nuevo })) },
   };
 }
 

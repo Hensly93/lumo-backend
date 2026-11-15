@@ -50,6 +50,8 @@ async function registrar(h, db = pool) {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`,
       [h.negocio_id, h.turno_id || null, h.empleado || null, h.tipo, h.producto_id || null, nombre,
        num(h.cantidad), Math.round((num(h.valor) || 0) * 100) / 100, JSON.stringify(h.detalle || {})]);
+    // Palantir: si es algo fuera de lo normal, el dueño se entera ahora (alerta_instante.js). No frena la caja.
+    require('./alerta_instante').avisar({ ...h, valor: num(h.valor) || 0 }, db).catch(() => {});
     return true;
   } catch (e) {
     console.error('[hechos_caja] no se pudo registrar:', e.message);

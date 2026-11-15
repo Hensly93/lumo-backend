@@ -116,7 +116,7 @@ async function armarProveedores(negocioId, db = pool) {
        u AS (SELECT DISTINCT ON (producto_id) * FROM x
               WHERE ant > 0 AND producto_id IS NOT NULL AND fecha >= (NOW() - INTERVAL '3 hours')::date - 90 AND precio / ant::float - 1 >= 0.05
               ORDER BY producto_id, fecha DESC, cid DESC)
-       SELECT p.nombre, p.precio_venta::float AS pv, u.precio, u.ant::float AS ant
+       SELECT p.id AS producto_id, p.nombre, p.precio_venta::float AS pv, u.precio, u.ant::float AS ant
          FROM u JOIN productos p ON p.id = u.producto_id AND p.negocio_id = $1 WHERE p.precio_venta > 0
         ORDER BY u.precio / u.ant DESC LIMIT 8`, [negocioId])).rows;
   } catch (e) {
@@ -127,7 +127,7 @@ async function armarProveedores(negocioId, db = pool) {
   const items = filas.map((x) => {
     const paso = x.pv >= 3000 ? 100 : x.pv >= 1000 ? 50 : 10;
     const nuevo = Math.ceil((x.pv * x.precio / x.ant) / paso) * paso;
-    return { nombre: cap(x.nombre), pv: x.pv, nuevo, subida: Math.round((nuevo / x.pv - 1) * 100), aumento: Math.round((x.precio / x.ant - 1) * 100) };
+    return { producto_id: x.producto_id, nombre: cap(x.nombre), pv: x.pv, nuevo, subida: Math.round((nuevo / x.pv - 1) * 100), aumento: Math.round((x.precio / x.ant - 1) * 100) };
   }).filter((x) => x.nuevo > x.pv);
   if (!items.length) return { sin_promo: true, motivo: 'Con los aumentos que encontré, tus precios actuales ya cubren el margen. No hace falta cambiar nada.' };
   return {
@@ -137,8 +137,9 @@ async function armarProveedores(negocioId, db = pool) {
       ...items.map((x) => `${x.nombre}: de ${fmt(x.pv)} a ${fmt(x.nuevo)} (+${x.subida}%), porque tu proveedor lo subió ${x.aumento}%.`),
       'El precio nuevo mantiene la misma relación entre lo que te cuesta y lo que cobrás.',
     ],
-    aviso: 'Si ya actualizaste alguno de estos precios, ignoralo. LumoBi no cambia tus precios solo: los cargás vos en el catálogo.',
+    aviso: 'Si ya actualizaste alguno de estos precios, ignoralo. LumoBi no cambia tus precios solo: los cambia cuando vos lo pedís, y podés deshacerlo.',
     textos: { lista: 'Precios nuevos:\n' + items.map((x) => `${x.nombre}: ${fmt(x.nuevo)}`).join('\n') },
+    aplicar: { tipo: 'precios', boton: 'Poner estos precios en mi catálogo', cambios: items.map((x) => ({ producto_id: x.producto_id, nombre: x.nombre, antes: x.pv, nuevo: x.nuevo })) },
   };
 }
 
@@ -183,6 +184,7 @@ async function armar(negocioId, hallazgo, accionId, db = pool) {
     ].filter(Boolean),
     aviso: pr.aviso,
     textos: textos(nombreNeg, { a: A, b: B, normal, precio: pr.precio }, cu),
+    aplicar: { tipo: 'combo', boton: 'Crear el combo en mi catálogo', nombre: `Combo ${A} + ${B}`, precio: pr.precio, costo: costo > 0 ? costo : null, productos: [estrella.id, b.id] },
   };
 }
 

@@ -42,7 +42,7 @@ async function itemsRevisar(negocioId, sucursalId, analisis, recs) {
           ? `Los turnos de ${e.empleado} muestran diferencias de caja que se repiten.`
           : `En los turnos de ${e.empleado} hay algo para mirar en la caja.`,
         accion: 'Mirá el detalle de sus turnos en Equipo antes de hablar con nadie: puede ser un error al contar o al cobrar.',
-        timestamp: ts, datos: null, origen: 'equipo', id: 'erm:' + e.empleado, url: '/empleados',
+        timestamp: ts, datos: null, origen: 'equipo', id: 'erm:' + e.empleado, url: '/ficha/persona/' + encodeURIComponent(e.empleado),
       });
     }
   } catch (e) { console.error('revisar/erm:', e.message); }

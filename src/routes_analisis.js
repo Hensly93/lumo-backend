@@ -424,6 +424,21 @@ router.get('/ficha/empleado/:nombre', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+router.get('/ficha/turno/:id', auth, async (req, res) => {
+  try {
+    const f = await require('./ficha').fichaTurno(req.user.negocio_id, parseInt(req.params.id, 10));
+    if (!f) return res.status(404).json({ error: 'No encontramos ese turno.' });
+    res.json(f);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+router.get('/ficha/proveedor/:nombre', auth, async (req, res) => {
+  try {
+    const f = await require('./ficha').fichaProveedor(req.user.negocio_id, String(req.params.nombre).slice(0, 120));
+    if (!f) return res.status(404).json({ error: 'No hay compras cargadas de ese proveedor.' });
+    res.json(f);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // GET /sala — "Tu negocio en vivo": lo que pasó, lo que está pasando y lo que viene (sala.js)
 router.get('/sala', auth, async (req, res) => {
   try {

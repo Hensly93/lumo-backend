@@ -162,8 +162,10 @@ async function fichaEmpleado(negocioId, nombre, db = pool) {
   }
   if (!senales.length) frases.push(c.cierres ? `Sus ${c.cierres} cierres de caja están dentro de lo normal.` : 'Todavía no cerró turnos de caja.');
 
+  const turnosRecientes = await turnosRecientesDe(negocioId, nombre, db).catch(() => []);
   return {
     empleado: nombre,
+    turnos_recientes: turnosRecientes,
     frases,
     senales,
     ventas: { plata: Math.round(v.plata), ventas: v.ventas, turnos: v.turnos, gasto_por_cliente: Math.round(ticket), por_hora: porHora != null ? r1(porHora) : null },
@@ -179,4 +181,174 @@ async function fichaEmpleado(negocioId, nombre, db = pool) {
   };
 }
 
-module.exports = { fichaProducto, fichaEmpleado };
+// Lo que guarda cada hecho de caja, dicho en criollo
+function detalleHecho(h) {
+  const d = h.detalle || {};
+  const m = d.motivo ? `motivo: ${d.motivo}` : null;
+  if (h.tipo === 'descuento') return [d.pct ? `${d.pct}%` : null, d.subtotal ? `sobre ${$(d.subtotal)}` : null, m].filter(Boolean).join(' · ') || null;
+  if (h.tipo === 'venta_anulada') return [d.metodo_pago ? `se había cobrado ${d.metodo_pago === 'mixto' ? 'con dos medios' : d.metodo_pago}` : null, m].filter(Boolean).join(' · ') || null;
+  if (h.tipo === 'espera_descartada') return d.lineas ? `${d.lineas} ${d.lineas === 1 ? 'producto' : 'productos'} en el carrito` : null;
+  if (h.tipo === 'item_borrado' && d.precio_unitario) return `a ${$(d.precio_unitario)} c/u`;
+  if (h.tipo === 'precio_cambiado' && (d.antes != null || d.despues != null)) return `de ${$(d.antes)} a ${$(d.despues)}`;
+  return m;
+}
+
+// ── Turno: la cuenta de la caja paso a paso y cada venta que la compone ──
+async function fichaTurno(negocioId, turnoId, db = pool) {
+  await require('./caja_extra').asegurar(db).catch(() => {});
+  const t = (await db.query(
+    `SELECT tc.*, s.nombre AS local_nombre,
+            to_char(tc.hora_apertura - INTERVAL '3 hours','DD/MM HH24:MI') AS abre, to_char(tc.hora_cierre - INTERVAL '3 hours','DD/MM HH24:MI') AS cierra,
+            EXTRACT(EPOCH FROM (COALESCE(tc.hora_cierre, NOW()) - tc.hora_apertura)) / 3600 AS horas
+       FROM turnos_caja tc LEFT JOIN mis_sucursales s ON s.id = tc.sucursal_id AND s.negocio_id = tc.negocio_id
+      WHERE tc.id = $1 AND tc.negocio_id = $2`, [turnoId, negocioId])).rows[0];
+  if (!t) return null;
+
+  // Las ventas de ESTE turno: la misma regla que usa la cuenta de la caja (ventas_turno.js)
+  const filtro = `t.negocio_id = $1 AND (t.turno_id = $2 OR (t.turno_id IS NULL AND t.empleado = $3 AND t.fecha >= $4 AND t.fecha <= COALESCE($5, NOW()) AND t.sucursal_id IS NOT DISTINCT FROM $6::integer))`;
+  const args = [negocioId, t.id, t.nombre_empleado, t.hora_apertura, t.hora_cierre || null, t.sucursal_id || null];
+  const [v, ventas, items, egresos, conteos, hechos] = await Promise.all([
+    require('./ventas_turno').ventasDelTurno(db, t),
+    db.query(`SELECT t.id, t.monto::float AS monto, t.tipo, t.metodo_pago, t.monto_efectivo::float AS monto_efectivo, t.anula_id, t.motivo,
+                     to_char(t.fecha - INTERVAL '3 hours','HH24:MI') AS hora
+                FROM transacciones t WHERE ${filtro} ORDER BY t.fecha DESC, t.id DESC LIMIT 300`, args),
+    db.query(`SELECT d.transaccion_id, d.producto_id, COALESCE(d.producto_nombre, p.nombre, 'Producto') AS nombre, d.cantidad::float AS cantidad,
+                     d.subtotal::float AS subtotal, d.tipo_linea
+                FROM transacciones_detalle d JOIN transacciones t ON t.id = d.transaccion_id LEFT JOIN productos p ON p.id = d.producto_id
+               WHERE ${filtro} ORDER BY d.id`, args),
+    db.query(`SELECT monto::float AS monto, motivo, to_char(hora - INTERVAL '3 hours','HH24:MI') AS hora FROM egresos_caja WHERE turno_id = $1 AND negocio_id = $2 ORDER BY hora`, [t.id, negocioId]),
+    db.query(`SELECT tipo, monto_declarado::float AS monto, numero_conteo, to_char(hora - INTERVAL '3 hours','HH24:MI') AS hora FROM conteos_caja WHERE turno_id = $1 AND negocio_id = $2 ORDER BY hora`, [t.id, negocioId]).catch(() => ({ rows: [] })),
+    db.query(`SELECT tipo, producto_id, producto_nombre, cantidad::float AS cantidad, valor::float AS valor, detalle, to_char(creado - INTERVAL '3 hours','HH24:MI') AS hora
+                FROM hechos_caja WHERE negocio_id = $1 AND turno_id = $2 ORDER BY creado`, [negocioId, t.id]).catch(() => ({ rows: [] })),
+  ]);
+
+  const egr = egresos.rows.reduce((s, e) => s + e.monto, 0);
+  const apertura = Number(t.caja_apertura) || 0;
+  const efectivoVentas = v.total_ventas - v.total_mp;
+  const esperado = apertura + efectivoVentas - egr;
+  const cerrado = t.estado === 'cerrado' && t.caja_cierre != null;
+  const contado = cerrado ? Number(t.caja_cierre) : null;
+  const diferencia = cerrado ? contado - esperado : null; // + sobra / − falta
+  const falta = cerrado ? CF.faltanteTurno(t) : 0; // la misma regla y el mismo número que Inicio y Equipo
+
+  const porVenta = {};
+  for (const it of items.rows) (porVenta[it.transaccion_id] = porVenta[it.transaccion_id] || []).push(it);
+  const anuladas = new Set(ventas.rows.filter((x) => x.anula_id).map((x) => x.anula_id));
+  const lista = ventas.rows.map((x) => ({ ...x, anulada: anuladas.has(x.id), items: (porVenta[x.id] || []).map((i) => ({ producto_id: i.producto_id, nombre: i.nombre, cantidad: r1(i.cantidad), subtotal: Math.round(i.subtotal), tipo_linea: i.tipo_linea })) }));
+
+  // Lo más vendido del turno
+  const top = {};
+  for (const it of items.rows) if (it.producto_id) { const k = it.producto_id; top[k] = top[k] || { producto_id: k, nombre: it.nombre, cantidad: 0, plata: 0 }; top[k].cantidad += it.cantidad; top[k].plata += it.subtotal; }
+  const masVendidos = Object.values(top).filter((x) => x.cantidad > 0).sort((a, b) => b.plata - a.plata).slice(0, 5).map((x) => ({ ...x, cantidad: r1(x.cantidad), plata: Math.round(x.plata) }));
+
+  const H = {}; for (const h of hechos.rows) { H[h.tipo] = H[h.tipo] || { n: 0, plata: 0 }; H[h.tipo].n++; H[h.tipo].plata += h.valor || 0; }
+  const senales = [];
+  if (falta > 0) senales.push(`Cerró con ${$(falta)} de menos en el cajón.`);
+  if (H.venta_anulada) senales.push(`${H.venta_anulada.n} ${H.venta_anulada.n === 1 ? 'venta anulada' : 'ventas anuladas'} (${$(H.venta_anulada.plata)}).`);
+  if (H.descuento) senales.push(`${H.descuento.n} ${H.descuento.n === 1 ? 'descuento' : 'descuentos'} (${$(H.descuento.plata)}).`);
+  const sac = (H.item_borrado ? H.item_borrado.n : 0) + (H.cantidad_reducida ? H.cantidad_reducida.n : 0);
+  if (sac >= 3) senales.push(`Sacó ${sac} veces productos del carrito antes de cobrar.`);
+  if (H.espera_descartada) senales.push(`Cerró con ${H.espera_descartada.n === 1 ? 'una venta' : H.espera_descartada.n + ' ventas'} en espera sin cobrar (${$(H.espera_descartada.plata)}).`);
+  if (t.conteo_aleatorio_omitido || t.conteo_aleatorio2_omitido) senales.push('No respondió el conteo de caja a mitad de turno.');
+
+  const frases = [];
+  frases.push(`${t.nombre_empleado || 'Sin nombre'}, turno ${t.tipo_turno || ''}${t.local_nombre ? ' en ' + t.local_nombre : ''}: ${t.abre}${t.cierra ? ' a ' + t.cierra.slice(-5) : ' (sigue abierto)'}.`.replace('turno :', 'turno:'));
+  frases.push(`Vendió ${$(v.total_ventas)} en ${v.cantidad_tx} ${v.cantidad_tx === 1 ? 'venta' : 'ventas'}; ${$(efectivoVentas)} en efectivo.`);
+  if (cerrado) frases.push(falta > 0 ? `En el cajón tenía que haber ${$(esperado)} y contó ${$(contado)}: faltan ${$(esperado - contado)}.`
+    : diferencia > 0 && Math.abs(diferencia) >= 1 ? `En el cajón tenía que haber ${$(esperado)} y contó ${$(contado)}: sobran ${$(diferencia)}.`
+    : `En el cajón tenía que haber ${$(esperado)} y contó ${$(contado)}: la caja cerró bien.`);
+  else frases.push(`Ahora en el cajón tendría que haber ${$(esperado)}.`);
+
+  return {
+    turno: { id: t.id, empleado: t.nombre_empleado, tipo: t.tipo_turno, estado: t.estado, abre: t.abre, cierra: t.cierra, horas: r1(t.horas),
+      local: t.local_nombre, sucursal_id: t.sucursal_id },
+    frases, senales,
+    cuenta: [
+      { paso: 'Abrió la caja con', monto: Math.round(apertura), signo: '' },
+      { paso: 'Ventas en efectivo', monto: Math.round(efectivoVentas), signo: '+' },
+      { paso: 'Plata que sacó de la caja (gastos)', monto: Math.round(egr), signo: '−' },
+      { paso: cerrado ? 'Tenía que haber' : 'Tendría que haber ahora', monto: Math.round(esperado), signo: '=' , total: true },
+      ...(cerrado ? [{ paso: 'Contó al cerrar', monto: Math.round(contado), signo: '' }, { paso: Math.abs(diferencia) < 1 ? 'Diferencia' : diferencia < 0 ? 'Faltan' : 'Sobran', monto: Math.round(Math.abs(diferencia)), signo: '', resultado: true, falta: falta > 0, nota: falta > 0 || Math.abs(diferencia) < 1 ? null : 'Dentro de lo normal (menos de ' + $(Math.max(CF.TOLERANCIA_MIN, esperado * CF.TOLERANCIA_PCT)) + ')' }] : []),
+    ],
+    totales: { ventas: Math.round(v.total_ventas), efectivo: Math.round(efectivoVentas), digital: Math.round(v.total_mp), cantidad: v.cantidad_tx, egresos: Math.round(egr) },
+    ventas: lista,
+    mas_vendidos: masVendidos,
+    egresos: egresos.rows,
+    conteos: conteos.rows,
+    hechos: hechos.rows.map((h) => ({ ...h, detalle: detalleHecho(h) })),
+  };
+}
+
+// ── Proveedor: qué le comprás, cuánto, y cuánto te subió ──
+async function fichaProveedor(negocioId, nombre, db = pool) {
+  const compras = (await db.query(
+    `SELECT c.id, c.proveedor, c.fecha::text AS fecha, c.total::float AS total, c.numero, c.proveedor_cuit
+       FROM compras c WHERE c.negocio_id = $1 AND LOWER(TRIM(c.proveedor)) = LOWER(TRIM($2)) ORDER BY c.fecha DESC, c.id DESC LIMIT 60`, [negocioId, nombre]).catch(() => ({ rows: [] }))).rows;
+  if (!compras.length) return null;
+  const items = (await db.query(
+    `SELECT i.compra_id, i.producto_id, COALESCE(p.nombre, i.descripcion) AS nombre, i.cantidad::float AS cantidad, i.precio_unitario::float AS precio, c.fecha::text AS fecha
+       FROM compras_items i JOIN compras c ON c.id = i.compra_id LEFT JOIN productos p ON p.id = i.producto_id AND p.negocio_id = c.negocio_id
+      WHERE c.negocio_id = $1 AND LOWER(TRIM(c.proveedor)) = LOWER(TRIM($2)) AND i.precio_unitario > 0
+      ORDER BY c.fecha ASC, c.id ASC`, [negocioId, nombre])).rows;
+
+  const hoy = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);
+  const hace = (d) => { const x = new Date(hoy); x.setDate(x.getDate() - d); return x.toISOString().slice(0, 10); };
+  const mes = compras.filter((c) => c.fecha >= hace(30)).reduce((s, c) => s + (c.total || 0), 0);
+  const total90 = compras.filter((c) => c.fecha >= hace(90)).reduce((s, c) => s + (c.total || 0), 0);
+
+  // Por producto: primer y último precio → suba
+  const porProd = {};
+  for (const i of items) {
+    const k = i.producto_id ? 'p' + i.producto_id : 'd' + String(i.nombre).toLowerCase();
+    const x = (porProd[k] = porProd[k] || { producto_id: i.producto_id, nombre: i.nombre, compras: 0, unidades: 0, precios: [] });
+    x.compras++; x.unidades += i.cantidad || 0; x.precios.push({ fecha: i.fecha, precio: i.precio });
+  }
+  const productos = Object.values(porProd).map((x) => {
+    const ult = x.precios[x.precios.length - 1], ant = x.precios.length > 1 ? x.precios[x.precios.length - 2] : null, pri = x.precios[0];
+    return { producto_id: x.producto_id, nombre: x.nombre, compras: x.compras, unidades: r1(x.unidades), precio_actual: Math.round(ult.precio), ultima: ult.fecha,
+      suba_por_unidad: ant ? Math.round(ult.precio - ant.precio) : null,
+      suba_ultima_pct: ant && ant.precio > 0 ? r1((ult.precio / ant.precio - 1) * 100) : null,
+      suba_total_pct: x.precios.length > 1 && pri.precio > 0 ? r1((ult.precio / pri.precio - 1) * 100) : null, desde: pri.fecha };
+  }).sort((a, b) => b.compras - a.compras);
+  const subieron = productos.filter((p) => p.suba_ultima_pct != null && p.suba_ultima_pct >= 3).sort((a, b) => b.suba_ultima_pct - a.suba_ultima_pct);
+  // Cuánto te come la suba en un mes si no tocás tu precio de venta (unidades vendidas en 30 días × lo que subió)
+  const ids = subieron.filter((p) => p.producto_id).map((p) => p.producto_id);
+  if (ids.length) {
+    const vend = Object.fromEntries((await db.query(
+      `SELECT d.producto_id, SUM(d.cantidad)::float AS u FROM transacciones_detalle d JOIN transacciones t ON t.id = d.transaccion_id
+        WHERE t.negocio_id = $1 AND d.producto_id = ANY($2::int[]) AND t.fecha >= NOW() - INTERVAL '30 days' GROUP BY 1`, [negocioId, ids])).rows.map((x) => [x.producto_id, x.u]));
+    for (const p of subieron) p.te_come_mes = p.producto_id && vend[p.producto_id] > 0 ? Math.round(vend[p.producto_id] * p.suba_por_unidad) : 0;
+  }
+  const comeMes = subieron.reduce((s2, p) => s2 + (p.te_come_mes || 0), 0);
+
+  // Cada cuánto le comprás
+  const fechas = [...new Set(compras.map((c) => c.fecha))].sort();
+  let cada = null;
+  if (fechas.length >= 3) { const d = []; for (let i = 1; i < fechas.length; i++) d.push((new Date(fechas[i]) - new Date(fechas[i - 1])) / 864e5); d.sort((a, b) => a - b); cada = Math.round(d[Math.floor(d.length / 2)]); }
+
+  const frases = [];
+  frases.push(`Le compraste ${compras.length} ${compras.length === 1 ? 'vez' : 'veces'}${cada ? `, más o menos cada ${cada} ${cada === 1 ? 'día' : 'días'}` : ''}. Última compra: ${compras[0].fecha.split('-').reverse().join('/')}.`);
+  if (mes > 0) frases.push(`En los últimos 30 días le compraste ${$(mes)}.`);
+  if (subieron.length) frases.push(`En la última compra te subió ${subieron.length} ${subieron.length === 1 ? 'producto' : 'productos'}: ${subieron.slice(0, 3).map((p) => `${p.nombre} ${d1(p.suba_ultima_pct)}%`).join(', ')}.`);
+  else if (productos.some((p) => p.suba_ultima_pct != null)) frases.push('En la última compra no te subió precios.');
+  if (comeMes > 0) frases.push(`Si no cambiás tus precios de venta, esas subas te sacan unos ${$(comeMes)} de ganancia por mes.`);
+
+  return {
+    proveedor: compras[0].proveedor || nombre, cuit: compras.find((c) => c.proveedor_cuit)?.proveedor_cuit || null,
+    frases,
+    resumen: { te_come_mes: comeMes, compras: compras.length, ultimos_30: Math.round(mes), ultimos_90: Math.round(total90), cada_dias: cada, productos: productos.length },
+    subieron, productos: productos.slice(0, 40),
+    compras: compras.slice(0, 15).map((c) => ({ ...c, total: Math.round(c.total || 0) })),
+  };
+}
+
+// Turnos recientes de una persona (para tirar del hilo desde su ficha)
+async function turnosRecientesDe(negocioId, nombre, db = pool) {
+  return (await db.query(
+    `SELECT id, tipo_turno, estado, to_char(hora_apertura - INTERVAL '3 hours','DD/MM HH24:MI') AS abre,
+            CASE WHEN estado = 'cerrado' THEN ${CF.sqlFaltante()} ELSE 0 END::float AS faltante
+       FROM turnos_caja WHERE negocio_id = $1 AND nombre_empleado = $2 ORDER BY hora_apertura DESC LIMIT 10`, [negocioId, nombre])).rows
+    .map((x) => ({ ...x, faltante: Math.round(x.faltante || 0) }));
+}
+
+module.exports = { fichaProducto, fichaEmpleado, fichaTurno, fichaProveedor, turnosRecientesDe };

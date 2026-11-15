@@ -1,0 +1,111 @@
+// alerta_instante.js — LumoBi avisa al dueño EN EL MOMENTO cuando la caja hace algo fuera de lo normal (Palantir: alertas en tiempo real).
+// Se dispara desde registro_hechos.registrar(), apenas se guarda un hecho. Nunca frena la caja.
+//   · "Fuera de lo normal" se mide contra el negocio: el ticket promedio de los últimos 30 días, no un número fijo.
+//   · Una alerta por turno y por motivo (alertas_instante): si pasa 5 veces, avisa una sola vez, no 5.
+//   · El aviso lleva a la ficha del turno, donde está la prueba.
+const pool = require('./db');
+
+const $ = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
+let lista = null;
+function asegurar(db = pool) {
+  if (!lista) {
+    lista = (async () => {
+      await db.query(`CREATE TABLE IF NOT EXISTS alertas_instante (
+        id SERIAL PRIMARY KEY,
+        negocio_id INTEGER NOT NULL,
+        turno_id INTEGER,
+        clave TEXT NOT NULL,
+        tipo TEXT NOT NULL,
+        empleado TEXT,
+        titulo TEXT NOT NULL,
+        cuerpo TEXT NOT NULL,
+        url TEXT,
+        valor NUMERIC(14,2) NOT NULL DEFAULT 0,
+        entregados INTEGER NOT NULL DEFAULT 0,
+        creado TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )`);
+      await db.query('CREATE UNIQUE INDEX IF NOT EXISTS uq_alertas_instante ON alertas_instante (negocio_id, COALESCE(turno_id, 0), clave)');
+      await db.query('CREATE INDEX IF NOT EXISTS idx_alertas_instante_neg ON alertas_instante (negocio_id, creado DESC)');
+    })().catch((e) => { lista = null; throw e; });
+  }
+  return lista;
+}
+
+// Lo "normal" del negocio: ticket promedio de 30 días (con piso, para negocios nuevos)
+async function ticketNormal(negocioId, db) {
+  const r = await db.query(
+    `SELECT AVG(monto)::float AS t, COUNT(*)::int AS n FROM transacciones
+      WHERE negocio_id = $1 AND COALESCE(tipo,'venta') = 'venta' AND monto > 0 AND fecha >= NOW() - INTERVAL '30 days'`, [negocioId]);
+  const x = r.rows[0];
+  return x && x.n >= 10 && x.t > 0 ? x.t : null;
+}
+
+async function cuentaEnTurno(db, negocioId, turnoId, tipo) {
+  if (!turnoId) return { n: 0, plata: 0 };
+  const r = await db.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(valor),0)::float AS plata FROM hechos_caja WHERE negocio_id = $1 AND turno_id = $2 AND tipo = $3`, [negocioId, turnoId, tipo]);
+  return r.rows[0];
+}
+
+// Devuelve { clave, titulo, cuerpo } si hay que avisar, o null
+async function evaluar(h, db) {
+  const quien = h.empleado || 'Alguien de la caja';
+  const valor = Number(h.valor) || 0;
+  const t = await ticketNormal(h.negocio_id, db);
+  const veces = (v) => (t ? Math.round((v / t) * 10) / 10 : null);
+  const grande = (v, min, mult) => v >= Math.max(min, t ? t * mult : min * 2);
+  const normal = t ? ` Una venta normal es de unos ${$(t)}.` : '';
+
+  if (h.tipo === 'venta_anulada') {
+    const c = await cuentaEnTurno(db, h.negocio_id, h.turno_id, 'venta_anulada');
+    if (grande(valor, 3000, 3)) return { clave: 'anulacion_grande', titulo: 'Se anuló una venta grande',
+      cuerpo: `${quien} anuló una venta de ${$(valor)}${h.detalle?.motivo ? ` (motivo: ${h.detalle.motivo})` : ''}.${normal}` };
+    if (c.n >= 2) return { clave: 'anulaciones_repetidas', titulo: 'Varias ventas anuladas en un turno',
+      cuerpo: `${quien} ya anuló ${c.n} ventas en este turno (${$(c.plata)} en total). Tocá para ver cuáles.` };
+  }
+  if (h.tipo === 'descuento') {
+    const c = await cuentaEnTurno(db, h.negocio_id, h.turno_id, 'descuento');
+    if (grande(valor, 2000, 1.5)) return { clave: 'descuento_grande', titulo: 'Descuento grande en la caja',
+      cuerpo: `${quien} hizo un descuento de ${$(valor)}${h.detalle?.pct ? ` (${h.detalle.pct}%)` : ''}${h.detalle?.motivo ? `: ${h.detalle.motivo}` : ''}.${normal}` };
+    if (c.n >= 4) return { clave: 'descuentos_repetidos', titulo: 'Muchos descuentos en un turno',
+      cuerpo: `${quien} ya hizo ${c.n} descuentos en este turno (${$(c.plata)} en total). Tocá para ver cada uno.` };
+  }
+  if (h.tipo === 'egreso' && grande(valor, 5000, 4)) {
+    return { clave: 'egreso_grande', titulo: 'Salió plata de la caja',
+      cuerpo: `${quien} sacó ${$(valor)} de la caja${h.detalle?.motivo ? ` (${h.detalle.motivo})` : ''}.` };
+  }
+  if (h.tipo === 'espera_descartada' && valor >= 1500) {
+    return { clave: 'espera_sin_cobrar', titulo: 'Un turno cerró con una venta sin cobrar',
+      cuerpo: `${quien} cerró el turno con una venta en espera de ${$(valor)} que nunca se cobró.` };
+  }
+  if (h.tipo === 'item_borrado' || h.tipo === 'cantidad_reducida') {
+    const a = await cuentaEnTurno(db, h.negocio_id, h.turno_id, 'item_borrado');
+    const b = await cuentaEnTurno(db, h.negocio_id, h.turno_id, 'cantidad_reducida');
+    if (a.n + b.n >= 6) return { clave: 'carrito_sacados', titulo: 'Muchos productos sacados del carrito',
+      cuerpo: `${quien} sacó o bajó ${a.n + b.n} productos del carrito antes de cobrar en este turno. Tocá para ver cuáles.` };
+  }
+  return null;
+}
+
+async function avisar(h, db = pool) {
+  try {
+    if (!h || !h.negocio_id) return false;
+    await asegurar(db);
+    const a = await evaluar(h, db);
+    if (!a) return false;
+    // Una por turno y por motivo
+    const ins = await db.query(
+      `INSERT INTO alertas_instante (negocio_id, turno_id, clave, tipo, empleado, titulo, cuerpo, url, valor)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING RETURNING id`,
+      [h.negocio_id, h.turno_id || null, a.clave, h.tipo, h.empleado || null, a.titulo, a.cuerpo,
+       h.turno_id ? `/ficha/turno/${h.turno_id}` : '/en-vivo', Number(h.valor) || 0]);
+    if (!ins.rows.length) return false;
+    const { ownerDeNegocio } = require('./prediccion_adaptativa');
+    const owner = await ownerDeNegocio(h.negocio_id, db);
+    if (!owner) return true;
+    const entregados = await require('./push').notificarUsuario(owner, { title: a.titulo, body: a.cuerpo, url: h.turno_id ? `/ficha/turno/${h.turno_id}` : '/en-vivo', tag: `instante-${h.negocio_id}-${a.clave}` }, db, 'alertas_criticas').catch((e) => { console.error('[instante] push:', e.message); return 0; });
+    await db.query('UPDATE alertas_instante SET entregados = $1 WHERE id = $2', [entregados, ins.rows[0].id]);
+    return true;
+  } catch (e) { console.error('[instante]', e.message); return false; }
+}
+
+module.exports = { avisar, evaluar, asegurar };

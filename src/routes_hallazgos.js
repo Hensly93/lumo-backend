@@ -55,6 +55,26 @@ router.post('/:id/promo', auth, async (req, res) => {
   }
 });
 
+// POST /api/hallazgos/aplicar  { aplicar } — el consejo con botón: LumoBi lo hace (precios nuevos, crear el combo).
+// Recibe lo mismo que vio el dueño en pantalla y cada cambio se valida contra la base (ver aplicar_consejo.js).
+router.post('/aplicar', auth, async (req, res) => {
+  try {
+    if (req.user.rol && req.user.rol !== 'owner') return res.status(403).json({ error: 'Solo el dueño puede cambiar precios.' });
+    res.json(await require('./aplicar_consejo').aplicar(req.user.negocio_id, req.user.id, { aplicar: (req.body || {}).aplicar }));
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message });
+    console.error('hallazgos/aplicar:', e.message);
+    res.status(500).json({ error: 'No pude aplicarlo. No cambié nada.' });
+  }
+});
+router.post('/deshacer', auth, async (req, res) => {
+  try {
+    if (req.user.rol && req.user.rol !== 'owner') return res.status(403).json({ error: 'Solo el dueño puede deshacer.' });
+    const b = req.body || {};
+    res.json(await require('./aplicar_consejo').deshacer(req.user.negocio_id, Array.isArray(b.hechos) ? b.hechos.slice(0, 50) : [], b.tipo === 'combo' ? 'combo' : 'precios'));
+  } catch (e) { console.error('hallazgos/deshacer:', e.message); res.status(500).json({ error: 'No pude deshacerlo.' }); }
+});
+
 // POST /api/hallazgos/:id/accion  { accion_id } — el dueño elige una acción para probar; arranca la medición de 28 días
 router.post('/:id/accion', auth, async (req, res) => {
   try {
