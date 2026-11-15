@@ -326,6 +326,28 @@ router.delete('/carrito/:turno_id/:item_id', authTurno, async (req, res) => {
 // Convierte carrito en transacción + transacciones_detalle y vacía carrito
 // Body: { turno_id, metodo_pago }
 // ─────────────────────────────────────────────────────────────────────
+// ── Anular / devolver una venta del turno (anular_venta.js) ──
+router.get('/ventas-turno', authTurno, async (req, res) => {
+  try { res.json({ ventas: await require('./anular_venta').ventasDelTurno(req.turno.id) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/anular', authTurno, async (req, res) => {
+  try {
+    const AV = require('./anular_venta');
+    const id = parseInt(req.body && req.body.transaccion_id, 10);
+    const motivo = String((req.body && req.body.motivo) || '').trim().slice(0, 200) || null;
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'Falta la venta a anular' });
+    const v = await AV.datosParaGuardia(req.turno, id);
+    if (!v) return res.status(404).json({ error: 'Esa venta no es de este turno.' });
+    if (v.anulada) return res.status(400).json({ error: 'Esa venta ya estaba anulada.' });
+    if (!(await guardia(req, res, { tipo: 'anular_venta', clave: 'anular:' + id, valor: v.monto, minutos: Number(v.minutos) }))) return;
+    const r = await AV.anular(req.turno, id, motivo);
+    if (!r.ok) return res.status(400).json({ error: r.error });
+    res.json(r);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 router.post('/finalizar-venta', authTurno, async (req, res) => {
   const client = await pool.connect();
   try {

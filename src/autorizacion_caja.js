@@ -4,6 +4,7 @@
 //   · sacar_producto   sacar o bajar cantidades del carrito antes de cobrar
 //   · bajar_precio     bajar un precio de venta desde la caja
 //   · egreso           sacar plata de la caja
+//   · anular_venta     anular o devolver una venta ya cobrada
 // Cada pedido queda guardado (aprobado, rechazado, vencido o cancelado): así también queda registrado lo que se intentó.
 // Si algo falla acá adentro, la caja sigue funcionando (nunca se frena una venta por un error del control).
 const pool = require('./db');
@@ -18,7 +19,7 @@ const BLOQUEO_PIN_MIN = 15;
 const DIAS_BASE = 30;
 const TTL_RIESGO_MS = 30 * 60 * 1000;
 
-const TIPOS = ['sacar_producto', 'bajar_precio', 'egreso'];
+const TIPOS = ['sacar_producto', 'bajar_precio', 'egreso', 'anular_venta'];
 const fmt = (n) => '$' + Math.round(Math.abs(Number(n) || 0)).toLocaleString('es-AR');
 const mediana = (v) => { if (!v.length) return 0; const s = [...v].sort((a, b) => a - b); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 
@@ -120,6 +121,21 @@ async function evaluar(accion, db = pool, opts = {}) {
     const limite = Math.max(10000, 3 * (base.prom || 0)) * f;
     if (valor >= limite) return { requiere: true, motivo: `Sacar ${fmt(valor)} de la caja es más de lo habitual.` };
     if (turno.n >= 3 && valor >= 3000 * f) return { requiere: true, motivo: `Ya se hicieron ${turno.n} egresos en este turno.` };
+    return { requiere: false };
+  }
+  if (tipo === 'anular_venta') {
+    // Anular la venta que se acaba de cobrar (un error de tipeo, el cliente se arrepintió) es normal.
+    // Pide autorización si es grande, si pasó más de media hora, o si ya se anularon ventas en el turno.
+    const previas = (await db.query(
+      `SELECT COUNT(*)::int AS n FROM transacciones WHERE turno_id = $1 AND tipo = 'anulacion'`, [turno_id])).rows[0].n;
+    const tk = (await db.query(
+      `SELECT COALESCE(AVG(monto),0)::float AS ticket FROM transacciones
+        WHERE negocio_id = $1 AND tipo = 'venta' AND fecha >= NOW() - ($2::int * INTERVAL '1 day')`, [negocio_id, DIAS_BASE])).rows[0];
+    const grande = Math.max(15000, 4 * (tk.ticket || 0)) * f;
+    const minutos = Number(accion.minutos) || 0;
+    if (valor >= grande) return { requiere: true, motivo: `Anular una venta de ${fmt(valor)} necesita autorización.` };
+    if (minutos > 30) return { requiere: true, motivo: `Esa venta se cobró hace ${Math.round(minutos)} minutos: anularla necesita autorización.` };
+    if (previas >= (riesgo ? 1 : 2)) return { requiere: true, motivo: `Ya se anularon ${previas} ventas en este turno.` };
     return { requiere: false };
   }
   return { requiere: false };

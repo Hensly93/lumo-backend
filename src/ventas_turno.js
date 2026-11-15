@@ -18,8 +18,9 @@ async function ventasDelTurno(db, t) {
     `SELECT
        COALESCE(SUM(monto),0) AS total_ventas,
        COALESCE(SUM(CASE WHEN ${SQL_ES_DIGITAL} THEN monto ELSE 0 END),0) AS total_mp,
-       COUNT(*) AS cantidad_tx,
-       COALESCE(AVG(monto),0) AS ticket_promedio
+       -- una venta anulada no cuenta como venta (la anulación es una fila en negativo: anular_venta.js)
+       GREATEST(COUNT(*) FILTER (WHERE COALESCE(tipo,'venta') <> 'anulacion') - COUNT(*) FILTER (WHERE tipo = 'anulacion'), 0) AS cantidad_tx,
+       COALESCE(SUM(monto) / NULLIF(GREATEST(COUNT(*) FILTER (WHERE COALESCE(tipo,'venta') <> 'anulacion') - COUNT(*) FILTER (WHERE tipo = 'anulacion'), 0), 0), 0) AS ticket_promedio
      FROM transacciones
      WHERE negocio_id = $1
        AND (
