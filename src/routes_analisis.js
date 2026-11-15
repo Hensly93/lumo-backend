@@ -424,6 +424,20 @@ router.get('/ficha/empleado/:nombre', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Tus datos son tuyos: descarga en CSV (exportar.js). Solo el dueño.
+router.get('/exportar/:tipo', auth, async (req, res) => {
+  try {
+    if (req.user.rol && req.user.rol !== 'owner') return res.status(403).json({ error: 'Solo el dueño puede descargar los datos.' });
+    const x = await require('./exportar').generar(req.user.negocio_id, req.params.tipo);
+    if (!x) return res.status(404).json({ error: 'Ese archivo no existe.' });
+    res.set({ 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${x.nombre}"`, 'Access-Control-Expose-Headers': 'Content-Disposition', 'Cache-Control': 'no-store' });
+    res.send(x.cuerpo);
+  } catch (e) { console.error('exportar:', e.message); res.status(500).json({ error: 'No pude armar el archivo.' }); }
+});
+// Lo que LumoBi ya sabe de este negocio (valor_acumulado.js)
+router.get('/valor-acumulado', auth, async (req, res) => {
+  try { res.json(await require('./valor_acumulado').valorAcumulado(req.user.negocio_id)); } catch (e) { res.status(500).json({ error: e.message }); }
+});
 // Qué tan bien acierta LumoBi en este negocio (precision.js)
 router.get('/precision', auth, async (req, res) => {
   try { res.json(await require('./precision').precision(req.user.negocio_id)); } catch (e) { res.status(500).json({ error: e.message }); }
