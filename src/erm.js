@@ -195,7 +195,7 @@ async function calcularRiesgoEmpleado(negocioId, nombreEmpleado) {
     const turnoConAlarma = cusumTurnos.find(c => c?.pct_umbral >= 70);
     señales.push({
       tipo: 'CUSUM',
-      descripcion: `Deriva conductual sostenida en turno ${turnoConAlarma?.turno || 'detectado'} (${turnoConAlarma?.pct_umbral ?? '?'}% del umbral)`,
+      descripcion: `En el turno ${({ manana: 'mañana', tarde: 'tarde', noche: 'noche' })[String(turnoConAlarma?.turno || '').toLowerCase()] || ''} la caja viene cerrando con faltantes cada vez más seguido`.replace('turno  la', 'turno la'),
       peso: partes.cusum,
     });
   }
@@ -211,7 +211,7 @@ async function calcularRiesgoEmpleado(negocioId, nombreEmpleado) {
   if (partes.brecha >= 8) {
     señales.push({
       tipo: 'BRECHA_PROMEDIO',
-      descripcion: `Brecha promedio de $${Math.round(brechaPromAbs).toLocaleString('es-AR')} — ${tasaInconsistencia.toFixed(0)}% de los turnos con desvío`,
+      descripcion: `Diferencia promedio de caja: $${Math.round(brechaPromAbs).toLocaleString('es-AR')} por cierre (${tasaInconsistencia.toFixed(0)}% de sus cierres con diferencia)`,
       peso: partes.brecha,
     });
   }
@@ -219,7 +219,7 @@ async function calcularRiesgoEmpleado(negocioId, nombreEmpleado) {
   if (partes.comportamiento >= 8) {
     señales.push({
       tipo: 'COMPORTAMIENTO_PEERS',
-      descripcion: `Comportamiento estadísticamente diferente al resto del equipo en el mismo turno`,
+      descripcion: `Cierra la caja distinto que el resto del equipo en el mismo turno`,
       peso: partes.comportamiento,
     });
   }
@@ -227,7 +227,7 @@ async function calcularRiesgoEmpleado(negocioId, nombreEmpleado) {
   if (partes.omision >= 3) {
     señales.push({
       tipo: 'OMISION_CONTEOS',
-      descripcion: `${(tasaOmision * 100).toFixed(0)}% de los conteos aleatorios no respondidos`,
+      descripcion: `No respondió el ${(tasaOmision * 100).toFixed(0)}% de los conteos de caja a mitad de turno`,
       peso: partes.omision,
     });
   }
@@ -235,7 +235,7 @@ async function calcularRiesgoEmpleado(negocioId, nombreEmpleado) {
   if (rachaLimpia >= 7) {
     señales.push({
       tipo: 'RACHA_POSITIVA',
-      descripcion: `${rachaLimpia} turnos consecutivos sin brecha significativa`,
+      descripcion: `${rachaLimpia} turnos seguidos cerrando bien la caja`,
       peso: -10, // señal positiva
     });
   }
@@ -318,7 +318,7 @@ async function calcularERMNegocio(negocioId, sucursalId = null) {
   // Alerta de equipo: si >50% están en rojo/amarillo
   const pctRiesgo = (resumen.rojos + resumen.amarillos) / (empleados.length || 1);
   const alertaEquipo = pctRiesgo >= 0.5
-    ? `${Math.round(pctRiesgo * 100)}% del equipo tiene señales activas — revisar operación general`
+    ? `${resumen.rojos + resumen.amarillos} de ${empleados.length} personas tienen algo para mirar en la caja: cuando le pasa a casi todos, suele ser algo del local (cómo se cuenta o se cierra la caja) y no de una persona`
     : null;
 
   return {
