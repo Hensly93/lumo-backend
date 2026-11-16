@@ -145,6 +145,18 @@ router.get('/callback', async (req, res) => {
   }
 });
 
+// ─── POST /api/mp/desconectar ─────────────────────────────────────────────────
+// El dueño corta la conexión cuando quiera: se borran las claves de acceso guardadas y LumoBi deja de mirar su
+// cuenta. Los cobros que ya se trajeron quedan en el historial (la pantalla se lo dice antes de confirmar).
+router.post('/desconectar', authWithQuery, async (req, res) => {
+  try {
+    if (req.user.rol && req.user.rol !== 'owner') return res.status(403).json({ error: 'Solo el dueño puede desconectar Mercado Pago.' });
+    const r = await pool.query('DELETE FROM integraciones_mp WHERE negocio_id=$1', [req.user.negocio_id]);
+    await pool.query('DELETE FROM sync_mp_estado WHERE negocio_id=$1', [req.user.negocio_id]).catch(() => {});
+    res.json({ ok: true, estaba_conectado: r.rowCount > 0 });
+  } catch (e) { res.status(500).json({ error: 'No pudimos desconectar. Probá de nuevo.' }); }
+});
+
 // ─── GET /api/mp/estado ───────────────────────────────────────────────────────
 router.get('/estado', authWithQuery, async (req, res) => {
   try {

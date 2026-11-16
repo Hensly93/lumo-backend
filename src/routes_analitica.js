@@ -14,6 +14,7 @@ const pool = require('./db');
 
 const TIPOS = new Set([
   'pantalla', 'tiempo', 'click', 'cta_landing', 'scroll', 'accion_api',
+  'mp_vista', 'mp_conectar', 'mp_ahora_no', 'mp_desconectar',
   'registro_envio', 'registro_ok', 'registro_error', 'login_ok', 'login_error', 'error', 'api_error',
 ]);
 const TZ = 'America/Argentina/Buenos_Aires';
