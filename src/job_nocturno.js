@@ -430,6 +430,7 @@ async function runJobNocturno(db = pool) {
     ['snapshots_erm', snapshotsERM],
     ['snapshots_goteo', snapshotsGoteo],
     ['medir_consejos', medirConsejos],
+    ['resumen_mensual', (db) => require('./resumen_mensual').enviarResumenesDelMes(db)],
   ];
   let fallidos = 0;
   for (const [nombre, fn] of PASOS) {

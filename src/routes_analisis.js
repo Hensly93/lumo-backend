@@ -424,6 +424,10 @@ router.get('/ficha/empleado/:nombre', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Lo que LumoBi hizo por el negocio en un mes (resumen_mensual.js)
+router.get('/resumen-mensual', auth, async (req, res) => {
+  try { res.json(await require('./resumen_mensual').resumenMensual(req.user.negocio_id, req.query.mes)); } catch (e) { console.error('resumen-mensual:', e.message); res.status(500).json({ error: 'No pude armar el resumen.' }); }
+});
 // Tus datos son tuyos: descarga en CSV (exportar.js). Solo el dueño.
 router.get('/exportar/:tipo', auth, async (req, res) => {
   try {
