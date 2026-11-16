@@ -123,7 +123,8 @@ async function faltaStock(db, negocioId) {
      ORDER BY AVG(venta) DESC LIMIT 1`, [negocioId]);
   const x = r.rows[0];
   if (!x || x.abiertos < 2) return null; // el negocio vendió los últimos 2 días, el producto no
-  const impacto = Math.round(x.prom_dia * 30);
+  // Se vendió x.dias de los últimos 21: el ritmo real es prom_dia × (x.dias / 21) por día, no todos los días.
+  const impacto = Math.round(x.prom_dia * (x.dias / 21) * 30);
   return {
     id: 'falta_stock', icono: '',
     titulo: `${x.nombre} se vendía casi todos los días y hace días que no se vende`,

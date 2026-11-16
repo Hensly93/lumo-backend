@@ -499,6 +499,17 @@ router.post('/upload-historial', auth, upload.single('archivo'), async (req, res
   }
 });
 
+// ─── GET /api/negocio/revelacion ──────────────────────────────────────────────
+// Lo que se le muestra al dueño apenas sube ventas o conecta Mercado Pago.
+router.get('/revelacion', auth, async (req, res) => {
+  try {
+    res.json(await require('./revelacion').revelacion(req.user.negocio_id));
+  } catch (e) {
+    console.error('revelacion error:', e.message);
+    res.status(500).json({ error: 'No pudimos armar la lectura de tu negocio.' });
+  }
+});
+
 // ─── GET /api/negocio/wow-moment ──────────────────────────────────────────────
 // Devuelve top 3 patrones impactantes del negocio (últimos 30 días)
 router.get('/wow-moment', auth, async (req, res) => {
