@@ -343,5 +343,43 @@ router.post('/marcar-prueba', express.json({ limit: '2kb' }), async (req, res) =
   }
 });
 
+// ─── Centro de mando (LumoBi hacia adentro): solo admin ────────────────────────
+async function soloAdmin(req, res) {
+  if (!pasaFreno('c:' + ipDe(req), 60, 60000)) { res.status(429).json({ error: 'Demasiados intentos' }); return false; }
+  const c = await accesoOk(req);
+  if (c === 'sin_clave') { res.status(503).json({ error: 'Falta configurar ADMIN_EMAILS en el servidor' }); return false; }
+  if (c !== 'ok') { res.status(401).json({ error: 'Clave incorrecta' }); return false; }
+  await asegurarTabla();
+  return true;
+}
+const CM = () => require('./centro_mando');
+
+router.get('/panorama', async (req, res) => {
+  try { if (!(await soloAdmin(req, res))) return; res.json(await CM().panorama()); }
+  catch (e) { console.error('[CENTRO] panorama:', e.message); res.status(500).json({ error: 'No se pudo armar el panorama' }); }
+});
+router.get('/clientes', async (req, res) => {
+  try { if (!(await soloAdmin(req, res))) return; res.json({ clientes: await CM().clientes({ incluirPruebas: req.query.pruebas === '1' }) }); }
+  catch (e) { console.error('[CENTRO] clientes:', e.message); res.status(500).json({ error: 'No se pudo leer los clientes' }); }
+});
+router.get('/cliente/:id', async (req, res) => {
+  try {
+    if (!(await soloAdmin(req, res))) return;
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'id invalido' });
+    const f = await CM().ficha(id);
+    if (!f) return res.status(404).json({ error: 'No encontramos ese cliente' });
+    res.json(f);
+  } catch (e) { console.error('[CENTRO] ficha:', e.message); res.status(500).json({ error: 'No se pudo armar la ficha' }); }
+});
+router.post('/cliente/:id/nota', express.json({ limit: '4kb' }), async (req, res) => {
+  try {
+    if (!(await soloAdmin(req, res))) return;
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'id invalido' });
+    res.json({ ok: true, nota: await CM().agregarNota(id, req.body && req.body.texto, req.body && req.body.tipo) });
+  } catch (e) { res.status(400).json({ error: e.message || 'No se pudo guardar' }); }
+});
+
 router.resumen = resumen;
 module.exports = router;
