@@ -112,7 +112,7 @@ router.post('/aplicar', auth, async (req, res) => {
         const ant = cur.rows[0].precio_venta;
         if (ant != null && parseFloat(ant) === x.precio) continue;
         await cx.query('UPDATE productos SET precio_venta=$3, updated_at=NOW() WHERE id=$1 AND negocio_id=$2', [x.id, n, x.precio]);
-        await cx.query(`INSERT INTO productos_historico_precios(producto_id, negocio_id, precio_anterior, precio_nuevo, origen) VALUES($1,$2,$3,$4,'ajuste_masivo')`, [x.id, n, ant, x.precio]);
+        await cx.query(`INSERT INTO productos_historico_precios(producto_id, negocio_id, precio_anterior, precio_nuevo, origen) VALUES($1,$2,$3,$4,'manual')`, [x.id, n, ant, x.precio]);
         hechos++;
       }
       await cx.query('COMMIT');

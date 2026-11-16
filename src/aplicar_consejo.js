@@ -14,7 +14,7 @@ async function aplicarPrecios(negocioId, a, db) {
     if (!p) { saltados.push({ nombre: c.nombre, motivo: 'No lo encontré en tu catálogo.' }); continue; }
     if (Math.abs(p.pv - antes) > 0.5) { saltados.push({ nombre: p.nombre, motivo: p.pv >= nuevo ? 'Ya tiene un precio igual o mayor.' : 'El precio cambió mientras tanto.' }); continue; }
     await db.query('UPDATE productos SET precio_venta = $1, updated_at = NOW() WHERE id = $2 AND negocio_id = $3', [nuevo, p.id, negocioId]);
-    await db.query(`INSERT INTO productos_historico_precios(producto_id, negocio_id, precio_anterior, precio_nuevo, origen) VALUES($1,$2,$3,$4,'consejo')`, [p.id, negocioId, p.pv, nuevo]).catch(() => {});
+    await db.query(`INSERT INTO productos_historico_precios(producto_id, negocio_id, precio_anterior, precio_nuevo, origen) VALUES($1,$2,$3,$4,'manual')`, [p.id, negocioId, p.pv, nuevo]).catch(() => {});
     await registrarCambio({ negocio_id: negocioId, producto_id: p.id, producto_nombre: p.nombre, campo: 'precio_venta', valor_anterior: p.pv, valor_nuevo: nuevo, empleado: null, origen: 'consejo' }).catch(() => {});
     hechos.push({ producto_id: p.id, nombre: p.nombre, antes: p.pv, nuevo });
   }
@@ -56,6 +56,7 @@ async function deshacer(negocioId, hechos, tipo, db = pool) {
     const r = await db.query('UPDATE productos SET precio_venta = $1, updated_at = NOW() WHERE id = $2 AND negocio_id = $3 AND ABS(precio_venta - $4) < 0.5', [h.antes, h.producto_id, negocioId, h.nuevo]);
     if (r.rowCount) {
       vueltos++;
+      await db.query(`INSERT INTO productos_historico_precios(producto_id, negocio_id, precio_anterior, precio_nuevo, origen) VALUES($1,$2,$3,$4,'manual')`, [h.producto_id, negocioId, h.nuevo, h.antes]).catch(() => {});
       await require('./cambios_precios').registrarCambio({ negocio_id: negocioId, producto_id: h.producto_id, producto_nombre: h.nombre, campo: 'precio_venta', valor_anterior: h.nuevo, valor_nuevo: h.antes, empleado: null, origen: 'consejo_deshecho' }).catch(() => {});
     }
   }

@@ -81,6 +81,11 @@ const TOOLS = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'costos_precios',
+    description: 'Productos cuyo costo subió y el precio de venta quedó igual: cuánto costaba, cuánto cuesta, cuánto le queda al dueño de cada $100, a qué precio volver a ganar lo de antes y cuánta plata más por mes. Usar cuando preguntan qué precios subir, si el proveedor les subió o por qué ganan menos.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
     name: 'precision_lumobi',
     description: 'Qué tan bien viene acertando LumoBi en este negocio: cuántas predicciones acertó, cuántos avisos le sirvieron al dueño, cuántos consejos funcionaron y qué avisos se ajustó solo. Usar cuando preguntan si pueden confiar en LumoBi o qué tan bien predice.',
     input_schema: { type: 'object', properties: {} },
@@ -237,6 +242,10 @@ async function fichas(nombre, input, negocioId, db) {
     const r = await require('./pedidos').calcular(negocioId, db);
     return { ...r, por_proveedor: (r.por_proveedor || []).slice(0, 5).map((g) => ({ ...g, items: (g.items || []).slice(0, 6) })), ver_en: '/pedidos' };
   }
+  if (nombre === 'costos_precios') {
+    const r = await require('./margen_costos').calcular(negocioId, db);
+    return { frase: r.frase, total_mes: r.total_mes, productos: r.items.slice(0, 6).map((i) => ({ frase: i.frase, por_mes: i.por_mes })), ver_en: '/costos' };
+  }
   if (nombre === 'que_mirar_hoy') {
     const s = await require('./sala').sala(negocioId, null, db);
     return { fecha: s.fecha, para_mirar: s.revisar, ahora: s.ahora, viene: s.viene, ver_en: '/en-vivo' };
@@ -259,7 +268,7 @@ async function ejecutar(nombre, input, negocioId, db = pool) {
       })),
     };
   }
-  if (['ficha_producto', 'ficha_persona', 'ficha_turno', 'ficha_proveedor', 'que_pedir', 'que_mirar_hoy', 'precision_lumobi'].includes(nombre)) return fichas(nombre, input, negocioId, db);
+  if (['ficha_producto', 'ficha_persona', 'ficha_turno', 'ficha_proveedor', 'que_pedir', 'que_mirar_hoy', 'costos_precios', 'precision_lumobi'].includes(nombre)) return fichas(nombre, input, negocioId, db);
   if (nombre === 'plata_recuperada') return require('./hallazgos').resumenRecuperado(negocioId);
   return { error: 'tool desconocida: ' + nombre };
 }
