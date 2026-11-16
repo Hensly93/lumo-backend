@@ -41,7 +41,7 @@ async function estadoGuia(negocioId, usuarioId, db = pool) {
     facturas: r('facturas', facturas.n > 0, 'Sacarle foto a una factura de proveedor', '/compras'),
     avisos: r('avisos', extra.celus > 0, 'Activar los avisos en tu celu', '/primeros-pasos?paso=avisos'),
     locales: r('locales', extra.locales > 0, 'Cargar tu local (dirección)', '/red'),
-    mp: r('mp', extra.mp, 'Conectar Mercado Pago (opcional)', '/ajustes'),
+    mp: r('mp', extra.mp, 'Conectar Mercado Pago (opcional)', '/mercado-pago'),
   };
   // Qué activa el dueño, cuánto pesa y qué gana con cada cosa. "LumoBi funcionando al X%".
   const ACTIVABLES = [
