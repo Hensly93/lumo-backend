@@ -335,7 +335,11 @@ router.post('/marcar-prueba', express.json({ limit: '2kb' }), async (req, res) =
     const id = parseInt(req.body && req.body.usuario_id, 10);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'usuario_id invalido' });
     await asegurarTabla();
-    const r = await pool.query('UPDATE usuarios SET es_prueba = $2 WHERE id = $1', [id, !!(req.body && req.body.es_prueba)]);
+    await pool.query('ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS es_prueba_auto BOOLEAN NOT NULL DEFAULT false');
+    await pool.query('ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS es_real_confirmada BOOLEAN NOT NULL DEFAULT false');
+    const esPrueba = !!(req.body && req.body.es_prueba);
+    // Marcar como real es una decisión tuya: el aislamiento automático ya no la vuelve a tocar.
+    const r = await pool.query('UPDATE usuarios SET es_prueba = $2, es_prueba_auto = false, es_real_confirmada = $3 WHERE id = $1', [id, esPrueba, !esPrueba]);
     res.json({ ok: true, cambiadas: r.rowCount });
   } catch (e) {
     console.error('[ANALITICA] marcar-prueba:', e.message);
@@ -350,6 +354,7 @@ async function soloAdmin(req, res) {
   if (c === 'sin_clave') { res.status(503).json({ error: 'Falta configurar ADMIN_EMAILS en el servidor' }); return false; }
   if (c !== 'ok') { res.status(401).json({ error: 'Clave incorrecta' }); return false; }
   await asegurarTabla();
+  try { await require('./centro_mando').aislarPruebas(); } catch (e) { console.error('[CENTRO] aislar:', e.message); }
   return true;
 }
 const CM = () => require('./centro_mando');

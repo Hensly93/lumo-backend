@@ -13,6 +13,25 @@ const { calcularPrecio } = require('./precios');
 const DIA_MS = 86400000;
 const dias = (d) => (d ? Math.floor((Date.now() - new Date(d).getTime()) / DIA_MS) : null);
 
+// Aísla las cuentas de prueba SOLAS: las que se usaron desde el mismo navegador que entró con tu cuenta de admin, las del
+// propio admin y las que dicen test/prueba/demo. Si una era real, tocás "Es un cliente real" y no se vuelve a marcar.
+async function aislarPruebas() {
+  await pool.query('ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS es_prueba BOOLEAN NOT NULL DEFAULT false');
+  await pool.query('ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS es_prueba_auto BOOLEAN NOT NULL DEFAULT false');
+  await pool.query('ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS es_real_confirmada BOOLEAN NOT NULL DEFAULT false');
+  const admins = String(process.env.ADMIN_EMAILS || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const r = await pool.query(`
+    UPDATE usuarios u SET es_prueba = true, es_prueba_auto = true
+    WHERE u.es_prueba IS NOT TRUE AND u.es_real_confirmada IS NOT TRUE AND (
+      lower(u.email) = ANY($1)
+      OR u.email ~* '(^|[^a-z])(test|prueba|demo)([^a-z]|$)'
+      OR u.id::text IN (
+        SELECT DISTINCT e.usuario_id FROM analitica_eventos e
+        WHERE e.usuario_id IS NOT NULL AND e.visitante IN (
+          SELECT a.visitante FROM analitica_eventos a JOIN usuarios ad ON ad.id::text = a.usuario_id WHERE lower(ad.email) = ANY($1))))`, [admins]);
+  return r.rowCount;
+}
+
 async function asegurarNotas() {
   await pool.query(`CREATE TABLE IF NOT EXISTS crm_notas (
     id BIGSERIAL PRIMARY KEY, usuario_id INTEGER NOT NULL, tipo VARCHAR(12) NOT NULL DEFAULT 'nota',
@@ -102,6 +121,7 @@ async function clientes({ incluirPruebas = false } = {}) {
     SELECT u.id AS usuario_id, u.nombre AS nombre_persona, u.negocio AS negocio, u.email, u.celular,
            COALESCE(u.trial_inicio, u.created_at) AS registro, u.trial_fin, COALESCE(u.subscription_status,'sin_estado') AS estado,
            (u.es_prueba IS TRUE OR COALESCE(u.subscription_status,'')='interna' OR u.email ILIKE '%@test.%' OR u.email ILIKE '%@example.%') AS prueba,
+           (u.es_prueba_auto IS TRUE AND u.es_prueba IS TRUE) AS prueba_auto,
            n.id AS negocio_id, n.locales_declarados, n.cajas_declaradas, n.empleados_declarados,
            EXISTS (SELECT 1 FROM integraciones_mp i WHERE i.negocio_id = n.id) AS mp,
            (SELECT COUNT(*)::int FROM push_subscriptions p WHERE p.usuario_id = u.id) AS avisos,
@@ -140,7 +160,7 @@ async function clientes({ incluirPruebas = false } = {}) {
     const wa = whatsapp(c.celular);
     return {
       usuario_id: c.usuario_id, negocio_id: c.negocio_id, negocio: c.negocio, persona: c.nombre_persona, email: c.email,
-      celular: c.celular || null, registro: c.registro, estado_plan: c.estado, prueba: c.prueba,
+      celular: c.celular || null, registro: c.registro, estado_plan: c.estado, prueba: c.prueba, prueba_auto: !!c.prueba_auto,
       etapa: ev.etapa, riesgo: ev.riesgo, nivel: ev.nivel, motivos: ev.motivos,
       ultimo_visto: c.ultimo, ultimo_dias: c.ultimo_dias, dias_activos_7: c.dias_7 || 0, dias_activos_prev7: c.dias_prev7 || 0,
       app: { instalada: !!c.pwa_instalada, la_abrio_hace_dias: c.pwa_ultima_dias, vio_la_oferta: !!c.pwa_oferta, avisos_activados: c.avisos > 0 },
@@ -154,6 +174,92 @@ async function clientes({ incluirPruebas = false } = {}) {
       mailto: c.email ? `mailto:${c.email}?subject=${encodeURIComponent('LumoBi')}&body=${encodeURIComponent(msg.texto)}` : null,
     };
   });
+}
+
+
+// ─── Radiografía de un cliente: todo lo que hay de SU negocio en la base ───────────────────────────────────────────────
+
+async function radiografia(negocioId) {
+  const q = async (sql, p) => { try { return (await pool.query(sql, [negocioId].concat(p || []))).rows; } catch (e) { console.error('[CENTRO] radiografia:', e.message); return []; } };
+  const FL = `(t.fecha - INTERVAL '3 hours')`;
+  const [v] = await q(`SELECT COUNT(*)::int n, COALESCE(SUM(t.monto),0)::float total, COUNT(DISTINCT ${FL}::date)::int dias,
+      COALESCE(AVG(t.monto),0)::float ticket, MAX(${FL})::text ultima, MIN(${FL}::date)::text primera,
+      COALESCE(SUM(t.monto) FILTER (WHERE lower(COALESCE(t.metodo_pago,'')) IN ('efectivo','cash')),0)::float efectivo,
+      COUNT(*) FILTER (WHERE COALESCE(t.origin,'real') = 'importado')::int importadas,
+      COUNT(*) FILTER (WHERE COALESCE(t.origin,'real') = 'real')::int de_caja
+    FROM transacciones t WHERE t.negocio_id=$1 AND COALESCE(t.origin,'real') IN ('real','importado') AND t.monto > 0`);
+  const porDia = await q(`SELECT ${FL}::date::text dia, COUNT(*)::int n, SUM(t.monto)::float total FROM transacciones t
+    WHERE t.negocio_id=$1 AND COALESCE(t.origin,'real') IN ('real','importado') AND t.monto > 0 AND ${FL}::date >= (NOW() - INTERVAL '3 hours')::date - 13 GROUP BY 1 ORDER BY 1`);
+  const [pr] = await q(`SELECT COUNT(*) FILTER (WHERE activo IS NOT FALSE)::int n, COUNT(*) FILTER (WHERE activo IS NOT FALSE AND precio_costo > 0)::int con_costo FROM productos WHERE negocio_id=$1`);
+  const [eq] = await q(`SELECT COUNT(*) FILTER (WHERE activo IS NOT FALSE)::int n FROM empleados_negocio WHERE negocio_id=$1`);
+  const [tu] = await q(`SELECT COUNT(*) FILTER (WHERE estado='cerrado')::int cerrados, MAX(hora_cierre)::text ultimo,
+      COUNT(*) FILTER (WHERE estado='cerrado' AND brecha < 0)::int con_falta, COALESCE(SUM(-brecha) FILTER (WHERE estado='cerrado' AND brecha < 0),0)::float falta
+    FROM turnos_caja WHERE negocio_id=$1`);
+  const [co] = await q(`SELECT COUNT(*)::int n, MAX(fecha)::text ultima, COALESCE(SUM(total),0)::float total FROM compras WHERE negocio_id=$1`);
+  const [pa] = await q(`SELECT COUNT(*)::int n FROM cambios_precios WHERE negocio_id=$1`);
+  const [mpc] = await q(`SELECT COUNT(*)::int n, COALESCE(SUM(monto),0)::float monto FROM pagos_mp WHERE negocio_id=$1 AND estado='approved'`);
+  let rev = null;
+  try { rev = await require('./revelacion').revelacion(negocioId); } catch (e) { /* sin hallazgos */ }
+  const h = (rev && rev.hallazgos) || [];
+  const faltan = [];
+  const check = [
+    ['Cargó ventas', v.n > 0, v.n ? `${v.n.toLocaleString('es-AR')} ventas en ${v.dias} días` : 'todavía ninguna'],
+    ['Tiene 3 o más días de ventas', v.dias >= 3, `${v.dias} día${v.dias === 1 ? '' : 's'}`],
+    ['Cargó su catálogo', pr.n > 0, pr.n ? `${pr.n} productos` : 'sin productos'],
+    ['Cargó costos de sus productos', pr.n > 0 && pr.con_costo >= pr.n * 0.5, pr.n ? `${pr.con_costo} de ${pr.n} con costo` : '-'],
+    ['Cerró al menos una caja', tu.cerrados > 0, `${tu.cerrados} cierres`],
+    ['Subió facturas de proveedores', co.n > 0, `${co.n} facturas`],
+    ['Tiene empleados cargados', eq.n > 0, `${eq.n} empleados`],
+    ['Conectó Mercado Pago', mpc.n > 0, mpc.n ? `${mpc.n} cobros importados` : 'no'],
+  ].map(([que, ok, detalle]) => { if (!ok) faltan.push(que); return { que, ok, detalle }; });
+  return {
+    ventas: { n: v.n, total: Math.round(v.total), dias: v.dias, ticket: Math.round(v.ticket), desde: v.primera, ultima: v.ultima,
+      pct_efectivo: v.total > 0 ? Math.round((v.efectivo / v.total) * 100) : null, importadas: v.importadas, de_caja: v.de_caja,
+      por_dia: porDia.map((d) => ({ dia: d.dia, n: d.n, total: Math.round(d.total) })) },
+    catalogo: { productos: pr.n, con_costo: pr.con_costo },
+    equipo: { empleados: eq.n, cierres: tu.cerrados, con_faltante: tu.con_falta, faltante: Math.round(tu.falta), ultimo_cierre: tu.ultimo },
+    compras: { n: co.n, total: Math.round(co.total), ultima: co.ultima },
+    precios_cambiados: pa.n,
+    mercado_pago: { cobros: mpc.n, monto: Math.round(mpc.monto) },
+    lo_que_encontramos: { plata_en_juego: rev ? rev.plata_en_juego || 0 : 0, hallazgos: h.map((x) => ({ titulo: x.titulo, impacto: x.impacto_pesos })) },
+    checklist: check, faltan,
+  };
+}
+
+// ─── Qué pasó (todo lo que hicieron los clientes reales, lo último primero) ────────────────────────────────────────────
+
+async function actividad(limite = 60) {
+  const ev = await pool.query(`
+    SELECT e.creado, e.tipo, e.ruta, COALESCE(e.d->>'t', e.d->>'p', e.d->>'m') que, e.disp, u.negocio, u.nombre persona, u.id uid
+    FROM analitica_eventos e JOIN usuarios u ON u.id::text = e.usuario_id
+    WHERE u.es_prueba IS NOT TRUE AND COALESCE(u.subscription_status,'') <> 'interna'
+      AND e.tipo IN ('registro_ok','login_ok','pwa_oferta','pwa_click','pwa_instalada','mp_vista','mp_conectar','mp_ahora_no','mp_desconectar','accion_api','error','api_error','pantalla')
+      AND e.creado >= NOW() - INTERVAL '14 days'
+    ORDER BY e.creado DESC LIMIT 400`);
+  const ET = { registro_ok: 'Se registró', login_ok: 'Entró', pwa_oferta: 'Le mostramos instalar la app', pwa_click: 'Tocó instalar la app', pwa_instalada: 'Instaló la app', mp_vista: 'Miró la pantalla de Mercado Pago', mp_conectar: 'Tocó conectar Mercado Pago', mp_ahora_no: 'Dijo "ahora no" a Mercado Pago', mp_desconectar: 'Desconectó Mercado Pago', error: 'Le salió un error', api_error: 'Falló una acción' };
+  const filas = []; const visto = new Set();
+  for (const e of ev.rows) {
+    let texto = ET[e.tipo];
+    if (e.tipo === 'pantalla') {
+      const k = `${e.uid}|${e.ruta}|${new Date(e.creado).toISOString().slice(0, 13)}`;
+      if (visto.has(k)) continue; visto.add(k);
+      texto = `Abrió ${e.ruta}`;
+    } else if (e.tipo === 'accion_api') texto = `Guardó algo: ${String(e.que || '').replace('/api/', '')}`;
+    else if (e.tipo === 'login_ok') { const k = `login|${e.uid}|${new Date(e.creado).toISOString().slice(0, 13)}`; if (visto.has(k)) continue; visto.add(k); }
+    if ((e.tipo === 'error' || e.tipo === 'api_error') && e.que) texto += `: ${String(e.que).slice(0, 80)}`;
+    filas.push({ cuando: e.creado, negocio: e.negocio, persona: e.persona, usuario_id: e.uid, texto, grave: e.tipo.includes('error'), app: e.disp === 'pwa' });
+  }
+  const db = await pool.query(`
+    SELECT x.cuando, x.texto, u.negocio, u.nombre persona, u.id uid FROM (
+      SELECT t.negocio_id, MAX(t.fecha) cuando, 'Ese día cargó ' || COUNT(*) || ' ventas' texto FROM transacciones t
+        WHERE t.fecha >= NOW() - INTERVAL '14 days' GROUP BY t.negocio_id, date_trunc('day', t.fecha)
+      UNION ALL SELECT c.negocio_id, c.creado, 'Subió una factura' FROM compras c WHERE c.creado >= NOW() - INTERVAL '14 days'
+      UNION ALL SELECT tc.negocio_id, tc.hora_cierre, 'Cerró la caja' FROM turnos_caja tc WHERE tc.estado='cerrado' AND tc.hora_cierre >= NOW() - INTERVAL '14 days'
+    ) x JOIN negocio_usuarios nu ON nu.negocio_id = x.negocio_id AND nu.rol='owner' AND nu.activo
+        JOIN usuarios u ON u.id = nu.usuario_id
+    WHERE u.es_prueba IS NOT TRUE AND COALESCE(u.subscription_status,'') <> 'interna' ORDER BY x.cuando DESC LIMIT 150`).catch(() => ({ rows: [] }));
+  for (const d of db.rows) filas.push({ cuando: d.cuando, negocio: d.negocio, persona: d.persona, usuario_id: d.uid, texto: d.texto, grave: false, app: false });
+  return filas.sort((a, b) => new Date(b.cuando).getTime() - new Date(a.cuando).getTime()).slice(0, limite);
 }
 
 // ─── Panorama: números clave, a quién escribirle hoy y hacia dónde va ───────
@@ -184,8 +290,12 @@ async function panorama() {
     .filter((c) => c.riesgo >= 25 && (c.contactado_hace_dias == null || c.contactado_hace_dias >= 3))
     .sort((a, b) => b.riesgo - a.riesgo).slice(0, 10);
 
+  const reales = todos.slice(0, 12);
+  const radios = await Promise.all(reales.map((c) => radiografia(c.negocio_id).then((r) => ({ usuario_id: c.usuario_id, negocio: c.negocio, persona: c.persona, etapa: c.etapa, nivel: c.nivel, riesgo: c.riesgo, ultimo_dias: c.ultimo_dias, registro: c.registro, ...r }))));
+  const feed = await actividad(60);
   return {
     generado: new Date().toISOString(),
+    radiografias: radios, actividad: feed,
     cuentas: todos.length,
     kpis: {
       nuevas_7: cuenta((c) => dias(c.registro) <= 6),
@@ -235,6 +345,7 @@ async function ficha(usuarioId) {
   const ETIQ = { registro_ok: 'Se registró', login_ok: 'Primer ingreso medido', pwa_oferta: 'Le mostramos instalar la app', pwa_click: 'Tocó "Instalar app"', pwa_instalada: 'Instaló la app', mp_vista: 'Vio la pantalla de Mercado Pago', mp_conectar: 'Tocó "Conectar Mercado Pago"', mp_ahora_no: 'Eligió "Ahora no" en Mercado Pago', mp_desconectar: 'Desconectó Mercado Pago' };
   return {
     cliente: c,
+    radiografia: await radiografia(c.negocio_id),
     actividad_30d: dia.rows,
     pantallas: pant.rows,
     acciones: acc.rows,
@@ -254,4 +365,4 @@ async function agregarNota(usuarioId, texto, tipo) {
   return r.rows[0];
 }
 
-module.exports = { clientes, panorama, ficha, agregarNota, asegurarNotas, _evaluar: evaluar };
+module.exports = { clientes, panorama, ficha, agregarNota, asegurarNotas, aislarPruebas, radiografia, actividad, _evaluar: evaluar };
