@@ -321,7 +321,8 @@ router.get('/', auth, async (req, res) => {
   try {
     const { categoria, q } = req.query;
     await require('./catalogo_marca').asegurar();
-    let query = `SELECT id, nombre, marca, categoria, precio_venta, precio_costo, unidad, updated_at, codigo_barras
+    await require('./acceso_rapido').asegurar();
+    let query = `SELECT id, nombre, marca, categoria, precio_venta, precio_costo, unidad, updated_at, codigo_barras, acceso_rapido
                  FROM productos WHERE negocio_id=$1 AND activo=true`;
     const params = [req.user.negocio_id];
 
@@ -361,6 +362,19 @@ router.get('/categorias', auth, async (req, res) => {
 });
 
 // ─── PATCH /api/productos/:id ─────────────────────────────────────────────────
+// PATCH /api/productos/:id/rapido  { acceso_rapido: true|false } — pone o saca el producto de la grilla de la caja
+router.patch('/:id/rapido', auth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Producto inválido' });
+    const r = await require('./acceso_rapido').marcar(req.user.negocio_id, id, req.body && req.body.acceso_rapido);
+    if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
+    res.json(r.producto);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.patch('/:id', auth, async (req, res) => {
   try {
     const { nombre, categoria, precio_venta, precio_costo, unidad, codigo_barras } = req.body;

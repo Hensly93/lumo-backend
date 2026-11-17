@@ -54,6 +54,18 @@ router.get('/buscar', authTurno, async (req, res) => {
   }
 });
 
+// GET /api/scanner/rapidos — la grilla de acceso rápido del negocio (productos que el dueño marcó para cobrar sin código)
+router.get('/rapidos', authTurno, async (req, res) => {
+  try {
+    const turno = await pool.query(`SELECT negocio_id FROM turnos_caja WHERE id=$1 AND estado='activo'`, [req.turno.id]);
+    if (turno.rows.length === 0) return res.status(400).json({ error: 'Turno no activo' });
+    const productos = await require('./acceso_rapido').listar(turno.rows[0].negocio_id);
+    res.json({ productos });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/producto', authTurno, async (req, res) => {
   try {
     const { codigo } = req.query;
@@ -259,7 +271,7 @@ router.get('/carrito/:turno_id', authTurno, async (req, res) => {
 
     await require('./caja_extra').asegurar();
     const items = await pool.query(
-      `SELECT c.*, COALESCE(p.nombre, c.descripcion) as producto_nombre, p.codigo_barras
+      `SELECT c.*, COALESCE(p.nombre, c.descripcion) as producto_nombre, p.codigo_barras, p.unidad AS producto_unidad
        FROM carrito_items c
        LEFT JOIN productos p ON c.producto_id = p.id
        WHERE c.turno_id = $1
