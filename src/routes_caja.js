@@ -170,7 +170,18 @@ router.post('/validar-pin', async (req, res) => {
       });
     }
 
-    res.json({ valido: true, turno_activo: null });
+    // Sin turno abierto: la caja necesita saber si es el PRIMER turno del negocio (no tiene sentido pedirle a un cliente nuevo
+    // cuánta plata hay) y, si no, cuánto se dejó al cerrar el último (se le pregunta "¿sigue igual?" en vez de pedirlo de cero).
+    let primerTurno = false, ultimoCierre = null;
+    try {
+      const prev = await pool.query(
+        `SELECT caja_cierre FROM turnos_caja WHERE negocio_id=$1 AND estado <> 'activo'
+          ORDER BY hora_apertura DESC LIMIT 1`, [negocio_id]);
+      const alguno = await pool.query('SELECT 1 FROM turnos_caja WHERE negocio_id=$1 LIMIT 1', [negocio_id]);
+      primerTurno = alguno.rows.length === 0;
+      if (prev.rows.length > 0 && prev.rows[0].caja_cierre != null) ultimoCierre = parseFloat(prev.rows[0].caja_cierre);
+    } catch { /* si falla, la caja pregunta como siempre */ }
+    res.json({ valido: true, turno_activo: null, primer_turno: primerTurno, ultimo_cierre: ultimoCierre });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
