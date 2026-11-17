@@ -14,6 +14,8 @@ app.use(cors({
   ],
   credentials: true,
 }));
+// Respuestas comprimidas (gzip): el JSON de /inicio y los listados pesa varias veces menos por la red; se nota en todas las pantallas.
+app.use(require("compression")());
 app.use(express.json());
 // Detrás del proxy de Render: así req.ip es la IP real de cada visitante (necesario para frenar intentos).
 app.set("trust proxy", 1);
