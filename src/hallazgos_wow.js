@@ -17,7 +17,7 @@
 const pool = require('./db');
 const CF = require('./caja_faltante');
 
-const { FL_T: FL, REAL_T: REAL } = require('./ventas_sql');
+const { FL_T: FL, REAL_T: REAL, ticketsNetos } = require('./ventas_sql');
 const HOY = `(NOW() - INTERVAL '3 hours')::date`;
 const $ = (n) => '$' + Math.round(Math.abs(Number(n) || 0)).toLocaleString('es-AR');
 const pct = (x) => Math.round((Number(x) || 0) * 100);
@@ -158,11 +158,11 @@ async function diferenciasCaja(db, negocioId) {
 
 async function ticketEmpleado(db, negocioId, dias) {
   const r = await db.query(
-    `SELECT t.empleado, COUNT(*)::int n, AVG(t.monto)::float ticket, COUNT(DISTINCT t.turno_id)::int turnos
+    `SELECT t.empleado, ${ticketsNetos('t.')}::int n, (SUM(t.monto) / NULLIF(${ticketsNetos('t.')},0))::float ticket, COUNT(DISTINCT t.turno_id)::int turnos
      FROM transacciones t
      WHERE t.negocio_id=$1 AND ${REAL} AND t.empleado IS NOT NULL AND t.empleado NOT IN ('importado_mp','importado')
        AND ${FL}::date >= ${HOY} - ${VENTANA}
-     GROUP BY 1 HAVING COUNT(*) >= 30 ORDER BY 3 DESC`, [negocioId]);
+     GROUP BY 1 HAVING ${ticketsNetos('t.')} >= 30 ORDER BY 3 DESC`, [negocioId]);
   if (r.rows.length < 2) return null;
   const alto = r.rows[0], bajo = r.rows[r.rows.length - 1];
   const dif = alto.ticket / bajo.ticket - 1;

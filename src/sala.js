@@ -6,7 +6,7 @@ const pool = require('./db');
 const { negocioEnVivo } = require('./en_vivo');
 const { calcularPrediccion } = require('./prediccion_adaptativa');
 
-const { FL } = require('./ventas_sql');
+const { FL, ticketsNetos } = require('./ventas_sql');
 const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 const r0 = (n) => Math.round(Number(n) || 0);
 const mediana = (a) => { if (!a.length) return null; const o = [...a].sort((x, y) => x - y); const m = Math.floor(o.length / 2); return o.length % 2 ? o[m] : (o[m - 1] + o[m]) / 2; };
@@ -22,17 +22,17 @@ async function sala(negocioId, sucursalId = null, db = pool) {
 
   // ── Ventas por hora de hoy y por día de las últimas 8 semanas (mismo filtro de local) ──
   const [porHora, porDia, turnos] = await Promise.all([
-    db.query(`SELECT EXTRACT(HOUR FROM ${FL})::int h, SUM(monto)::float total, COUNT(*)::int tickets
+    db.query(`SELECT EXTRACT(HOUR FROM ${FL})::int h, SUM(monto)::float total, ${ticketsNetos('')}::int tickets
                 FROM transacciones WHERE negocio_id=$1 AND ${FL}::date=$2::date AND ($3::integer IS NULL OR sucursal_id=$3)
                GROUP BY 1 ORDER BY 1`, [negocioId, hoy, sucursalId]),
-    db.query(`SELECT to_char(${FL}::date,'YYYY-MM-DD') d, SUM(monto)::float total, COUNT(*)::int tickets
+    db.query(`SELECT to_char(${FL}::date,'YYYY-MM-DD') d, SUM(monto)::float total, ${ticketsNetos('')}::int tickets
                 FROM transacciones WHERE negocio_id=$1 AND ${FL}::date >= $2::date AND ${FL}::date < $3::date
                  AND ($4::integer IS NULL OR sucursal_id=$4)
                GROUP BY 1`, [negocioId, masDias(hoy, -56), hoy, sucursalId]),
     db.query(`SELECT t.id, t.nombre_empleado, t.tipo_turno, t.sucursal_id, s.nombre sucursal,
                      to_char(t.hora_apertura - INTERVAL '3 hours','HH24:MI') desde,
                      COALESCE((SELECT SUM(monto) FROM transacciones x WHERE x.turno_id=t.id),0)::float ventas,
-                     COALESCE((SELECT COUNT(*) FROM transacciones x WHERE x.turno_id=t.id),0)::int tickets
+                     COALESCE((SELECT ${ticketsNetos('x.')} FROM transacciones x WHERE x.turno_id=t.id),0)::int tickets
                 FROM turnos_caja t LEFT JOIN mis_sucursales s ON s.id=t.sucursal_id
                WHERE t.negocio_id=$1 AND t.estado='activo' AND ($2::integer IS NULL OR t.sucursal_id=$2)
                ORDER BY t.hora_apertura`, [negocioId, sucursalId]),

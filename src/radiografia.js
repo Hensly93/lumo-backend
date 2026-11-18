@@ -6,7 +6,7 @@
 //   estimado  = oportunidad: lo que se ganaría si un día/franja rindiera como el resto
 const pool = require('./db');
 
-const { FL } = require('./ventas_sql');
+const { FL, ticketsNetos } = require('./ventas_sql');
 const AHORA_AR = `(NOW() - INTERVAL '3 hours')`;
 const VENTANA_DIAS = 56;     // 8 semanas
 const MIN_DIAS = 14;         // con menos días con ventas no se muestra radiografía de ventas
@@ -201,13 +201,13 @@ async function calcularRadiografia(negocioId, db = pool, opts = {}) {
   const fuentes = Object.assign({ fugas: (id) => require('./fugas').calcularFugas(id) }, opts.fuentes || {});
   const ventana = `${FL} >= ${AHORA_AR}::date - INTERVAL '${VENTANA_DIAS} days' AND ${FL}::date < ${AHORA_AR}::date`;
   const [dRes, hRes, fRes, hoyRes, mRes] = await Promise.allSettled([
-    db.query(`SELECT ${FL}::date::text AS d, EXTRACT(DOW FROM ${FL})::int AS dow, SUM(monto)::float AS total, COUNT(*)::int AS tickets
+    db.query(`SELECT ${FL}::date::text AS d, EXTRACT(DOW FROM ${FL})::int AS dow, SUM(monto)::float AS total, ${ticketsNetos('')}::int AS tickets
                 FROM transacciones WHERE negocio_id = $1 AND ${ventana} GROUP BY 1, 2 HAVING SUM(monto) > 0`, [negocioId]),
     db.query(`SELECT ${FL}::date::text AS d, EXTRACT(HOUR FROM ${FL})::int AS h, SUM(monto)::float AS total
                 FROM transacciones WHERE negocio_id = $1 AND ${ventana} GROUP BY 1, 2 HAVING SUM(monto) > 0`, [negocioId]),
     fuentes.fugas(negocioId),
     db.query(`SELECT ${AHORA_AR}::date::text AS hoy`),
-    db.query(`SELECT COALESCE(metodo_pago, '') AS medio, SUM(monto)::float AS total, COUNT(*)::int AS tickets
+    db.query(`SELECT COALESCE(metodo_pago, '') AS medio, SUM(monto)::float AS total, ${ticketsNetos('')}::int AS tickets
                 FROM transacciones WHERE negocio_id = $1 AND ${FL} >= ${AHORA_AR}::date - INTERVAL '28 days' AND ${FL}::date < ${AHORA_AR}::date
                 GROUP BY 1`, [negocioId]),
   ]);

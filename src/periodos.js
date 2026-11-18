@@ -17,7 +17,7 @@
 const pool = require('./db');
 const CF = require('./caja_faltante');
 
-const { FL } = require('./ventas_sql');               // hora Argentina (la base está en UTC)
+const { FL, ticketsNetos } = require('./ventas_sql');               // hora Argentina (la base está en UTC)
 const FL_CIERRE = `(hora_cierre - INTERVAL '3 hours')`;
 const IPC_SERIE = '148.3_INIVELNAL_DICI_M_26';           // IPC nivel general nacional (INDEC)
 const DIA_MS = 86400000;
@@ -137,7 +137,7 @@ const factorIPC = (ipc, mes) => (ipc ? ipc.ultIndice / (ipc.mapa.get(mes) ?? ipc
 // ─── Consultas ───────────────────────────────────────────────────────────────
 async function ventasPorMes(db, negocioId, sucursalId, r) {
   const q = await db.query(
-    `SELECT to_char(${FL}, 'YYYY-MM') AS mes, COUNT(*)::int AS tickets, COALESCE(SUM(monto),0)::float AS total
+    `SELECT to_char(${FL}, 'YYYY-MM') AS mes, ${ticketsNetos('')}::int AS tickets, COALESCE(SUM(monto),0)::float AS total
      FROM transacciones
      WHERE negocio_id = $1 AND ($2::integer IS NULL OR sucursal_id = $2)
        AND ${FL} >= $3::timestamp AND ${FL} < $4::timestamp
@@ -215,7 +215,7 @@ async function desglose(db, negocioId, sucursalId, r) {
   const W = `WHERE t.negocio_id = $1 AND ($2::integer IS NULL OR t.sucursal_id = $2)
                AND ${FL.replace('fecha', 't.fecha')} >= $3::timestamp AND ${FL.replace('fecha', 't.fecha')} < $4::timestamp`;
   const agrupar = (expr, orden = 'total DESC') => db.query(
-    `SELECT ${expr} AS clave, COUNT(*)::int AS tickets, COALESCE(SUM(t.monto),0)::float AS total
+    `SELECT ${expr} AS clave, ${ticketsNetos('t.')}::int AS tickets, COALESCE(SUM(t.monto),0)::float AS total
      FROM transacciones t ${expr.includes('s.nombre') ? 'LEFT JOIN mis_sucursales s ON s.id = t.sucursal_id' : ''}
      ${W} GROUP BY 1 ORDER BY ${orden}`, p).then(q => q.rows.map(x => ({ clave: x.clave, tickets: x.tickets, total: Math.round(x.total) })));
   const [suc, emp, medio, hora, dsem] = await Promise.all([
@@ -242,7 +242,7 @@ async function serie(db, negocioId, sucursalId, r, gran) {
     : gran === 'mes' ? `(EXTRACT(MONTH FROM ${FL})::int - 1)`
     : `FLOOR(EXTRACT(EPOCH FROM (${FL} - $3::timestamp)) / 86400)::int`;
   const q = await db.query(
-    `SELECT ${expr} AS i, COALESCE(SUM(monto),0)::float AS total, COUNT(*)::int AS tickets
+    `SELECT ${expr} AS i, COALESCE(SUM(monto),0)::float AS total, ${ticketsNetos('')}::int AS tickets
      FROM transacciones
      WHERE negocio_id = $1 AND ($2::integer IS NULL OR sucursal_id = $2)
        AND ${FL} >= $3::timestamp AND ${FL} < $4::timestamp

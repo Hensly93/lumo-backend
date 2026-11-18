@@ -5,6 +5,7 @@
 // Mes calendario de Argentina. El mes en curso se marca como parcial.
 const pool = require('./db');
 const CF = require('./caja_faltante');
+const { ticketsNetos } = require('./ventas_sql');
 
 const $ = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
 const n0 = (x) => Number(x) || 0;
@@ -24,7 +25,7 @@ async function resumenMensual(negocioId, mesPedido, db = pool) {
   const enMes = (col) => `${AR(col)} >= $2::date AND ${AR(col)} < ($2::date + INTERVAL '1 month')`;
 
   const [ventas, caja, hechos, inst, consejo, medidos, prov] = await Promise.all([
-    q(`SELECT COALESCE(SUM(monto),0)::float AS total, COUNT(*)::int AS n FROM transacciones WHERE negocio_id = $1 AND COALESCE(tipo,'venta') = 'venta' AND ${enMes('fecha')}`),
+    q(`SELECT COALESCE(SUM(monto),0)::float AS total, ${ticketsNetos('')}::int AS n FROM transacciones WHERE negocio_id = $1 AND ${enMes('fecha')}`),
     q(`SELECT COUNT(*) FILTER (WHERE estado = 'cerrado')::int AS cerrados,
               COALESCE(SUM(${CF.sqlFaltante()}) FILTER (WHERE estado = 'cerrado'), 0)::float AS faltante,
               COUNT(*) FILTER (WHERE estado = 'cerrado' AND ${CF.sqlFaltante()} > 0)::int AS con_falta

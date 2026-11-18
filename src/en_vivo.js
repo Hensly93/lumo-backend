@@ -12,7 +12,7 @@
 const pool = require('./db');
 const { calcularPrediccion } = require('./prediccion_adaptativa');
 
-const { FL } = require('./ventas_sql');
+const { FL, ticketsNetos } = require('./ventas_sql');
 const CACHE = new Map();
 
 function limpiarNombre(n) { return String(n || '').replace(/["']/g, '').trim(); }
@@ -38,7 +38,7 @@ async function negocioEnVivo(negocioId, sucursalId = null, db = pool, opciones =
 
   // Ventas de hoy por sucursal y hora
   const vRes = await db.query(
-    `SELECT sucursal_id, EXTRACT(HOUR FROM ${FL})::int AS h, COUNT(*)::int AS tickets, SUM(monto)::float AS total
+    `SELECT sucursal_id, EXTRACT(HOUR FROM ${FL})::int AS h, ${ticketsNetos('')}::int AS tickets, SUM(monto)::float AS total
      FROM transacciones
      WHERE negocio_id = $1 AND ${FL}::date = $2::date
        AND ($3::integer IS NULL OR sucursal_id = $3)

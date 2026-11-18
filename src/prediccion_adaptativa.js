@@ -29,7 +29,7 @@ const pool = require('./db');
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 // transacciones.fecha es timestamp sin zona, guardado en UTC (DB en UTC, verificado 27/10).
-const { FL } = require('./ventas_sql'); // fecha local Argentina
+const { FL, ticketsNetos } = require('./ventas_sql'); // fecha local Argentina
 const OFFSET_MS = 3 * 60 * 60 * 1000;
 
 const VENTANA_DIAS = 60;
@@ -173,7 +173,7 @@ async function calcularPrediccion(negocio_id, sucursal_id = null, db = pool, rie
     `SELECT sucursal_id,
             to_char(${FL}::date, 'YYYY-MM-DD') AS dia,
             SUM(monto)  AS total,
-            COUNT(*)    AS tickets
+            ${ticketsNetos('')} AS tickets
      FROM transacciones
      WHERE negocio_id = $1
        AND ${FL}::date >= $2::date
