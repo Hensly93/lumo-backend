@@ -346,6 +346,17 @@ router.get('/ventas-diarias', auth, async (req, res) => {
 
 // GET /api/alertas — motor unificado: métricas + CUSUM + deduplicación
 // GET /inicio — todo el Home con UNA sola fuente de verdad (mismos números que Alertas y En Vivo)
+// Qué hacer: UNA lista (hallazgos + alertas) ordenada por urgencia y plata. Inicio, Oportunidades, Fugas y Alertas son vistas de esto.
+router.get('/que-hacer', auth, async (req, res) => {
+  try {
+    const sucursalId = req.query.sucursal_id ? parseInt(req.query.sucursal_id) : null;
+    res.json(await require('./que_hacer').queHacer(req.user.negocio_id, Number.isNaN(sucursalId) ? null : sucursalId));
+  } catch (e) {
+    console.error('que-hacer:', e.message);
+    res.status(500).json({ error: 'No pude armar la lista de qué hacer.' });
+  }
+});
+
 router.get('/inicio', auth, async (req, res) => {
   try {
     const { negocioEnVivo } = require('./en_vivo');
