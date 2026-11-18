@@ -24,6 +24,14 @@ async function ejecutar() {
   // 13/11/2026: el feedback de alertas se busca por negocio + tipo + contexto
   await pool.query('ALTER TABLE alertas_gestionadas ADD COLUMN IF NOT EXISTS negocio_id INTEGER');
   await pool.query('CREATE INDEX IF NOT EXISTS idx_alertas_neg_tipo ON alertas_gestionadas(negocio_id, tipo_alerta, contexto, created_at)');
+
+  // 18/11/2026: el rubro vive en usuarios y en negocios y se habían separado. Se completa el de negocios
+  // con el del dueño donde falta, y se alinea donde difieren (manda el del dueño: es lo que se edita en Ajustes).
+  await pool.query(`UPDATE negocios n SET tipo_negocio = u.tipo_negocio, updated_at = NOW()
+      FROM negocio_usuarios nu JOIN usuarios u ON u.id = nu.usuario_id
+     WHERE nu.negocio_id = n.id AND nu.rol = 'owner' AND nu.activo = true
+       AND NULLIF(u.tipo_negocio,'') IS NOT NULL
+       AND n.tipo_negocio IS DISTINCT FROM u.tipo_negocio`).catch((e) => console.error('[migraciones] rubro negocios:', e.message));
 }
 
 module.exports = { ejecutar };

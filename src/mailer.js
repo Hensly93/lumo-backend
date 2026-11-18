@@ -12,7 +12,7 @@ const transporter = nodemailer.createTransport({
 });
 
 const FROM = process.env.SMTP_FROM || "LumoBi <hola@lumobi.com.ar>";
-const BASE_URL = process.env.FRONTEND_URL || "https://lumobi.com.ar";
+const BASE_URL = require("./frontend_url").FRONTEND_URL;
 const AÑO = new Date().getFullYear();
 
 // Colores de la marca

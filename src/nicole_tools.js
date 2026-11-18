@@ -2,7 +2,7 @@
 // Todo se filtra por negocio_id, las fechas se validan y los resultados se acotan: NICOLE nunca ve datos de otro negocio ni inventa números.
 const pool = require('./db');
 
-const FL = "(t.fecha - INTERVAL '3 hours')";
+const { FL_T: FL, REAL_T, ticketsNetos } = require('./ventas_sql');
 const HOY_AR = "(NOW() - INTERVAL '3 hours')::date";
 const DOW = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
@@ -107,19 +107,19 @@ async function ventasPeriodo(negocioId, input, db) {
   const { desde, hasta } = rango(input);
   const suc = Number.isInteger(input && input.sucursal_id) ? input.sucursal_id : null;
   const agrupar = ['total', 'dia', 'dia_semana', 'hora', 'medio_pago', 'empleado'].includes(input && input.agrupar) ? input.agrupar : 'total';
-  const filtro = `t.negocio_id = $1 AND ${FL}::date >= COALESCE($2::date, ${HOY_AR} - 29) AND ${FL}::date <= COALESCE($3::date, ${HOY_AR}) AND ($4::int IS NULL OR t.sucursal_id = $4)`;
+  const filtro = `t.negocio_id = $1 AND ${FL}::date >= COALESCE($2::date, ${HOY_AR} - 29) AND ${FL}::date <= COALESCE($3::date, ${HOY_AR}) AND ($4::int IS NULL OR t.sucursal_id = $4) AND ${REAL_T}`;
   const params = [negocioId, desde, hasta, suc];
   const ventana = (await db.query(`SELECT COALESCE($1::date, ${HOY_AR} - 29)::text AS desde, COALESCE($2::date, ${HOY_AR})::text AS hasta`, [desde, hasta])).rows[0];
   const dias = Math.round((new Date(ventana.hasta) - new Date(ventana.desde)) / 86400000) + 1;
   if (dias < 1 || dias > 366) return { error: 'El período tiene que ser de 1 a 366 días.' };
   const base = { desde: ventana.desde, hasta: ventana.hasta, ver_en: '/periodos' };
   let q;
-  if (agrupar === 'total') q = `SELECT COUNT(*)::int AS tickets, COALESCE(SUM(t.monto),0)::float AS total, COUNT(DISTINCT ${FL}::date)::int AS dias_con_ventas FROM transacciones t WHERE ${filtro}`;
-  else if (agrupar === 'dia') q = `SELECT ${FL}::date::text AS dia, COUNT(*)::int AS tickets, SUM(t.monto)::float AS total FROM transacciones t WHERE ${filtro} GROUP BY 1 ORDER BY 1 DESC LIMIT 62`;
-  else if (agrupar === 'dia_semana') q = `SELECT EXTRACT(DOW FROM ${FL})::int AS dow, COUNT(*)::int AS tickets, SUM(t.monto)::float AS total, COUNT(DISTINCT ${FL}::date)::int AS dias FROM transacciones t WHERE ${filtro} GROUP BY 1 ORDER BY 1`;
-  else if (agrupar === 'hora') q = `SELECT EXTRACT(HOUR FROM ${FL})::int AS hora, COUNT(*)::int AS tickets, SUM(t.monto)::float AS total FROM transacciones t WHERE ${filtro} GROUP BY 1 ORDER BY 1`;
-  else if (agrupar === 'medio_pago') q = `SELECT COALESCE(NULLIF(t.metodo_pago, ''), 'sin dato') AS medio, COUNT(*)::int AS tickets, SUM(t.monto)::float AS total FROM transacciones t WHERE ${filtro} GROUP BY 1 ORDER BY 3 DESC LIMIT 12`;
-  else q = `SELECT COALESCE(NULLIF(t.empleado, ''), 'sin dato') AS empleado, COUNT(*)::int AS tickets, SUM(t.monto)::float AS total FROM transacciones t WHERE ${filtro} GROUP BY 1 ORDER BY 3 DESC LIMIT 15`;
+  if (agrupar === 'total') q = `SELECT ${ticketsNetos('t.')}::int AS tickets, COALESCE(SUM(t.monto),0)::float AS total, COUNT(DISTINCT ${FL}::date)::int AS dias_con_ventas FROM transacciones t WHERE ${filtro}`;
+  else if (agrupar === 'dia') q = `SELECT ${FL}::date::text AS dia, ${ticketsNetos('t.')}::int AS tickets, SUM(t.monto)::float AS total FROM transacciones t WHERE ${filtro} GROUP BY 1 ORDER BY 1 DESC LIMIT 62`;
+  else if (agrupar === 'dia_semana') q = `SELECT EXTRACT(DOW FROM ${FL})::int AS dow, ${ticketsNetos('t.')}::int AS tickets, SUM(t.monto)::float AS total, COUNT(DISTINCT ${FL}::date)::int AS dias FROM transacciones t WHERE ${filtro} GROUP BY 1 ORDER BY 1`;
+  else if (agrupar === 'hora') q = `SELECT EXTRACT(HOUR FROM ${FL})::int AS hora, ${ticketsNetos('t.')}::int AS tickets, SUM(t.monto)::float AS total FROM transacciones t WHERE ${filtro} GROUP BY 1 ORDER BY 1`;
+  else if (agrupar === 'medio_pago') q = `SELECT COALESCE(NULLIF(t.metodo_pago, ''), 'sin dato') AS medio, ${ticketsNetos('t.')}::int AS tickets, SUM(t.monto)::float AS total FROM transacciones t WHERE ${filtro} GROUP BY 1 ORDER BY 3 DESC LIMIT 12`;
+  else q = `SELECT COALESCE(NULLIF(t.empleado, ''), 'sin dato') AS empleado, ${ticketsNetos('t.')}::int AS tickets, SUM(t.monto)::float AS total FROM transacciones t WHERE ${filtro} GROUP BY 1 ORDER BY 3 DESC LIMIT 15`;
   const rows = (await db.query(q, params)).rows;
   if (agrupar === 'total') { const r = rows[0]; return { ...base, ...r, ticket_promedio: r.tickets ? Math.round(r.total / r.tickets) : 0 }; }
   if (!rows.length) return { ...base, agrupar, filas: [], nota: 'No hay ventas cargadas en ese período.' };

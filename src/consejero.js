@@ -7,7 +7,7 @@
 //   · consejo_semana         el lunes: cómo te fue la semana y lo más importante para esta
 // Mismas reglas del Vigilante: sin repetir, pocos por día, nunca nombres de empleados.
 const DIAS_ES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
-const FL = "(t.fecha - INTERVAL '3 hours')";
+const { FL_T: FL } = require('./ventas_sql');
 const pesos = (n) => '$' + Math.round(n).toLocaleString('es-AR');
 const recorte = (s, n = 600) => { s = String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
 const semanaDe = (iso) => Math.floor(Date.parse(iso + 'T00:00:00Z') / (7 * 86400000));

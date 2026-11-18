@@ -12,7 +12,7 @@
 const pool = require('./db');
 const { calcularPrediccion } = require('./prediccion_adaptativa');
 
-const FL = `(fecha - INTERVAL '3 hours')`;
+const { FL } = require('./ventas_sql');
 const CACHE = new Map();
 
 function limpiarNombre(n) { return String(n || '').replace(/["']/g, '').trim(); }

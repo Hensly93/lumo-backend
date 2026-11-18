@@ -167,10 +167,7 @@ router.patch('/perfil', auth, async (req, res) => {
       if (!TIPOS_VALIDOS.includes(tipo_negocio)) {
         return res.status(400).json({ error: `Tipo inválido. Opciones: ${TIPOS_VALIDOS.join(', ')}` });
       }
-      await pool.query('UPDATE usuarios SET tipo_negocio=$1 WHERE id=$2', [tipo_negocio, req.user.id]);
-      if (req.user.negocio_id) {
-        await pool.query('UPDATE negocios SET tipo_negocio=$1, updated_at=NOW() WHERE id=$2', [tipo_negocio, req.user.negocio_id]);
-      }
+      await require('./benchmarks_sector').guardarTipoNegocio(pool, req.user.id, req.user.negocio_id, tipo_negocio);
     }
     if (onboarding_done !== undefined) {
       await pool.query('UPDATE usuarios SET onboarding_done=$1 WHERE id=$2', [!!onboarding_done, req.user.id]);
@@ -708,8 +705,8 @@ async function respuestaSinIA(mensaje, negocioId) {
     : rango[0] === 'mes' ? `${DIA} >= date_trunc('month', ${HOY})::date`
     : `${DIA} = ${HOY} - ${parseInt(rango[0], 10)}`;
   const r = await pool.query(
-    `SELECT COUNT(*)::int AS n, COALESCE(SUM(monto),0)::float AS total FROM transacciones
-     WHERE negocio_id=$1 AND ${cond} AND COALESCE(origin,'real') <> 'demo'`, [negocioId]);
+    `SELECT ${require('./ventas_sql').ticketsNetos('')}::int AS n, COALESCE(SUM(monto),0)::float AS total FROM transacciones
+     WHERE negocio_id=$1 AND ${cond} AND ${require('./ventas_sql').REAL}`, [negocioId]);
   const { n, total } = r.rows[0];
   if (!n) return `${etiqueta} todavía no hay ventas cargadas en LumoBi.`;
   return `${etiqueta} ${etiqueta === "Hoy" || etiqueta.startsWith("Esta") || etiqueta.startsWith("Este") ? "llevás" : "vendiste"} $${Math.round(total).toLocaleString('es-AR')} en ${n} ventas (ticket promedio $${Math.round(total / n).toLocaleString('es-AR')}). El detalle lo ves en Períodos.`;

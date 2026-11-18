@@ -6,7 +6,7 @@
 //   estimado  = oportunidad: lo que se ganaría si un día/franja rindiera como el resto
 const pool = require('./db');
 
-const FL = `(fecha - INTERVAL '3 hours')`;
+const { FL } = require('./ventas_sql');
 const AHORA_AR = `(NOW() - INTERVAL '3 hours')`;
 const VENTANA_DIAS = 56;     // 8 semanas
 const MIN_DIAS = 14;         // con menos días con ventas no se muestra radiografía de ventas

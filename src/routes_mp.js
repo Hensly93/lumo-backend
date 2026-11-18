@@ -86,7 +86,7 @@ router.get('/conectar', authWithQuery, (req, res) => {
 // ─── GET /api/mp/callback ─────────────────────────────────────────────────────
 // MP redirige aquí con ?code=AUTH_CODE&state=STATE
 router.get('/callback', async (req, res) => {
-  const FRONTEND = process.env.FRONTEND_URL || '/';
+  const FRONTEND = require('./frontend_url').FRONTEND_URL;
   const { code, state, error } = req.query;
 
   if (error) return res.redirect(`${FRONTEND}?mp_error=${encodeURIComponent(error)}`);

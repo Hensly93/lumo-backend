@@ -83,6 +83,12 @@ router.get('/perfil', auth, async (req, res) => {
 router.patch('/perfil', auth, async (req, res) => {
   try {
     const { nombre, negocio, tipo_negocio, provincia, ciudad, zona, pos, cuit, razon_social } = req.body;
+    // El rubro se valida y se guarda en usuarios Y en negocios (antes solo en usuarios y se desincronizaban)
+    const { guardarTipoNegocio, TIPOS_VALIDOS } = require('./benchmarks_sector');
+    if (tipo_negocio) {
+      if (!TIPOS_VALIDOS.includes(tipo_negocio)) return res.status(400).json({ error: `Tipo inválido. Opciones: ${TIPOS_VALIDOS.join(', ')}` });
+      await guardarTipoNegocio(pool, req.user.id, req.user.negocio_id, tipo_negocio);
+    }
     const r = await pool.query(
       `UPDATE usuarios SET
         nombre        = COALESCE($1, nombre),

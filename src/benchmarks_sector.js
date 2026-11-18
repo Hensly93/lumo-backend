@@ -81,7 +81,7 @@ function normalizarTipoNegocio(negocio) {
   const n = negocio.toUpperCase();
   if (n.includes('KIOSK') || n.includes('KIOSCO'))                                               return 'KIOSKO';
   if (n.includes('ALMAC'))                                                                        return 'ALMACEN';
-  if (n.includes('CAFE') || n.includes('BAR'))                                                   return 'CAFETERIA';
+  if (n.includes('CAFE') || /\bBAR\b/.test(n))                                                  return 'CAFETERIA'; // "BAR" como palabra: no confundir Barbería o Barrio
   if (n.includes('RESTAURANT') || n.includes('RESTAU'))                                          return 'RESTAURANTE';
   if (n.includes('PARRILL') || n.includes('ASAD'))                                               return 'PARRILLA';
   if (n.includes('PANAD') || n.includes('BOLLERIA'))                                             return 'PANADERIA';
@@ -97,4 +97,12 @@ function calcularZScoreSector(valor, benchmark) {
   return (valor - Number(benchmark.valor_promedio)) / std_estimada;
 }
 
-module.exports = { poblarBenchmarksSector, getBenchmarkSector, normalizarTipoNegocio, calcularZScoreSector, TIPOS_VALIDOS };
+// UN solo lugar para guardar el rubro: usuarios.tipo_negocio y negocios.tipo_negocio siempre quedan iguales.
+// Antes cada pantalla guardaba en una tabla distinta y los dos valores se separaban.
+async function guardarTipoNegocio(db, usuarioId, negocioId, tipo) {
+  if (!TIPOS_VALIDOS.includes(tipo)) throw Object.assign(new Error(`Tipo inválido. Opciones: ${TIPOS_VALIDOS.join(', ')}`), { status: 400 });
+  await db.query('UPDATE usuarios SET tipo_negocio=$1 WHERE id=$2', [tipo, usuarioId]);
+  if (negocioId) await db.query('UPDATE negocios SET tipo_negocio=$1, updated_at=NOW() WHERE id=$2', [tipo, negocioId]);
+}
+
+module.exports = { guardarTipoNegocio, poblarBenchmarksSector, getBenchmarkSector, normalizarTipoNegocio, calcularZScoreSector, TIPOS_VALIDOS };

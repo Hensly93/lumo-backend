@@ -17,7 +17,7 @@
 const pool = require('./db');
 const CF = require('./caja_faltante');
 
-const FL = `(fecha - INTERVAL '3 hours')`;               // hora Argentina (la base está en UTC)
+const { FL } = require('./ventas_sql');               // hora Argentina (la base está en UTC)
 const FL_CIERRE = `(hora_cierre - INTERVAL '3 hours')`;
 const IPC_SERIE = '148.3_INIVELNAL_DICI_M_26';           // IPC nivel general nacional (INDEC)
 const DIA_MS = 86400000;

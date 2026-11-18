@@ -6,7 +6,7 @@ const pool = require('./db');
 const { negocioEnVivo } = require('./en_vivo');
 const { calcularPrediccion } = require('./prediccion_adaptativa');
 
-const FL = `(fecha - INTERVAL '3 hours')`;
+const { FL } = require('./ventas_sql');
 const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 const r0 = (n) => Math.round(Number(n) || 0);
 const mediana = (a) => { if (!a.length) return null; const o = [...a].sort((x, y) => x - y); const m = Math.floor(o.length / 2); return o.length % 2 ? o[m] : (o[m - 1] + o[m]) / 2; };

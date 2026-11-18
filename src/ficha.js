@@ -7,7 +7,7 @@
 const pool = require('./db');
 const CF = require('./caja_faltante');
 
-const FL = `(t.fecha - INTERVAL '3 hours')`;
+const { FL_T: FL } = require('./ventas_sql');
 const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 const $ = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
 const r1 = (n) => Math.round((Number(n) || 0) * 10) / 10;

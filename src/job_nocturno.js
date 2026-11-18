@@ -9,6 +9,7 @@
 //      Si error > 30% por 3 días seguidos → log de alerta interna
 
 const pool = require('./db');
+const { ticketsNetos, cuentaDePrueba, REAL_T } = require('./ventas_sql');
 const { calcularPrediccion, ownerDeNegocio } = require('./prediccion_adaptativa');
 const { guardarClimaReciente } = require('./clima_diario');
 const { notificarUsuario } = require('./push');
@@ -21,20 +22,30 @@ const { detectarGoteo } = require('./cruce_variables');
 // rompía el mínimo de 5 (privacidad). Además buscaba ventas por usuario_id, que la caja no carga.
 
 async function agregarDatosDia(db) {
+  await db.query('ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS es_prueba BOOLEAN NOT NULL DEFAULT false').catch(() => {});
   const r = await db.query(`
     WITH semana AS (
       SELECT (date_trunc('week', NOW() - INTERVAL '3 hours'))::date AS lunes
     ),
     por_negocio AS (
-      SELECT n.id, n.zona, n.tipo_negocio,
-             AVG(t.monto) AS ticket,
+      -- Reglas de ventas_sql.js: ticket = ventas netas / tickets netos (la anulación NO es un ticket más),
+      -- solo ventas reales/importadas, y sin cuentas de prueba (no pueden completar el mínimo de 5 negocios).
+      SELECT n.id, n.zona,
+             LOWER(TRIM(COALESCE(NULLIF(n.tipo_negocio,''), NULLIF(u.tipo_negocio,'')))) AS tipo_negocio,
+             SUM(t.monto) / NULLIF(${ticketsNetos('t.')}, 0) AS ticket,
              SUM(t.monto) / NULLIF(COUNT(DISTINCT (t.fecha - INTERVAL '3 hours')::date), 0) AS venta_dia
       FROM negocios n
+      JOIN negocio_usuarios nu ON nu.negocio_id = n.id AND nu.rol = 'owner' AND nu.activo = true
+      JOIN usuarios u ON u.id = nu.usuario_id
       JOIN transacciones t ON t.negocio_id = n.id
       CROSS JOIN semana s
-      WHERE n.zona IS NOT NULL AND n.tipo_negocio IS NOT NULL AND n.deletion_scheduled_at IS NULL
+      WHERE n.zona IS NOT NULL AND n.deletion_scheduled_at IS NULL AND u.deletion_scheduled_at IS NULL
+        AND COALESCE(NULLIF(n.tipo_negocio,''), NULLIF(u.tipo_negocio,'')) IS NOT NULL
+        AND NOT ${cuentaDePrueba('u')}
+        AND ${REAL_T}
         AND (t.fecha - INTERVAL '3 hours')::date >= s.lunes
-      GROUP BY n.id, n.zona, n.tipo_negocio
+      GROUP BY n.id, n.zona, 3
+      HAVING ${ticketsNetos('t.')} > 0
     )
     INSERT INTO agregados_zona (zona, tipo_negocio, semana, ticket_promedio, ventas_promedio, negocios_count)
     SELECT zona, tipo_negocio, (SELECT lunes FROM semana), AVG(ticket), AVG(venta_dia), COUNT(*)
@@ -452,7 +463,7 @@ async function triggerManual(db = pool) {
   return runJobNocturno(db);
 }
 
-module.exports = { runJobNocturno, triggerManual };
+module.exports = { runJobNocturno, triggerManual, agregarDatosDia };
 
 // ACTIVAR EN RENDER — descomentar cuando se upgradee a plan pago
 // const cron = require('node-cron');

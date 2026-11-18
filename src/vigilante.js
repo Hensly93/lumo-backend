@@ -27,7 +27,7 @@ const https = require('https');
 const pool = require('./db');
 
 const OFFSET_MS = 3 * 60 * 60 * 1000;           // Argentina = UTC-3 (sin horario de verano)
-const FL = `(fecha - INTERVAL '3 hours')`;       // mismo criterio que prediccion_adaptativa
+const { FL, REAL } = require('./ventas_sql');       // mismo criterio que prediccion_adaptativa
 // Sin tope diario (decisión del 11/11/2026). Si algún día hace falta, se pone VIGILANTE_MAX_DIA en Render.
 const MAX_AVISOS_DIA = Number(process.env.VIGILANTE_MAX_DIA) || Infinity;
 const MAX_AVISOS_CORRIDA = 3;                    // si se juntan varios, salen de a 3 por hora (lo mas urgente primero)
@@ -35,7 +35,7 @@ const HORA_DESDE = 8;
 const HORA_HASTA = 22.5;
 const DIAS_VENTANA = 56; // 8 semanas: misma ventana que la Radiografía para "un día normal"
 const MIN_DIAS_HISTORIAL = 8;
-const BASE_URL = process.env.FRONTEND_URL || 'https://lumo-psi.vercel.app';
+const BASE_URL = require('./frontend_url').FRONTEND_URL;
 
 const DIAS_ES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 const TURNOS_ES = { manana: 'mañana', tarde: 'tarde', noche: 'noche' };
@@ -241,7 +241,7 @@ async function asegurarTabla(db) {
 // ─── Datos de un negocio ─────────────────────────────────────────────────────
 
 const COND_NEG = `(negocio_id = $1 OR (negocio_id IS NULL AND usuario_id = $2))
-                  AND COALESCE(origin,'real') IN ('real','importado')`;
+                  AND ${REAL}`;
 
 async function ventasPorDia(db, negocioId, usuarioId, desde) {
   const r = await db.query(

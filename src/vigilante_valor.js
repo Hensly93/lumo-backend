@@ -14,8 +14,7 @@
 // Reglas del Vigilante: entre 8 y 22:30, nunca el mismo aviso dos veces, sin nombres de empleados en el
 // aviso (se ven en la pantalla bloqueada del celu). Los avisos del momento (solo_push) no van por mail.
 
-const FL = "(t.fecha - INTERVAL '3 hours')";
-const REAL = "COALESCE(t.origin,'real') IN ('real','importado')";
+const { FL_T: FL, REAL_T: REAL } = require('./ventas_sql');
 const DIAS_ES = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 const TURNOS_ES = { manana: 'mañana', tarde: 'tarde', noche: 'noche' };
 const pesos = (n) => '$' + Math.round(Math.abs(Number(n) || 0)).toLocaleString('es-AR');

@@ -29,7 +29,7 @@ const pool = require('./db');
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 // transacciones.fecha es timestamp sin zona, guardado en UTC (DB en UTC, verificado 27/10).
-const FL = `(fecha - INTERVAL '3 hours')`; // fecha local Argentina
+const { FL } = require('./ventas_sql'); // fecha local Argentina
 const OFFSET_MS = 3 * 60 * 60 * 1000;
 
 const VENTANA_DIAS = 60;

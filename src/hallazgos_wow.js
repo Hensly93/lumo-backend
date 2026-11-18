@@ -17,9 +17,8 @@
 const pool = require('./db');
 const CF = require('./caja_faltante');
 
-const FL = `(t.fecha - INTERVAL '3 hours')`;
+const { FL_T: FL, REAL_T: REAL } = require('./ventas_sql');
 const HOY = `(NOW() - INTERVAL '3 hours')::date`;
-const REAL = `COALESCE(t.origin,'real') IN ('real','importado')`;
 const $ = (n) => '$' + Math.round(Math.abs(Number(n) || 0)).toLocaleString('es-AR');
 const pct = (x) => Math.round((Number(x) || 0) * 100);
 const VENTANA = 30;

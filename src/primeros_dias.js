@@ -15,10 +15,9 @@
 const pool = require('./db');
 const { getBenchmarkSector, normalizarTipoNegocio } = require('./benchmarks_sector');
 
-const FL = `(t.fecha - INTERVAL '3 hours')`;
+const { FL_T: FL, REAL_T: REAL } = require('./ventas_sql');
 const HOY_AR = `(NOW() - INTERVAL '3 hours')::date`;
 const ES_EFECTIVO = `LOWER(COALESCE(t.metodo_pago,'')) IN ('efectivo','cash')`;
-const REAL = `COALESCE(t.origin,'real') IN ('real','importado')`;
 const TURNO_TXT = { manana: 'mañana', tarde: 'tarde', noche: 'noche' };
 const RUBRO_TXT = {
   KIOSKO: 'kioscos', ALMACEN: 'almacenes', CAFETERIA: 'cafés y bares', RESTAURANTE: 'restaurantes',

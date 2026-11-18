@@ -24,7 +24,7 @@ const CATEGORIAS = [
 const CAT_IDS = new Set(CATEGORIAS.map(c => c.id));
 const VARIABLES = new Set(CATEGORIAS.filter(c => c.variable).map(c => c.id));
 
-const FL = `(fecha - INTERVAL '3 hours')`;
+const { FL } = require('./ventas_sql');
 const MES_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 function ahoraLocal(opciones = {}) {

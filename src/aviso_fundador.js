@@ -45,7 +45,7 @@ async function avisarFundador({ tipo, clave = null, negocioId = null, titulo, me
     for (const u of us) {
       const push = await notificarUsuario(u.id, { title: titulo, body: mensaje, url }, db, null).catch((e) => { console.error('[FUNDADOR] push', e.message); return 0; });
       const mail = enviarAvisoVigilante
-        ? await enviarAvisoVigilante({ nombre: u.nombre, email: u.email, negocio: 'LumoBi · clientes', titulo, mensaje, url: (process.env.FRONTEND_URL || 'https://lumobi.com.ar') + url, boton: 'Ver' }).catch(() => false)
+        ? await enviarAvisoVigilante({ nombre: u.nombre, email: u.email, negocio: 'LumoBi · clientes', titulo, mensaje, url: require('./frontend_url').FRONTEND_URL + url, boton: 'Ver' }).catch(() => false)
         : false;
       n += push > 0 || mail ? 1 : 0;
       if (clave && (push > 0 || mail)) { // si no llegó por ningún lado, se reintenta en la próxima corrida

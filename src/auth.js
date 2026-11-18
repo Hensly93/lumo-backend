@@ -150,7 +150,7 @@ router.post("/forgot-password", async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: "1h" }
     );
-    const resetUrl = `${process.env.FRONTEND_URL || "https://lumo-psi.vercel.app"}/reset-password?token=${resetToken}`;
+    const resetUrl = `${require("./frontend_url").FRONTEND_URL}/reset-password?token=${resetToken}`;
 
     await enviarRecupero({ nombre, email: result.rows[0].email, resetUrl });
 

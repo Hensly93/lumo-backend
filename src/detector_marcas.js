@@ -4,7 +4,7 @@
 //  Y arma la lista de precios corregidos (armarPrecios): para cada producto con margen flojo, el precio que lo lleva a un margen sano.
 const pool = require('./db');
 
-const FL = "(t.fecha - INTERVAL '3 hours')";
+const { FL_T: FL } = require('./ventas_sql');
 const HOY_AR = "(NOW() - INTERVAL '3 hours')::date";
 const DIAS = 30;
 const MARGEN_OBJETIVO = 0.25;   // mismo piso de margen que usan las promos
