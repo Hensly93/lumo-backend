@@ -3,7 +3,9 @@
 // · El dueño carga TOTALES por mes y categoría (nunca factura por factura), de un local o de
 //   todo el negocio. Los gastos generales se reparten entre locales según lo que vende cada uno.
 // · Los egresos de caja que registran los empleados en los turnos se suman solos (línea aparte).
-// · Ganancia operativa ANTES de impuestos = ventas − gastos − egresos de caja.
+// · Ganancia operativa ANTES de impuestos = ventas − costo de lo vendido − gastos − egresos de caja.
+//   El costo de lo vendido sale de lo que realmente se vendió (costo guardado en cada venta); la
+//   "Mercadería" cargada a mano solo se usa en los meses donde las ventas no tienen costo suficiente.
 //   Impuestos: opcionales, los declara el dueño (monto fijo o % propio). LumoBi no calcula impuestos.
 // · Mes en curso: los gastos cargados se toman proporcionales a los días transcurridos.
 // · Punto de equilibrio: con los últimos 3 meses cerrados que tengan gastos cargados.
@@ -24,7 +26,12 @@ const CATEGORIAS = [
 const CAT_IDS = new Set(CATEGORIAS.map(c => c.id));
 const VARIABLES = new Set(CATEGORIAS.filter(c => c.variable).map(c => c.id));
 
-const { FL } = require('./ventas_sql');
+const { FL, FL_T } = require('./ventas_sql');
+// Costo de lo vendido: se usa el costo que quedó guardado en cada venta (costo_unitario) cuando cubre
+// al menos esta parte de las ventas del mes; si no, se mantiene la "Mercadería" que cargó el dueño.
+const MIN_COBERTURA_COSTO = 0.6;
+// Pagos a proveedores sacados de la caja: ya están dentro del costo de lo vendido, no se restan dos veces.
+const RE_PROVEEDOR = '(proveedor|mercader|distribuidor|repart|factura|remito)';
 const MES_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 function ahoraLocal(opciones = {}) {
@@ -123,7 +130,7 @@ async function calcularRentabilidad(negocioId, sucursalId = null, opciones = {},
   const mesActual = meses[11];
   const fracActual = (ahora.getUTCDate() - 1 + ahora.getUTCHours() / 24) / diasDelMes(yA, mA);
 
-  const [vRes, gRes, eRes, iRes, sucs] = await Promise.all([
+  const [vRes, gRes, eRes, iRes, sucs, cRes] = await Promise.all([
     // Ventas por mes y local (de todo el negocio: hace falta para repartir gastos generales)
     db.query(
       `SELECT to_char(${FL},'YYYY-MM') AS mes, sucursal_id, COALESCE(SUM(monto),0)::float AS total
@@ -133,12 +140,21 @@ async function calcularRentabilidad(negocioId, sucursalId = null, opciones = {},
       `SELECT to_char(mes,'YYYY-MM') AS mes, sucursal_id, categoria, monto::float AS monto
        FROM gastos_mensuales WHERE negocio_id = $1 AND mes >= $2::date`, [negocioId, desde]),
     db.query(
-      `SELECT to_char(e.hora - INTERVAL '3 hours','YYYY-MM') AS mes, t.sucursal_id, COALESCE(SUM(e.monto),0)::float AS total
+      `SELECT to_char(e.hora - INTERVAL '3 hours','YYYY-MM') AS mes, t.sucursal_id, COALESCE(SUM(e.monto),0)::float AS total,
+              COALESCE(SUM(e.monto) FILTER (WHERE e.motivo ~* '${RE_PROVEEDOR}'),0)::float AS proveedores
        FROM egresos_caja e LEFT JOIN turnos_caja t ON t.id = e.turno_id AND t.negocio_id = e.negocio_id
        WHERE e.negocio_id = $1 AND (e.hora - INTERVAL '3 hours') >= $2::timestamp
        GROUP BY 1, 2`, [negocioId, desde]),
     db.query('SELECT modo, base, valor::float AS valor FROM impuestos_declarados WHERE negocio_id = $1', [negocioId]),
     sucursalesDelNegocio(db, negocioId),
+    // Costo de lo vendido por mes y local: cantidad × costo guardado en la venta (las anulaciones restan solas)
+    db.query(
+      `SELECT to_char(${FL_T},'YYYY-MM') AS mes, t.sucursal_id,
+              COALESCE(SUM(d.cantidad * d.costo_unitario) FILTER (WHERE d.costo_unitario > 0),0)::float AS costo,
+              COALESCE(SUM(d.subtotal) FILTER (WHERE d.costo_unitario > 0),0)::float AS vendido_con_costo
+       FROM transacciones t JOIN transacciones_detalle d ON d.transaccion_id = t.id
+       WHERE t.negocio_id = $1 AND COALESCE(d.tipo_linea,'producto') = 'producto' AND ${FL_T} >= $2::timestamp
+       GROUP BY 1, 2`, [negocioId, desde]).catch(() => ({ rows: [] })),
   ]);
   let ipcRows = [];
   try { ipcRows = (await db.query(`SELECT to_char(mes,'YYYY-MM') AS mes, indice::float AS indice FROM ipc_mensual ORDER BY mes`)).rows; } catch { /* sin IPC */ }
@@ -160,6 +176,15 @@ async function calcularRentabilidad(negocioId, sucursalId = null, opciones = {},
     const ventas = vRes.rows.filter(v => v.mes === mes && (sucursalId == null || v.sucursal_id === sucursalId)).reduce((s, v) => s + v.total, 0);
     const gm = gRes.rows.filter(g => g.mes === mes);
     const cargados = gm.length > 0;
+    // Costo de lo vendido (real) de este mes
+    const cm = cRes.rows.filter(c => c.mes === mes && (sucursalId == null || c.sucursal_id === sucursalId));
+    const costoConocido = cm.reduce((s, c) => s + c.costo, 0);
+    const vendidoConCosto = cm.reduce((s, c) => s + c.vendido_con_costo, 0);
+    const cobertura = ventas > 0 ? Math.min(1, vendidoConCosto / ventas) : 0;
+    const usaCostoReal = ventas > 0 && cobertura >= MIN_COBERTURA_COSTO && costoConocido > 0;
+    // Lo que no tiene costo cargado se estima con el mismo margen de lo que sí lo tiene
+    const costoVendido = usaCostoReal ? costoConocido * Math.max(1, ventas / vendidoConCosto) : null;
+    let merManualIgnorada = 0;
     const porCat = {};
     const porCatMes = {};   // monto del mes completo (sin proporcional): para comparar mes contra mes
     for (const g of gm) {
@@ -168,14 +193,20 @@ async function calcularRentabilidad(negocioId, sucursalId = null, opciones = {},
       else if (g.sucursal_id === sucursalId) peso = 1;
       else if (g.sucursal_id == null) peso = part;
       else peso = 0;
+      if (peso && usaCostoReal && g.categoria === 'mercaderia') { merManualIgnorada += g.monto * peso * factor; continue; }
       if (peso) {
         porCat[g.categoria] = (porCat[g.categoria] || 0) + g.monto * peso * factor;
         porCatMes[g.categoria] = (porCatMes[g.categoria] || 0) + g.monto * peso;
       }
     }
-    const egresos = eRes.rows.filter(e => e.mes === mes && (sucursalId == null || e.sucursal_id === sucursalId)).reduce((s, e) => s + e.total, 0);
+    const em = eRes.rows.filter(e => e.mes === mes && (sucursalId == null || e.sucursal_id === sucursalId));
+    const egresosTotal = em.reduce((s, e) => s + e.total, 0);
+    const pagosProv = usaCostoReal ? em.reduce((s, e) => s + e.proveedores, 0) : 0;
+    const egresos = egresosTotal - pagosProv;
     const gastos = Object.values(porCat).reduce((s, x) => s + x, 0);
-    const ganancia = cargados ? ventas - gastos - egresos : null;
+    const costoMercaderia = usaCostoReal ? costoVendido : (porCat.mercaderia || 0);
+    const variablesTotal = costoMercaderia + (porCat.comisiones || 0);
+    const ganancia = cargados ? ventas - (costoVendido || 0) - gastos - egresos : null;
     let impuestos = null;
     if (cargados && imp.modo === 'monto') impuestos = imp.valor * part * factor;
     if (cargados && imp.modo === 'porcentaje') impuestos = (imp.base === 'ganancia' ? Math.max(0, ganancia) : ventas) * imp.valor / 100;
@@ -184,6 +215,15 @@ async function calcularRentabilidad(negocioId, sucursalId = null, opciones = {},
       ventas: r0(ventas),
       gastos: cargados ? r0(gastos) : null,
       egresos_caja: r0(egresos),
+      fuente_costo: usaCostoReal ? 'real' : (porCat.mercaderia ? 'manual' : null),
+      costo_vendido: r0(costoVendido),
+      cobertura_costo_pct: ventas > 0 ? Math.round(cobertura * 100) : null,
+      costo_estimado: usaCostoReal && cobertura < 0.95,
+      margen_bruto_pct: usaCostoReal ? Math.round(((ventas - costoVendido) / ventas) * 1000) / 10 : null,
+      mercaderia_manual_ignorada: r0(merManualIgnorada) || null,
+      pagos_proveedores_caja: r0(pagosProv) || null,
+      costo_mercaderia: r0(costoMercaderia),
+      variables_total: variablesTotal,
       por_categoria: Object.fromEntries(Object.entries(porCat).map(([k, v]) => [k, r0(v)])),
       por_categoria_mes: Object.fromEntries(Object.entries(porCatMes).map(([k, v]) => [k, r0(v)])),
       ganancia_operativa: r0(ganancia),
@@ -198,8 +238,8 @@ async function calcularRentabilidad(negocioId, sucursalId = null, opciones = {},
   let equilibrio = null;
   if (base.length) {
     const ventas = base.reduce((s, f) => s + f.ventas, 0);
-    const variables = base.reduce((s, f) => s + Object.entries(f.por_categoria).filter(([k]) => VARIABLES.has(k)).reduce((a, [, v]) => a + v, 0), 0);
-    const fijos = base.reduce((s, f) => s + (f.gastos - Object.entries(f.por_categoria).filter(([k]) => VARIABLES.has(k)).reduce((a, [, v]) => a + v, 0)) + f.egresos_caja, 0) / base.length;
+    const variables = base.reduce((s, f) => s + f.variables_total, 0);
+    const fijos = base.reduce((s, f) => s + Object.entries(f.por_categoria).filter(([k]) => !VARIABLES.has(k)).reduce((a, [, v]) => a + v, 0) + f.egresos_caja, 0) / base.length;
     const ratioVar = variables / ventas;
     if (ratioVar < 0.95) {
       const mes = fijos / (1 - ratioVar);
@@ -227,9 +267,11 @@ async function calcularRentabilidad(negocioId, sucursalId = null, opciones = {},
   const totalesCat = {};
   for (const f of filas) for (const [k, v] of Object.entries(f.por_categoria)) totalesCat[k] = (totalesCat[k] || 0) + v;
   const egresosTot = filas.reduce((s, f) => s + (f.gastos_cargados ? f.egresos_caja : 0), 0);
-  const totalGastos = Object.values(totalesCat).reduce((s, v) => s + v, 0) + egresosTot;
+  const costoVendidoTot = filas.reduce((s, f) => s + (f.gastos_cargados && f.fuente_costo === 'real' ? f.costo_vendido : 0), 0);
+  const totalGastos = Object.values(totalesCat).reduce((s, v) => s + v, 0) + egresosTot + costoVendidoTot;
   const enQueSeVa = [
     ...CATEGORIAS.filter(c => totalesCat[c.id]).map(c => ({ categoria: c.id, label: c.label, total: r0(totalesCat[c.id]) })),
+    ...(costoVendidoTot ? [{ categoria: 'costo_vendido', label: 'Costo de lo que vendiste (mercadería)', total: r0(costoVendidoTot) }] : []),
     ...(egresosTot ? [{ categoria: 'egresos_caja', label: 'Gastos de caja (registrados en turnos)', total: r0(egresosTot) }] : []),
   ].sort((a, b) => b.total - a.total).map(x => ({ ...x, pct: totalGastos ? Math.round((x.total / totalGastos) * 1000) / 10 : 0 }));
 
@@ -241,6 +283,7 @@ async function calcularRentabilidad(negocioId, sucursalId = null, opciones = {},
     categorias: CATEGORIAS,
     meses: filas,
     mes_en_curso: { ...filas[11], avance_mes_pct: Math.round(fracActual * 1000) / 10 },
+    costo_real: { minimo_cobertura_pct: Math.round(MIN_COBERTURA_COSTO * 100), meses: filas.filter(f => f.fuente_costo === 'real').map(f => f.mes) },
     ultimo_mes_cerrado: [...filas].reverse().find(f => !f.en_curso && f.gastos_cargados) || null,
     equilibrio,
     en_que_se_va: enQueSeVa,
@@ -308,7 +351,7 @@ function generarRecomendaciones({ filas, equilibrio, ipcRows, ahora, fracActual 
   // 2) Costo variable: cuánto de cada $100 vendidos se va en mercadería y comisiones (meses cerrados)
   const cerrados = filas.filter(f => !f.en_curso && f.gastos_cargados && f.ventas > 0);
   if (cerrados.length >= 2) {
-    const ratio = f => ((f.por_categoria.mercaderia || 0) + (f.por_categoria.comisiones || 0)) / f.ventas;
+    const ratio = f => f.variables_total / f.ventas;
     const ult = cerrados[cerrados.length - 1];
     const previos = cerrados.slice(-4, -1);
     const antes = previos.reduce((s, f) => s + ratio(f), 0) / previos.length;
@@ -396,7 +439,7 @@ function generarRecomendaciones({ filas, equilibrio, ipcRows, ahora, fracActual 
   // 6) Último mes cerrado con pérdida
   const ultCerrado = [...filas].reverse().find(f => !f.en_curso && f.gastos_cargados);
   if (ultCerrado && ultCerrado.ganancia_operativa < 0) {
-    const top = Object.entries(ultCerrado.por_categoria).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k, v]) => `${label(k).split(' (')[0].toLowerCase()} (${fmtP(v)})`);
+    const top = Object.entries({ ...ultCerrado.por_categoria, ...(ultCerrado.fuente_costo === 'real' ? { costo_vendido: ultCerrado.costo_vendido } : {}) }).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k, v]) => `${(k === 'costo_vendido' ? 'costo de lo vendido' : label(k).split(' (')[0].toLowerCase())} (${fmtP(v)})`);
     recs.push({
       id: `perdida_${ultCerrado.mes}`, tipo: 'alerta',
       titulo: `En ${nombreMes(ultCerrado.mes)} perdiste ${fmtP(ultCerrado.ganancia_operativa)}`,
