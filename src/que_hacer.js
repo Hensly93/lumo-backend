@@ -81,6 +81,14 @@ async function queHacer(negocioId, sucursalId = null, db = pool, fuentes = {}) {
     }
   } catch (e) { avisos.push('alertas: ' + e.message); }
 
+  // Efecto red: con varios locales y mirando todo el negocio, cada local se compara contra el resto
+  if (sucursalId == null) {
+    try {
+      const cmp = fuentes.comparacion !== undefined ? fuentes.comparacion : await require('./comparar_locales').itemsParaQueHacer(negocioId, db);
+      items.push(...cmp);
+    } catch (e) { avisos.push('comparación: ' + e.message); }
+  }
+
   // Urgentes primero; dentro de cada grupo, lo que más plata mueve; lo que no tiene plata, al final
   items.sort((x, y) => (y.urgente - x.urgente) || ((y.pesos ?? -1) - (x.pesos ?? -1)));
 

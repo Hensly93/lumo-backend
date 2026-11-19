@@ -168,6 +168,17 @@ router.get('/red', auth, async (req, res) => {
   }
 });
 
+// ─── GET /api/multilocal/comparar ────────────────────────────────────────────
+// Cada local contra el resto de la red (ticket, margen, faltante de caja, anulaciones, productos). Ver comparar_locales.js
+router.get('/comparar', auth, async (req, res) => {
+  try {
+    res.json(await require('./comparar_locales').compararLocales(req.user.negocio_id));
+  } catch (e) {
+    console.error('comparar locales:', e.message);
+    res.status(500).json({ error: 'No pudimos comparar tus locales ahora' });
+  }
+});
+
 // ─── GET /api/multilocal/red-vivo ────────────────────────────────────────────
 // Dashboard en vivo: datos del día actual + turnos activos con efectivo esperado
 // GET /en-vivo — Tu Negocio en Vivo: ventas de hoy vs. lo esperado a esta hora, por local
