@@ -48,7 +48,7 @@ async function negocioEnVivo(negocioId, sucursalId = null, db = pool, opciones =
 
   // Turnos abiertos
   const tRes = await db.query(
-    `SELECT sucursal_id, tipo_turno, EXTRACT(HOUR FROM hora_apertura - INTERVAL '3 hours')::int AS desde
+    `SELECT sucursal_id, tipo_turno, nombre_empleado, EXTRACT(HOUR FROM hora_apertura - INTERVAL '3 hours')::int AS desde
      FROM turnos_caja
      WHERE negocio_id = $1 AND estado = 'activo' AND ($2::integer IS NULL OR sucursal_id = $2)
      ORDER BY hora_apertura DESC`,
@@ -68,7 +68,7 @@ async function negocioEnVivo(negocioId, sucursalId = null, db = pool, opciones =
       nombre: limpiarNombre(s.nombre),
       ventas: r0(ventas),
       tickets,
-      turno_activo: turno ? { tipo: turno.tipo_turno === 'manana' ? 'mañana' : turno.tipo_turno, desde: turno.desde } : null,
+      turno_activo: turno ? { tipo: turno.tipo_turno === 'manana' ? 'mañana' : turno.tipo_turno, desde: turno.desde, quien: turno.nombre_empleado || null } : null,
     };
 
     // La predicción de hoy no cambia minuto a minuto: se cachea 15 min por sucursal

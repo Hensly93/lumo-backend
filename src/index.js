@@ -51,6 +51,7 @@ try {
   const pasosRoutes = require("./routes_pasos");
   app.use("/api/pasos", pasosRoutes);
   app.use("/api/onboarding", require("./onboarding_mails").router);
+  app.use("/api/meta", require("./metas").router);
   console.log("Pasos OK");
 } catch(e) {
   console.error("Pasos ERROR:", e.message);
