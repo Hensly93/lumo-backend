@@ -419,8 +419,10 @@ router.post('/anular', authTurno, async (req, res) => {
   try {
     const AV = require('./anular_venta');
     const id = parseInt(req.body && req.body.transaccion_id, 10);
-    const motivo = String((req.body && req.body.motivo) || '').trim().slice(0, 200) || null;
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'Falta la venta a anular' });
+    // El motivo es obligatorio y sale de una lista fija (anular_venta.js); los textos de la versión anterior se traducen
+    const motivo = AV.motivoCodigo(req.body && req.body.motivo);
+    if (!motivo) return res.status(400).json({ error: 'Elegí por qué se anula la venta.' });
     const v = await AV.datosParaGuardia(req.turno, id);
     if (!v) return res.status(404).json({ error: 'Esa venta no es de este turno.' });
     if (v.anulada) return res.status(400).json({ error: 'Esa venta ya estaba anulada.' });

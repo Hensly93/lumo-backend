@@ -28,6 +28,12 @@ router.post('/contar', auth, async (req, res) => {
   } catch (e) { console.error('stock/contar:', e.message); res.status(500).json({ error: 'No pude guardar el conteo.' }); }
 });
 
+// GET /api/stock/mermas?dias=30 — plata que faltó en los conteos, qué se explicó y quién lo declaró
+router.get('/mermas', auth, async (req, res) => {
+  try { res.json(await stock.mermas(req.user.negocio_id, req.query.dias)); }
+  catch (e) { console.error('stock/mermas:', e.message); res.status(500).json({ error: 'No pude armar las mermas.' }); }
+});
+
 // POST /api/stock/minimo  { producto_id, minimo }  — minimo vacío o null lo saca
 router.post('/minimo', auth, async (req, res) => {
   try {

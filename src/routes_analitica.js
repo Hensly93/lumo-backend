@@ -359,6 +359,17 @@ async function soloAdmin(req, res) {
 }
 const CM = () => require('./centro_mando');
 
+// Peso de LumoBi en cada negocio (solo admin): qué tanto vive el negocio adentro de la app y quién se está soltando
+router.get('/peso', async (req, res) => {
+  try {
+    if (!pasaFreno('p:' + ipDe(req), 30, 60000)) return res.status(429).json({ error: 'Demasiados intentos' });
+    const c = await accesoOk(req);
+    if (c === 'sin_clave') return res.status(503).json({ error: 'Falta configurar ANALITICA_KEY en el servidor' });
+    if (c !== 'ok') return res.status(401).json({ error: 'Clave incorrecta' });
+    res.json(await require('./peso_lumobi').panel());
+  } catch (e) { console.error('[ANALITICA] peso:', e.message); res.status(500).json({ error: 'No se pudo calcular el peso' }); }
+});
+
 router.get('/panorama', async (req, res) => {
   try { if (!(await soloAdmin(req, res))) return; res.json(await CM().panorama()); }
   catch (e) { console.error('[CENTRO] panorama:', e.message); res.status(500).json({ error: 'No se pudo armar el panorama' }); }

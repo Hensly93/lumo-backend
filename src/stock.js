@@ -15,6 +15,7 @@ function asegurar(db = pool) {
         id SERIAL PRIMARY KEY, negocio_id INTEGER NOT NULL, producto_id INTEGER NOT NULL,
         tipo TEXT NOT NULL, cantidad NUMERIC(14,3) NOT NULL, stock_despues NUMERIC(14,3), costo NUMERIC(14,2),
         ref_id INTEGER, origen TEXT, empleado TEXT, creado TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+      await db.query(`ALTER TABLE movimientos_stock ADD COLUMN IF NOT EXISTS motivo TEXT`);
       await db.query('CREATE INDEX IF NOT EXISTS idx_mov_stock_prod ON movimientos_stock (negocio_id, producto_id, creado DESC)');
       await db.query('CREATE INDEX IF NOT EXISTS idx_mov_stock_tipo ON movimientos_stock (negocio_id, tipo, creado DESC)');
     })().catch((e) => { listo = null; throw e; });
@@ -81,6 +82,9 @@ async function revertirCompra(db, { negocioId, compraId }) {
 }
 
 // Conteo: el dueño dice cuánto hay. Si no se controlaba, es el stock inicial; si ya se controlaba, la diferencia es faltante o sobrante.
+// Por qué faltó mercadería, dicho por quien contó. 'no_se' es una respuesta válida: lo que no se explica queda a la vista.
+const MOTIVOS_MERMA = { rompio: 'Se rompió', vencio: 'Venció', consumo: 'Consumo propio', no_se: 'No sé' };
+
 async function contar(negocioId, items, quien = null, db = pool) {
   const out = { iniciales: 0, ajustes: 0, sin_cambio: 0, diferencias: [] };
   for (const it of items) {
@@ -97,12 +101,48 @@ async function contar(negocioId, items, quien = null, db = pool) {
       const dif = Math.round((contado - p.stock) * 1000) / 1000;
       if (!dif) { out.sin_cambio++; continue; }
       await db.query('UPDATE productos SET stock = $3 WHERE id = $1 AND negocio_id = $2', [pid, negocioId, contado]);
-      await db.query(`INSERT INTO movimientos_stock (negocio_id, producto_id, tipo, cantidad, stock_despues, costo, origen, empleado) VALUES ($1,$2,'conteo',$3,$4,$5,'conteo',$6)`, [negocioId, pid, dif, contado, p.costo || null, quien]);
+      // El motivo solo vale cuando falta mercadería; si sobra, no se guarda
+      const motivo = dif < 0 ? (MOTIVOS_MERMA[it.motivo] ? it.motivo : null) : null;
+      await db.query(`INSERT INTO movimientos_stock (negocio_id, producto_id, tipo, cantidad, stock_despues, costo, origen, empleado, motivo) VALUES ($1,$2,'conteo',$3,$4,$5,'conteo',$6,$7)`, [negocioId, pid, dif, contado, p.costo || null, quien, motivo]);
       out.ajustes++;
       out.diferencias.push({ producto_id: pid, nombre: p.nombre, esperado: p.stock, contado, diferencia: dif, plata: p.costo ? Math.round(dif * p.costo) : null });
     }
   }
   return out;
+}
+
+// Mermas de los últimos N días: cuánta plata faltó, qué se explicó y qué no, y quién lo declaró.
+// "Sin explicar" = dijo "no sé" o no dijo nada (conteos viejos). Nunca se reparte entre los motivos.
+async function mermas(negocioId, dias = 30, db = pool) {
+  await asegurar(db);
+  const d = Math.min(Math.max(parseInt(dias, 10) || 30, 1), 365);
+  const r = await db.query(
+    `SELECT COALESCE(motivo,'sin_explicar') AS motivo, COALESCE(empleado,'—') AS empleado,
+            COUNT(*)::int AS veces, SUM(-cantidad)::float AS unidades,
+            SUM(CASE WHEN costo IS NOT NULL THEN -cantidad * costo ELSE 0 END)::float AS plata,
+            COUNT(*) FILTER (WHERE costo IS NULL)::int AS sin_costo
+       FROM movimientos_stock
+      WHERE negocio_id = $1 AND tipo = 'conteo' AND cantidad < 0 AND creado >= NOW() - ($2::int || ' days')::interval
+      GROUP BY 1, 2`, [negocioId, d]);
+  const porMotivo = {}; const porPersona = {};
+  let total = 0;
+  for (const x of r.rows) {
+    const m = x.motivo === 'no_se' ? 'sin_explicar' : x.motivo;
+    porMotivo[m] = porMotivo[m] || { motivo: m, nombre: MOTIVOS_MERMA[m] || 'Sin explicar', veces: 0, plata: 0 };
+    porMotivo[m].veces += x.veces; porMotivo[m].plata += x.plata; total += x.plata;
+    porPersona[x.empleado] = porPersona[x.empleado] || { empleado: x.empleado, declarada: 0, sin_explicar: 0 };
+    porPersona[x.empleado][m === 'sin_explicar' ? 'sin_explicar' : 'declarada'] += x.plata;
+  }
+  const CAMPOS_PLATA = ['plata', 'declarada', 'sin_explicar'];
+  const redondear = (o) => Object.values(o).map((v) => Object.fromEntries(Object.entries(v).map(([k, val]) => [k, CAMPOS_PLATA.includes(k) ? Math.round(val) : val])));
+  const motivos = redondear(porMotivo).sort((a, b) => b.plata - a.plata);
+  const sinExp = porMotivo.sin_explicar ? Math.round(porMotivo.sin_explicar.plata) : 0;
+  return {
+    dias: d, total: Math.round(total), sin_explicar: sinExp, declarada: Math.round(total) - sinExp,
+    motivos, personas: redondear(porPersona).sort((a, b) => (b.declarada + b.sin_explicar) - (a.declarada + a.sin_explicar)),
+    sin_costo: r.rows.reduce((s, x) => s + x.sin_costo, 0),
+    aviso: 'La merma declarada es lo que dijo quien contó; LumoBi no puede comprobarla. Lo que más conviene mirar es quién declara siempre lo mismo.',
+  };
 }
 
 // Estado de cada producto (puro, para probar): sin_control | negativo | agotado | bajo | sin_movimiento | ok
@@ -152,4 +192,4 @@ async function listar(negocioId, db = pool) {
   return { productos: filas, resumen: res };
 }
 
-module.exports = { asegurar, mover, descontarVenta, sumarCompra, revertirCompra, contar, listar, estadoDe, unidadSirve, conSavepoint };
+module.exports = { asegurar, mover, descontarVenta, sumarCompra, revertirCompra, contar, mermas, MOTIVOS_MERMA, listar, estadoDe, unidadSirve, conSavepoint };

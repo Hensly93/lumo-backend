@@ -442,6 +442,7 @@ async function runJobNocturno(db = pool) {
     ['snapshots_goteo', snapshotsGoteo],
     ['medir_consejos', medirConsejos],
     ['resumen_mensual', (db) => require('./resumen_mensual').enviarResumenesDelMes(db)],
+    ['peso_lumobi', (db) => require('./peso_lumobi').snapshotNocturno(db)],
   ];
   let fallidos = 0;
   for (const [nombre, fn] of PASOS) {

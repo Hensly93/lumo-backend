@@ -52,6 +52,7 @@ try {
   app.use("/api/pasos", pasosRoutes);
   app.use("/api/onboarding", require("./onboarding_mails").router);
   app.use("/api/meta", require("./metas").router);
+  app.use("/api/proveedores", require("./proveedores").router);
   console.log("Pasos OK");
 } catch(e) {
   console.error("Pasos ERROR:", e.message);

@@ -17,6 +17,12 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
+// GET /api/fugas/anulaciones?dias=30 — anulaciones por motivo y por persona
+router.get('/anulaciones', auth, async (req, res) => {
+  try { res.json(await require('./anular_venta').anulacionesPorMotivo(req.user.negocio_id, req.query.dias)); }
+  catch (e) { console.error('[FUGAS] anulaciones:', e.message); res.status(500).json({ error: 'No pude armar las anulaciones' }); }
+});
+
 router.post('/estado', auth, async (req, res) => {
   try {
     if (req.user.rol && req.user.rol !== 'owner') return res.status(403).json({ error: 'Solo el dueño puede cambiar el estado de una fuga' });

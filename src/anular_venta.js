@@ -7,6 +7,22 @@
 // (mismo sistema que sacar productos del carrito o bajar precios: autorizacion_caja.js).
 const pool = require('./db');
 
+// Motivos de anulación: una lista corta y fija, para poder comparar entre personas y turnos.
+// Los textos viejos (cuando era texto libre) se pasan al código que les corresponde.
+const MOTIVOS = {
+  error_carga: 'Me equivoqué al cobrar',
+  arrepentimiento: 'El cliente se arrepintió',
+  devolucion: 'Devolución de un producto',
+  cambio: 'Cambio de producto',
+  otro: 'Otro',
+};
+function motivoCodigo(m) {
+  const t = String(m || '').trim();
+  if (MOTIVOS[t]) return t;
+  const porTexto = Object.entries(MOTIVOS).find(([, label]) => label.toLowerCase() === t.toLowerCase());
+  return porTexto ? porTexto[0] : null;
+}
+
 let listo = null;
 function asegurar(db = pool) {
   if (!listo) {
@@ -96,4 +112,34 @@ async function anular(turno, transaccionId, motivo, db = pool) {
   } finally { client.release(); }
 }
 
-module.exports = { asegurar, ventasDelTurno, datosParaGuardia, anular };
+// Anulaciones de los últimos N días por motivo y por persona. Una persona que anula mucho "por error de carga"
+// o siempre "otro" se ve distinto de quien anula por devoluciones: eso es lo que hay que mirar.
+async function anulacionesPorMotivo(negocioId, dias = 30, db = pool) {
+  await asegurar(db);
+  const d = Math.min(Math.max(parseInt(dias, 10) || 30, 1), 365);
+  const r = await db.query(
+    `SELECT COALESCE(empleado,'—') AS empleado, COALESCE(motivo,'sin_motivo') AS motivo,
+            COUNT(*)::int AS veces, SUM(-monto)::float AS plata
+       FROM transacciones
+      WHERE negocio_id = $1 AND tipo = 'anulacion' AND fecha >= NOW() - ($2::int || ' days')::interval
+      GROUP BY 1, 2`, [negocioId, d]);
+  const nombre = (m) => MOTIVOS[m] || (m === 'sin_motivo' ? 'Sin motivo (antes de que fuera obligatorio)' : 'Otro (texto libre)');
+  const porMotivo = {}; const porPersona = {};
+  for (const x of r.rows) {
+    const k = MOTIVOS[x.motivo] ? x.motivo : (x.motivo === 'sin_motivo' ? 'sin_motivo' : 'otro');
+    porMotivo[k] = porMotivo[k] || { motivo: k, nombre: nombre(k), veces: 0, plata: 0 };
+    porMotivo[k].veces += x.veces; porMotivo[k].plata += x.plata;
+    const p = (porPersona[x.empleado] = porPersona[x.empleado] || { empleado: x.empleado, veces: 0, plata: 0, motivos: {} });
+    p.veces += x.veces; p.plata += x.plata; p.motivos[k] = (p.motivos[k] || 0) + x.veces;
+  }
+  const redond = (v) => ({ ...v, plata: Math.round(v.plata) });
+  return {
+    dias: d,
+    total_veces: r.rows.reduce((s, x) => s + x.veces, 0),
+    total_plata: Math.round(r.rows.reduce((s, x) => s + x.plata, 0)),
+    motivos: Object.values(porMotivo).map(redond).sort((a, b) => b.plata - a.plata),
+    personas: Object.values(porPersona).map(redond).sort((a, b) => b.veces - a.veces),
+  };
+}
+
+module.exports = { MOTIVOS, motivoCodigo, anulacionesPorMotivo, asegurar, ventasDelTurno, datosParaGuardia, anular };
