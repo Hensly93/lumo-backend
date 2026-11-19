@@ -951,6 +951,9 @@ async function correrVigilante(db = pool, opts = {}) {
   // Seguimiento después del registro: mails que llevan al cliente nuevo, de a un paso, hasta que el negocio está andando
   try { resumen.onboarding = await require('./onboarding_mails').pasadaOnboarding(db, { dry: !!opts.dry, ahora, email: opts.emailOnboarding, estado: opts.estadoOnboarding }); }
   catch (e) { console.error('[VIGILANTE] onboarding', e.message); resumen.onboarding = { error: e.message }; }
+  // Empujes: si el cliente no hizo lo vital (ventas al día, costos, facturas, stock, cierre de caja), un mail o push por vez
+  try { resumen.empujes = await require('./empujes_valor').pasadaEmpujes(db, { dry: !!opts.dry, ahora }); }
+  catch (e) { console.error('[VIGILANTE] empujes', e.message); resumen.empujes = { error: e.message }; }
   // Avisos para el dueño de LumoBi: registros, primeras ventas, clientes trabados, pruebas por vencer
   if (!opts.dry) {
     try { resumen.fundador = await require('./aviso_fundador').pasadaFundador(db, reloj); }

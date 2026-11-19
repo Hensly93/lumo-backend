@@ -208,11 +208,11 @@ router.get('/baja', async (req, res) => {
   try {
     await asegurarTablas();
     await pool.query('UPDATE usuarios SET mails_onboarding_baja = true WHERE id=$1', [uid]);
-    res.send(pagina('Listo, no te escribimos más', 'Dejaste de recibir los recordatorios de configuración. Tu cuenta sigue igual y los avisos de tu negocio no cambian.'));
+    res.send(pagina('Listo, no te escribimos más', 'Dejaste de recibir los recordatorios y empujes de LumoBi. Tu cuenta sigue igual y los avisos de tu negocio no cambian.'));
   } catch (e) {
     console.error('[ONBOARDING] baja', e.message);
     res.status(500).send(pagina('No pudimos procesarlo', 'Escribinos a hola@lumobi.com.ar y te damos de baja a mano.'));
   }
 });
 
-module.exports = { pasadaOnboarding, armarMail, resumenPasos, router, HORAS_SLOT, PASOS, firmar, asegurarTablas };
+module.exports = { pasadaOnboarding, armarMail, resumenPasos, router, HORAS_SLOT, PASOS, firmar, asegurarTablas, urlBajaAbsoluta };
