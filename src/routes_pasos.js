@@ -8,9 +8,9 @@ const pool = require('./db');
 const { auth } = require('./authMiddleware');
 
 // Corre una consulta que devuelve una columna "ok". Si falla, lo registra y devuelve false (no rompe la pantalla).
-async function existe(sql, params, nombre) {
+async function existe(sql, params, nombre, db = pool) {
   try {
-    const r = await pool.query(sql, params);
+    const r = await db.query(sql, params);
     return !!(r.rows[0] && r.rows[0].ok);
   } catch (e) {
     console.error('pasos: fallo la consulta "' + nombre + '":', e.message);
@@ -18,30 +18,28 @@ async function existe(sql, params, nombre) {
   }
 }
 
+// Estado de los pasos de un negocio (lo usa la pantalla Primeros pasos y la secuencia de mails de seguimiento)
+async function estadoPasos(negocioId, usuarioId, db = pool) {
+  const q = (sql, params, nombre) => existe(sql, params, nombre, db);
+  const r = await Promise.all([
+    q('SELECT (tipo_negocio IS NOT NULL AND zona IS NOT NULL) AS ok FROM negocios WHERE id=$1', [negocioId], 'negocio'),
+    q("SELECT EXISTS(SELECT 1 FROM mis_sucursales WHERE negocio_id=$1 AND activo=true AND COALESCE(direccion,'') <> '') AS ok", [negocioId], 'locales'),
+    q('SELECT EXISTS(SELECT 1 FROM empleados_negocio WHERE negocio_id=$1 AND activo=true) AS ok', [negocioId], 'equipo'),
+    q("SELECT (EXISTS(SELECT 1 FROM integraciones_mp WHERE negocio_id=$1) OR EXISTS(SELECT 1 FROM transacciones WHERE negocio_id=$1 AND COALESCE(origin,'real') IN ('real','importado'))) AS ok", [negocioId], 'ventas'),
+    q('SELECT EXISTS(SELECT 1 FROM push_subscriptions WHERE usuario_id=$1) AS ok', [usuarioId], 'avisos'),
+    q("SELECT EXISTS(SELECT 1 FROM turnos_caja WHERE negocio_id=$1 AND estado='cerrado') AS ok", [negocioId], 'turno'),
+  ]);
+  return { negocio: r[0], locales: r[1], equipo: r[2], ventas: r[3], avisos: r[4], turno: r[5] };
+}
+
 router.get('/estado', auth, async (req, res) => {
   try {
-    const negocioId = req.user.negocio_id;
-    const usuarioId = req.user.id;
-    const resultados = await Promise.all([
-      existe('SELECT (tipo_negocio IS NOT NULL AND zona IS NOT NULL) AS ok FROM negocios WHERE id=$1', [negocioId], 'negocio'),
-      existe("SELECT EXISTS(SELECT 1 FROM mis_sucursales WHERE negocio_id=$1 AND activo=true AND COALESCE(direccion,'') <> '') AS ok", [negocioId], 'locales'),
-      existe('SELECT EXISTS(SELECT 1 FROM empleados_negocio WHERE negocio_id=$1 AND activo=true) AS ok', [negocioId], 'equipo'),
-      existe("SELECT (EXISTS(SELECT 1 FROM integraciones_mp WHERE negocio_id=$1) OR EXISTS(SELECT 1 FROM transacciones WHERE negocio_id=$1 AND COALESCE(origin,'real') IN ('real','importado'))) AS ok", [negocioId], 'ventas'),
-      existe('SELECT EXISTS(SELECT 1 FROM push_subscriptions WHERE usuario_id=$1) AS ok', [usuarioId], 'avisos'),
-      existe("SELECT EXISTS(SELECT 1 FROM turnos_caja WHERE negocio_id=$1 AND estado='cerrado') AS ok", [negocioId], 'turno'),
-    ]);
     res.set('Cache-Control', 'no-store');
-    res.json({
-      negocio: resultados[0],
-      locales: resultados[1],
-      equipo: resultados[2],
-      ventas: resultados[3],
-      avisos: resultados[4],
-      turno: resultados[5],
-    });
+    res.json(await estadoPasos(req.user.negocio_id, req.user.id));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
 module.exports = router;
+module.exports.estadoPasos = estadoPasos;

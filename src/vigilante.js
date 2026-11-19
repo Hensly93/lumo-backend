@@ -948,6 +948,9 @@ async function correrVigilante(db = pool, opts = {}) {
       resumen.detalle.push({ negocio_id: u.negocio_id, error: e.message });
     }
   }
+  // Seguimiento después del registro: mails que llevan al cliente nuevo, de a un paso, hasta que el negocio está andando
+  try { resumen.onboarding = await require('./onboarding_mails').pasadaOnboarding(db, { dry: !!opts.dry, ahora, email: opts.emailOnboarding, estado: opts.estadoOnboarding }); }
+  catch (e) { console.error('[VIGILANTE] onboarding', e.message); resumen.onboarding = { error: e.message }; }
   // Avisos para el dueño de LumoBi: registros, primeras ventas, clientes trabados, pruebas por vencer
   if (!opts.dry) {
     try { resumen.fundador = await require('./aviso_fundador').pasadaFundador(db, reloj); }

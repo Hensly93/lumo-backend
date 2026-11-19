@@ -276,4 +276,40 @@ async function enviarAvisoVigilante({ nombre, email, negocio, titulo, mensaje, u
   return true;
 }
 
-module.exports = { enviarBienvenida, enviarRecupero, enviarConfirmacionReset, enviarAvisoVigilante };
+
+// ─── Seguimiento después del registro (secuencia de onboarding) ───────────────
+// Un mail = un paso. Barra de avance, qué gana con ese paso y un solo botón. El copy lo arma onboarding_mails.js.
+
+async function enviarSeguimiento({ email, asunto, preheader, titulo, intro, bloques = [], checklist = [], hechos = 0, total = 0, boton, url, cierre, bajaUrl }) {
+  if (!process.env.SMTP_USER || !email) return false;
+  const pct = total ? Math.round((hechos / total) * 100) : 0;
+  const barra = total ? `
+    <div style="margin:0 0 22px;">
+      <p style="color:${SUAVE};font-size:12px;font-weight:700;margin:0 0 6px;">Tu configuración: ${hechos} de ${total} pasos</p>
+      <div style="background:${LINEA};border-radius:99px;height:8px;overflow:hidden;"><div style="width:${pct}%;height:8px;background:${AZUL};border-radius:99px;"></div></div>
+    </div>` : "";
+  const lista = checklist.length ? `
+    <div style="margin:26px 0 0;background:${FONDO};border-radius:12px;padding:16px 18px;">
+      ${checklist.map((c) => `<p style="margin:0 0 8px;font-size:14px;line-height:1.5;color:${c.hecho ? SUAVE : TINTA};${c.hecho ? "text-decoration:line-through;" : "font-weight:700;"}">${c.hecho ? "✓" : "○"}&nbsp; ${escHtml(c.nombre)}</p>`).join("")}
+    </div>` : "";
+  const html = wrapper(`
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;">${escHtml(preheader || "")}</div>
+    ${logoBlock()}
+    ${barra}
+    <h1 style="color:${TINTA};font-size:22px;font-weight:700;margin:0 0 14px;line-height:1.3;">${escHtml(titulo)}</h1>
+    <p style="color:${TEXTO};font-size:15px;line-height:1.7;margin:0 0 16px;">${escHtml(intro)}</p>
+    ${bloques.map((b) => `
+    <div style="margin:0 0 16px;">
+      <p style="color:${TINTA};font-size:14px;font-weight:700;margin:0 0 4px;">${escHtml(b.titulo)}</p>
+      <p style="color:${TEXTO};font-size:14px;line-height:1.65;margin:0;">${escHtml(b.texto)}</p>
+    </div>`).join("")}
+    <div style="margin:24px 0 0;">${botonBlock(url, boton)}</div>
+    ${lista}
+    ${cierre ? `<p style="color:${TEXTO};font-size:14px;line-height:1.7;margin:24px 0 0;">${escHtml(cierre)}</p>` : ""}
+    ${footerBlock(`Si ya no querés recibir estos recordatorios, <a href="${escHtml(bajaUrl)}" style="color:${SUAVE};">dejá de recibirlos acá</a>. Tu cuenta sigue igual.`)}
+  `);
+  await transporter.sendMail({ from: FROM, to: email, subject: asunto, html });
+  return true;
+}
+
+module.exports = { enviarSeguimiento, enviarBienvenida, enviarRecupero, enviarConfirmacionReset, enviarAvisoVigilante };

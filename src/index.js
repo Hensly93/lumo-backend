@@ -50,6 +50,7 @@ app.use("/api/analitica", require("./routes_analitica"));
 try {
   const pasosRoutes = require("./routes_pasos");
   app.use("/api/pasos", pasosRoutes);
+  app.use("/api/onboarding", require("./onboarding_mails").router);
   console.log("Pasos OK");
 } catch(e) {
   console.error("Pasos ERROR:", e.message);
