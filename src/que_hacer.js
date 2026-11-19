@@ -89,6 +89,12 @@ async function queHacer(negocioId, sucursalId = null, db = pool, fuentes = {}) {
     } catch (e) { avisos.push('comparación: ' + e.message); }
   }
 
+  // Gastos fijos que vencen hoy o mañana (los que el dueño cargó en Vencimientos)
+  try {
+    const venc = fuentes.vencimientos !== undefined ? fuentes.vencimientos : await require('./vencimientos').itemsParaQueHacer(negocioId, db);
+    items.push(...venc);
+  } catch (e) { avisos.push('vencimientos: ' + e.message); }
+
   // Urgentes primero; dentro de cada grupo, lo que más plata mueve; lo que no tiene plata, al final
   items.sort((x, y) => (y.urgente - x.urgente) || ((y.pesos ?? -1) - (x.pesos ?? -1)));
 

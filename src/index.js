@@ -53,6 +53,9 @@ try {
   app.use("/api/onboarding", require("./onboarding_mails").router);
   app.use("/api/meta", require("./metas").router);
   app.use("/api/proveedores", require("./proveedores").router);
+  app.use("/api/vencimientos", require("./vencimientos").router);
+  app.use("/api/se-vende-junto", require("./se_vende_junto").router);
+  app.use("/api/efectos", require("./efecto_cambios").router);
   console.log("Pasos OK");
 } catch(e) {
   console.error("Pasos ERROR:", e.message);
