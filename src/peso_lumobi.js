@@ -8,7 +8,7 @@
 //   costos   15   % de productos con costo cargado
 //   facturas 15   facturas de proveedor cargadas en los últimos 30 días
 //   acciones 20   consejos ejecutados (10) y medidos con plata recuperada (10), últimos 90 días
-//   meta     10   meta del mes definida (5) y ventas en los últimos 7 días (5)
+//   ventas_al_dia 10   ventas cargadas en los últimos 7 días
 // Una foto por negocio por semana-día (tabla peso_lumobi). Si baja dos semanas seguidas, avisa al dueño de LumoBi.
 const pool = require('./db');
 const { FL, REAL, cuentaDePrueba } = require('./ventas_sql');
@@ -28,8 +28,8 @@ function puntuar(m) {
   const costos = m.productos > 0 ? tope(m.con_costo / m.productos * 15, 15) : 0;
   const facturas = tope(m.facturas_30 / 4 * 15, 15);
   const acciones = tope(m.acciones_ejecutadas_90 >= 1 ? 10 : 0, 10) + (m.acciones_medidas_90 >= 1 ? 10 : 0);
-  const meta = (m.meta ? 5 : 0) + (m.ventas_7 > 0 ? 5 : 0);
-  const partes = { historia, caja, costos, facturas, acciones, meta };
+  const ventas_al_dia = m.ventas_7 > 0 ? 10 : 0;
+  const partes = { historia, caja, costos, facturas, acciones, ventas_al_dia };
   const redondeadas = Object.fromEntries(Object.entries(partes).map(([k, v]) => [k, Math.round(v)]));
   return { puntaje: Math.round(Object.values(partes).reduce((s, v) => s + v, 0)), partes: redondeadas };
 }
@@ -43,7 +43,7 @@ function bajaDosSemanas(serie) {
 
 async function medir(negocioId, db = pool) {
   const q = (sql, args = [negocioId]) => db.query(sql, args).then((r) => r.rows[0] || {}).catch(() => ({}));
-  const [v, t, p, f, h, me] = await Promise.all([
+  const [v, t, p, f, h] = await Promise.all([
     q(`SELECT COUNT(DISTINCT ${FL}::date)::int AS dias_30, COUNT(*) FILTER (WHERE fecha >= NOW() - INTERVAL '7 days')::int AS ventas_7
          FROM transacciones WHERE negocio_id = $1 AND ${REAL} AND COALESCE(tipo,'venta') = 'venta' AND fecha >= NOW() - INTERVAL '30 days'`),
     q(`SELECT COUNT(*)::int AS n FROM turnos_caja WHERE negocio_id = $1 AND estado = 'cerrado' AND hora_apertura >= NOW() - INTERVAL '7 days'`),
@@ -52,12 +52,11 @@ async function medir(negocioId, db = pool) {
     q(`SELECT COUNT(*) FILTER (WHERE resuelto_en >= NOW() - INTERVAL '90 days')::int AS ejecutadas,
               COUNT(*) FILTER (WHERE evaluado_en IS NOT NULL AND recuperado > 0 AND resuelto_en >= NOW() - INTERVAL '90 days')::int AS medidas
          FROM hallazgos WHERE negocio_id = $1`),
-    q(`SELECT 1 AS ok FROM metas_negocio WHERE negocio_id = $1`),
   ]);
   const metricas = {
     dias_con_ventas_30: v.dias_30 || 0, ventas_7: v.ventas_7 || 0, turnos_cerrados_7: t.n || 0,
     productos: p.total || 0, con_costo: p.con_costo || 0, facturas_30: f.n || 0,
-    acciones_ejecutadas_90: h.ejecutadas || 0, acciones_medidas_90: h.medidas || 0, meta: !!me.ok,
+    acciones_ejecutadas_90: h.ejecutadas || 0, acciones_medidas_90: h.medidas || 0,
   };
   return { metricas, ...puntuar(metricas) };
 }
