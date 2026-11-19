@@ -36,6 +36,7 @@ router.get('/buscar', authTurno, async (req, res) => {
   try {
     const q = String(req.query.q || '').trim().slice(0, 60);
     await require('./catalogo_marca').asegurar();
+    await require('./combos').asegurar();
     if (q.length < 2) return res.json({ productos: [] });
     const turno = await pool.query(`SELECT negocio_id FROM turnos_caja WHERE id=$1 AND estado='activo'`, [req.turno.id]);
     if (turno.rows.length === 0) return res.status(400).json({ error: 'Turno no activo' });
@@ -43,7 +44,7 @@ router.get('/buscar', authTurno, async (req, res) => {
     const r = await pool.query(
       `SELECT id, nombre, marca, categoria, precio_venta, unidad, codigo_barras
          FROM productos
-        WHERE negocio_id = $1 AND COALESCE(activo, true) = true AND (nombre ILIKE $2 OR codigo_barras ILIKE $2)
+        WHERE negocio_id = $1 AND COALESCE(activo, true) = true AND (combo_hasta IS NULL OR combo_hasta >= NOW()) AND (nombre ILIKE $2 OR codigo_barras ILIKE $2)
         ORDER BY (nombre ILIKE $3) DESC, nombre ASC
         LIMIT 8`,
       [turno.rows[0].negocio_id, like, q + '%']

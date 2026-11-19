@@ -8,6 +8,7 @@ async function cerrarVenta(client, turno_id, metodo_pago, extra) {
   await require('./catalogo_marca').asegurar();
   // Las tablas de stock se aseguran ANTES de tocar la venta: si se hace adentro, el ALTER espera a esta misma transacción y la primera venta tras un deploy se cuelga.
   try { await require('./stock').asegurar(); } catch (e) { console.error('stock/asegurar:', e.message); }
+  try { await require('./combos').asegurar(); } catch (e) { console.error('combos/asegurar:', e.message); }
   await require('./caja_extra').asegurar();
   // Obtener datos del turno para atribución completa
   const turno = await client.query(
@@ -65,7 +66,7 @@ async function cerrarVenta(client, turno_id, metodo_pago, extra) {
        FROM productos p WHERE d.transaccion_id = $1 AND p.id = d.producto_id`, [transaccion_id]);
 
   // Stock liviano: baja lo vendido. Nunca frena ni rompe la venta (si falla, queda anotado en el log).
-  await require('./stock').descontarVenta(client, { negocioId: negocio_id, transaccionId: transaccion_id, items: carrito.rows, empleado: nombre_empleado });
+  await require('./stock').descontarVenta(client, { negocioId: negocio_id, transaccionId: transaccion_id, items: await require('./combos').expandirParaStock(client, carrito.rows).catch(() => carrito.rows), empleado: nombre_empleado });
 
   // Vaciar carrito
   if (!Array.isArray(extra.items)) await client.query('DELETE FROM carrito_items WHERE turno_id=$1', [turno_id]);

@@ -951,6 +951,8 @@ async function correrVigilante(db = pool, opts = {}) {
   // Seguimiento después del registro: mails que llevan al cliente nuevo, de a un paso, hasta que el negocio está andando
   try { resumen.onboarding = await require('./onboarding_mails').pasadaOnboarding(db, { dry: !!opts.dry, ahora, email: opts.emailOnboarding, estado: opts.estadoOnboarding }); }
   catch (e) { console.error('[VIGILANTE] onboarding', e.message); resumen.onboarding = { error: e.message }; }
+  // Combos temporales vencidos: salen solos de la caja
+  if (!opts.dry) { try { resumen.combos_vencidos = await require('./combos').vencer(db); } catch (e) { console.error('[VIGILANTE] combos', e.message); } }
   // Empujes: si el cliente no hizo lo vital (ventas al día, costos, facturas, stock, cierre de caja), un mail o push por vez
   try { resumen.empujes = await require('./empujes_valor').pasadaEmpujes(db, { dry: !!opts.dry, ahora }); }
   catch (e) { console.error('[VIGILANTE] empujes', e.message); resumen.empujes = { error: e.message }; }

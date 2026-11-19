@@ -11,6 +11,7 @@ function asegurar(db = pool) {
     listo = (async () => {
       await db.query(`ALTER TABLE productos ADD COLUMN IF NOT EXISTS acceso_rapido BOOLEAN NOT NULL DEFAULT false,
                       ADD COLUMN IF NOT EXISTS orden_rapido INTEGER`);
+      await db.query(`ALTER TABLE productos ADD COLUMN IF NOT EXISTS combo_hasta TIMESTAMPTZ`);
     })().catch((e) => { listo = null; throw e; });
   }
   return listo;
@@ -23,6 +24,7 @@ async function listar(negocioId, db = pool) {
     `SELECT id, nombre, marca, categoria, precio_venta, unidad
        FROM productos
       WHERE negocio_id = $1 AND COALESCE(activo, true) = true AND acceso_rapido = true
+        AND (combo_hasta IS NULL OR combo_hasta >= NOW())
       ORDER BY orden_rapido NULLS LAST, nombre
       LIMIT $2`,
     [negocioId, MAX_RAPIDOS]

@@ -24,6 +24,7 @@ function metricas(total, a, b, juntos) {
 
 async function calcular(negocioId, dias = 60, db = pool) {
   await require('./anular_venta').asegurar(db);
+  await require('./combos').asegurar(db);
   const d = Math.min(Math.max(parseInt(dias, 10) || 60, 14), 180);
   const base = `
     WITH tk AS (
@@ -43,12 +44,12 @@ async function calcular(negocioId, dias = 60, db = pool) {
     SELECT par.a, par.b, par.juntos, fa.n AS na, fb.n AS nb, pa.nombre AS nombre_a, pb.nombre AS nombre_b,
            pa.precio_venta::float AS precio_a, pb.precio_venta::float AS precio_b
       FROM par JOIN freq fa ON fa.id = par.a JOIN freq fb ON fb.id = par.b
-      JOIN productos pa ON pa.id = par.a AND pa.negocio_id = $1 JOIN productos pb ON pb.id = par.b AND pb.negocio_id = $1
+      JOIN productos pa ON pa.id = par.a AND pa.negocio_id = $1 AND pa.combo_componentes IS NULL JOIN productos pb ON pb.id = par.b AND pb.negocio_id = $1 AND pb.combo_componentes IS NULL
      ORDER BY par.juntos DESC LIMIT 200`, [negocioId, d]);
   const pares = r.rows.map((x) => ({ ...x, ...metricas(tot.tickets, x.na, x.nb, x.juntos) }))
     .filter((x) => x.lift != null && x.lift >= MIN_LIFT)
     .sort((x, y) => (y.juntos * y.lift) - (x.juntos * x.lift)).slice(0, 15)
-    .map((x) => ({ a: { id: x.a, nombre: x.nombre_a, precio: x.precio_a }, b: { id: x.b, nombre: x.nombre_b, precio: x.precio_b }, juntos: x.juntos, lift: x.lift, pct_de_a: x.pct_de_a, pct_de_b: x.pct_de_b }));
+    .map((x) => ({ a: { id: x.a, nombre: x.nombre_a, precio: x.precio_a }, b: { id: x.b, nombre: x.nombre_b, precio: x.precio_b }, juntos: x.juntos, na: x.na, nb: x.nb, lift: x.lift, pct_de_a: x.pct_de_a, pct_de_b: x.pct_de_b }));
   return {
     suficiente: true, dias: d, tickets: tot.tickets, tickets_con_varios: tot.multi, pares,
     aviso: 'Solo se muestran pares que aparecen juntos mucho más de lo que pasaría por casualidad. Sirve para armar combos y para poner estos productos cerca en el local.',
@@ -58,6 +59,22 @@ async function calcular(negocioId, dias = 60, db = pool) {
 router.get('/', auth, async (req, res) => {
   try { res.json(await calcular(req.user.negocio_id, req.query.dias)); }
   catch (e) { console.error('se-vende-junto:', e.message); res.status(500).json({ error: 'No pude calcular qué se vende junto.' }); }
+});
+
+// Propuesta de combo para un par (precio, duración y lo que se estima que gana) — se calcula en el servidor
+router.get('/propuesta', auth, async (req, res) => {
+  try { res.json(await require('./combos').proponer(req.user.negocio_id, req.query.a, req.query.b, req.query.dias)); }
+  catch (e) { console.error('se-vende-junto/propuesta:', e.message); res.status(500).json({ error: 'No pude armar la propuesta.' }); }
+});
+// "Aceptar": crea el combo con fecha de fin y lo manda a la caja del empleado
+router.post('/aceptar', auth, async (req, res) => {
+  try { const b = req.body || {}; res.json(await require('./combos').aceptar(req.user.negocio_id, req.user.id, b.a, b.b, b.dias)); }
+  catch (e) { res.status(e.status || 500).json({ error: e.status ? e.message : 'No pude crear el combo.' }); if (!e.status) console.error('se-vende-junto/aceptar:', e.message); }
+});
+// Los combos que armó LumoBi y lo que pasó con cada uno
+router.get('/combos', auth, async (req, res) => {
+  try { res.json({ combos: await require('./combos').listar(req.user.negocio_id) }); }
+  catch (e) { console.error('se-vende-junto/combos:', e.message); res.status(500).json({ error: 'No pude cargar los combos.' }); }
 });
 
 module.exports = { router, calcular, metricas };
