@@ -30,7 +30,7 @@ router.get('/recuperado', auth, async (req, res) => {
   }
 });
 
-// POST /api/hallazgos/:id/feedback  { accion: 'util' | 'no_sirve' | 'ya_lo_sabia' | 'resuelto' }
+// POST /api/hallazgos/:id/feedback  { accion: 'util' | 'no_sirve' | 'falsa_alarma' | 'ya_lo_sabia' | 'resuelto' }
 router.post('/:id/feedback', auth, async (req, res) => {
   try {
     if (!/^\d+$/.test(req.params.id)) return res.status(404).json({ error: 'No encontrado' });

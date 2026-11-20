@@ -29,12 +29,16 @@ async function prediccion(negocioId, db) {
 async function avisos(negocioId, db) {
   const q = (sql) => db.query(sql, [negocioId]).then((r) => r.rows[0] || {}).catch(() => ({}));
   const [h, al, ins] = await Promise.all([
-    q(`SELECT COUNT(*) FILTER (WHERE feedback IN ('util','resuelto'))::int AS si, COUNT(*) FILTER (WHERE feedback IN ('no_sirve','ya_lo_sabia'))::int AS no FROM hallazgos WHERE negocio_id = $1 AND feedback IS NOT NULL`),
+    q(`SELECT COUNT(*) FILTER (WHERE feedback IN ('util','resuelto'))::int AS si, COUNT(*) FILTER (WHERE feedback IN ('no_sirve','ya_lo_sabia','falsa_alarma'))::int AS no, COUNT(*) FILTER (WHERE feedback = 'falsa_alarma')::int AS falsas FROM hallazgos WHERE negocio_id = $1 AND feedback IS NOT NULL`),
     q(`SELECT COUNT(*) FILTER (WHERE feedback_confirmada IS TRUE)::int AS si, COUNT(*) FILTER (WHERE feedback_confirmada IS FALSE AND feedback_at IS NOT NULL)::int AS no FROM alertas_gestionadas WHERE negocio_id = $1 AND feedback_at IS NOT NULL`),
     q(`SELECT COUNT(*) FILTER (WHERE feedback = 'util')::int AS si, COUNT(*) FILTER (WHERE feedback = 'no_era_nada')::int AS no, COUNT(*)::int AS enviados FROM alertas_instante WHERE negocio_id = $1`),
   ]);
   const si = (h.si || 0) + (al.si || 0) + (ins.si || 0), no = (h.no || 0) + (al.no || 0) + (ins.no || 0), n = si + no;
+  // Acierto de los hallazgos: de los que el dueño confirmó como reales (útil o resuelto) o marcó como falsa alarma. Con menos de 5 respuestas no se da un porcentaje.
+  const confirmados = h.si || 0, falsas = h.falsas || 0, nAcierto = confirmados + falsas;
+  const acierto_pct = nAcierto >= 5 ? Math.round((100 * confirmados) / nAcierto) : null;
   return { respondidos: n, sirvieron: si, no_sirvieron: no, alertas_instante_enviadas: ins.enviados || 0,
+    hallazgos_confirmados: confirmados, hallazgos_falsa_alarma: falsas, acierto_hallazgos_pct: acierto_pct,
     frase: n >= 3 ? `De ${n} avisos que respondiste, ${si} te sirvieron${no ? ` y ${no} no` : ''}.` : 'Cuando respondas "me sirvió" o "no era nada" en los avisos, LumoBi aprende cuáles te importan y mide su acierto.' };
 }
 

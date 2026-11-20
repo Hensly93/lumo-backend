@@ -14,8 +14,9 @@ const PCT_ESTIMADO = 0.03;      // una estimación (más especulativa) tiene que
 const MIN_DIAS_ESTIMADO = 2;    // una estimación tiene que verse en 2 días distintos antes de avisarla
 const DIAS_AUMENTOS = 45;
 const TTL_MS = 10 * 60 * 1000;
-const SILENCIO_DIAS = { no_sirve: 60, ya_lo_sabia: 30, resuelto: 30 };
-const ESTADO_DE = { util: 'util', no_sirve: 'descartado', ya_lo_sabia: 'sabido', resuelto: 'resuelto' };
+const SILENCIO_DIAS = { no_sirve: 60, falsa_alarma: 60, ya_lo_sabia: 30, resuelto: 30 };
+// falsa_alarma = el dueño dice que NO era verdad (mide acierto); no_sirve = puede ser cierto pero no le importa (mide utilidad).
+const ESTADO_DE = { util: 'util', no_sirve: 'descartado', falsa_alarma: 'descartado', ya_lo_sabia: 'sabido', resuelto: 'resuelto' };
 const ACCIONES = Object.keys(ESTADO_DE);
 // Plata recuperada: solo para hallazgos con monto MENSUAL comparable. A los 28 dias de marcado como resuelto se mide cuanto bajo.
 const { receta } = require('./acciones');
@@ -87,7 +88,7 @@ function factorSensibilidad(neg, pos) {
 
 async function calcularSensibilidad(negocioId, db = pool) {
   const r = await db.query(
-    `SELECT detector, COUNT(*) FILTER (WHERE feedback IN ('no_sirve', 'ya_lo_sabia'))::int AS neg,
+    `SELECT detector, COUNT(*) FILTER (WHERE feedback IN ('no_sirve', 'ya_lo_sabia', 'falsa_alarma'))::int AS neg,
             COUNT(*) FILTER (WHERE feedback IN ('util', 'resuelto'))::int AS pos
        FROM hallazgos WHERE negocio_id = $1 AND feedback IS NOT NULL GROUP BY detector`, [negocioId]);
   const out = {};
