@@ -42,7 +42,8 @@ async function sala(negocioId, sucursalId = null, db = pool) {
   let predHoy = null, predManana = null;
   try {
     const p = await calcularPrediccion(negocioId, sucursalId, db, null, { incluirHoy: true, guardar: false });
-    if (p && p.disponible) {
+    // Con menos de 14 días de ventas no se dibuja "lo normal" hora por hora (misma regla que el Inicio)
+    if (p && p.disponible && (p.dias_datos || 0) >= 14) {
       const de = (f) => (p.predicciones || []).find((x) => String(x.fecha_target).slice(0, 10) === f) || null;
       predHoy = de(hoy); predManana = de(manana);
     }

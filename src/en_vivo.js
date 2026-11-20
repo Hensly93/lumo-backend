@@ -14,6 +14,8 @@ const { calcularPrediccion } = require('./prediccion_adaptativa');
 
 const { FL, ticketsNetos } = require('./ventas_sql');
 const CACHE = new Map();
+// Con menos días de ventas que estos no se dice qué es "lo normal": la base es demasiado chica (19/11/2026)
+const MIN_DIAS_COMPARAR = 14;
 
 function limpiarNombre(n) { return String(n || '').replace(/["']/g, '').trim(); }
 function r0(n) { return Math.round(n); }
@@ -91,6 +93,13 @@ async function negocioEnVivo(negocioId, sucursalId = null, db = pool, opciones =
       continue;
     }
 
+    const diasDatos = pred.dias_datos || 0;
+    if (diasDatos < MIN_DIAS_COMPARAR) {
+      // Pocas ventas: se muestra lo vendido y se avisa cuántos días faltan, sin comparar.
+      filas.push({ ...fila, estado: 'sin_base', dias_datos: diasDatos, dias_necesarios: MIN_DIAS_COMPARAR });
+      continue;
+    }
+
     const esperadoDia = hoy.valor_predicho;
     const esp = Object.fromEntries(porHora.map(x => [x.hora, x.esperado]));
     const primera = Math.min(...porHora.map(x => x.hora));
@@ -128,6 +137,11 @@ async function negocioEnVivo(negocioId, sucursalId = null, db = pool, opciones =
       ...fila,
       estado,
       esperado_hasta_ahora: r0(esperadoHasta),
+      esperado_rango_hasta_ahora: { min: r0(esperadoHasta * (1 - tol)), max: r0(esperadoHasta * (1 + tol)) },
+      comparable: !['antes_de_abrir', 'cerrado', 'fuera_de_horario'].includes(estado),
+      dias_datos: diasDatos,
+      dia_base: hoy.dia_semana || null,
+      factores: (hoy.efectos || []).map(e => e.descripcion).filter(Boolean),
       esperado_dia: r0(esperadoDia),
       dif_pct: estado === 'cerrado' ? (difDia != null ? Math.round(difDia * 100) : null) : (dif != null ? Math.round(dif * 100) : null),
       tolerancia_pct: Math.round(tol * 100),
@@ -144,6 +158,13 @@ async function negocioEnVivo(negocioId, sucursalId = null, db = pool, opciones =
     ventas: r0(filas.reduce((a, f) => a + f.ventas, 0)),
     tickets: filas.reduce((a, f) => a + f.tickets, 0),
     esperado_hasta_ahora: conPred.length ? r0(conPred.reduce((a, f) => a + f.esperado_hasta_ahora, 0)) : null,
+    esperado_rango_hasta_ahora: conPred.length ? { min: r0(conPred.reduce((a, f) => a + f.esperado_rango_hasta_ahora.min, 0)), max: r0(conPred.reduce((a, f) => a + f.esperado_rango_hasta_ahora.max, 0)) } : null,
+    comparable: conPred.length ? conPred.some(f => f.comparable) : false,
+    dias_datos: filas.some(f => f.dias_datos != null) ? Math.min(...filas.filter(f => f.dias_datos != null).map(f => f.dias_datos)) : null,
+    dia_base: conPred.length ? conPred[0].dia_base : null,
+    factores: [...new Set(conPred.flatMap(f => f.factores || []))],
+    base_insuficiente: filas.some(f => f.estado === 'sin_base'),
+    dias_necesarios: MIN_DIAS_COMPARAR,
     esperado_dia: conPred.length ? r0(conPred.reduce((a, f) => a + f.esperado_dia, 0)) : null,
     rango_dia: conPred.length ? { min: r0(conPred.reduce((a, f) => a + f.rango_dia.min, 0)), max: r0(conPred.reduce((a, f) => a + f.rango_dia.max, 0)) } : null,
     // La confianza del total es la del local con menos datos (la más prudente)
