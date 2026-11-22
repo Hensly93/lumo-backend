@@ -90,8 +90,7 @@ router.get('/codigo/:codigo', frenoCodigo, async (req, res) => {
 });
 
 router.get('/reglas', (req, res) => {
-  const R = P.reglas();
-  res.json({ alta_pct: R.alta_pct, cartera_pct: R.cartera_pct, elite_clientes: R.elite_clientes, elite_cartera_pct: R.elite_cartera_pct, bono_referido: R.bono_referido, bono_meta: R.bono_meta, retencion_dias: R.retencion_dias, precio_base: R.precio_base });
+  res.json(P.reglasPublicas());
 });
 
 router.post('/registro', frenoRegistro, async (req, res) => {
