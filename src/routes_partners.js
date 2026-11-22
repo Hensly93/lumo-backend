@@ -124,8 +124,8 @@ router.post('/registro', frenoRegistro, async (req, res) => {
     require('./mailer').enviarPartner({
       email, nombre,
       titulo: `Bienvenido a LumoBi Partners, ${primerNombre(nombre)}`,
-      url: `${FRONTEND_URL}/partners/formacion`, boton: 'Hacer la formación (5 minutos)',
-      mensaje: `Tu link es ${linkDe(codigo)} y tu código es ${codigo}. Todo negocio que se registre con ese link queda en tu cartera. Antes de arrancar, hacé la formación: son 5 lecciones cortas y te explican todo.`,
+      url: `${FRONTEND_URL}/partners/formacion`, boton: 'Hacer la formación',
+      mensaje: `Tu link es ${linkDe(codigo)} y tu código es ${codigo}. Todo negocio que se registre con ese link queda en tu cartera. Antes de arrancar, hacé la formación: son lecciones cortas que te explican qué hace LumoBi, cómo encontrar clientes y qué decir.`,
     }).catch(() => {});
     try {
       require('./aviso_fundador').avisarFundador({ tipo: 'fundador_partner_nuevo', clave: 'partner_' + p.id, negocioId: null,
@@ -207,6 +207,8 @@ router.get('/material', authPartner, async (req, res) => {
           texto: `Hola! ¿Cómo andás? Te escribo porque estoy trabajando con LumoBi, un sistema para comercios que te avisa dónde se te va la plata: diferencias de caja, productos que vendés por debajo del costo, horarios flojos. Tiene 5 días de prueba gratis y no pide tarjeta. ¿Te paso el link para que lo veas? ${link}` },
         { titulo: 'Corto, para mandar a un comercio',
           texto: `Hola, soy ${yo}. ¿Sabés cuánta plata se te pierde por mes en la caja o en productos mal cobrados? LumoBi lo mide y te avisa. Probalo 5 días gratis, sin tarjeta: ${link}` },
+        { titulo: 'Para un comercio que no te conoce (Google Maps, Instagram)',
+          texto: `Hola, ¿cómo están? Vi [nombre del local] y les escribo porque trabajo con LumoBi, una caja para comercios que le avisa al dueño cuando pierde plata: diferencias de caja, productos vendidos por debajo del costo, horarios flojos. Se prueba 5 días gratis, sin tarjeta. Si les interesa, acá lo pueden ver: ${link}` },
         { titulo: 'Para el que tiene empleados o más de un local',
           texto: `Si no podés estar en el local todo el día, LumoBi te muestra cada turno: cuánto se vendió, si cerró la caja y si algo no cuadra, sin acusar a nadie. Lo podés probar 5 días gratis: ${link}` },
         { titulo: 'Seguimiento (a los 2 días)',
@@ -220,6 +222,8 @@ router.get('/material', authPartner, async (req, res) => {
         'Empezá por los comercios que ya conocés: el dueño te atiende y confía.',
         'La comisión se genera cuando el negocio paga, no cuando se registra. Lo que más ayuda es que haga su primera venta y cierre su primer turno de caja durante la prueba.',
         'No prometas montos de ahorro: LumoBi muestra lo que encuentra en cada negocio, y cada negocio es distinto.',
+        'Cambiá [nombre del local] por el nombre real antes de mandar: un mensaje personalizado se lee, uno genérico se ignora.',
+        'Nunca mandes mensajes masivos ni compres listas de teléfonos: es spam, WhatsApp te bloquea y está prohibido en el programa.',
         'Si un negocio se registra sin tu link, no queda en tu cartera. Mandale siempre tu link.',
       ],
     });
