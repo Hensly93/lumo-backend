@@ -172,7 +172,12 @@ async function conciliar() {
     const r = await pool.query("SELECT id, mp_subscription_id FROM negocios WHERE mp_subscription_id IS NOT NULL AND mp_subscription_id <> '' ORDER BY id LIMIT 300");
     let n = 0;
     for (const f of r.rows) {
-      try { await sincronizar(String(f.mp_subscription_id)); n++; } catch (e) { console.error('[COBRO] conciliar negocio', f.id, e.message); }
+      try {
+        await sincronizar(String(f.mp_subscription_id)); n++;
+        // Pagos de la suscripción: si un aviso de pago nunca llegó, se registra igual (y el partner cobra su comisión)
+        const pagos = await mpGet('/authorized_payments/search?preapproval_id=' + encodeURIComponent(String(f.mp_subscription_id)) + '&limit=12');
+        for (const ap of ((pagos && pagos.results) || [])) await registrarPago(Object.assign({ preapproval_id: String(f.mp_subscription_id) }, ap));
+      } catch (e) { console.error('[COBRO] conciliar negocio', f.id, e.message); }
       await new Promise((ok) => setTimeout(ok, 300));
     }
     if (n) console.log('[COBRO] conciliadas ' + n + ' suscripciones');
@@ -189,7 +194,16 @@ function estadoDe(ap) {
   return String(ap.status || '');
 }
 
+// LumoBi Partners: cada cuota aprobada genera la comisión del partner que trajo el negocio (una sola vez por pago).
+async function comisionPartner(ap) {
+  if (!(ap && ap.payment && ap.payment.status === 'approved')) return;
+  const n = await pool.query('SELECT id FROM negocios WHERE mp_subscription_id=$1', [String(ap.preapproval_id || '')]);
+  if (!n.rows[0]) return;
+  await require('./partners').comisionPorPago({ negocioId: n.rows[0].id, mpPagoId: String(ap.id), monto: ap.transaction_amount });
+}
+
 async function registrarPago(ap) {
+  comisionPartner(ap).catch((e) => console.error('[COBRO] comisión partner:', e.message));
   const idPago = String(ap.id);
   const ya = await pool.query('SELECT id FROM cobros_lumobi WHERE mp_pago_id=$1', [idPago]);
   if (ya.rows.length) {

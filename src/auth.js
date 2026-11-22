@@ -71,6 +71,10 @@ router.post("/register", async (req, res) => {
 
     // Mail de bienvenida — fire-and-forget
     enviarBienvenida({ nombre, email, negocio, tipo_negocio }).catch(() => {});
+    // LumoBi Partners: si vino con el link o el código de un partner, el negocio queda en su cartera (nunca frena el registro)
+    if (req.body.partner_codigo) {
+      require('./partners').atribuir({ negocioId: negocio_id, codigo: req.body.partner_codigo, email, celular, cuit, origen: 'link' }).catch(() => {});
+    }
     // Aviso al dueño de LumoBi (ADMIN_EMAILS): hay un registro nuevo para acompañar
     require('./aviso_fundador').registroNuevo({ negocioId: negocio_id, negocio, tipo_negocio, provincia, ciudad, zona, nombre, email, celular }).catch(() => {});
 

@@ -41,6 +41,7 @@ try {
   app.use("/api/plan", require("./routes_plan_estado"));
   app.use("/api/plan", require("./routes_cobro"));
 app.use("/api/analitica", require("./routes_analitica"));
+  app.use("/api/partners", require("./routes_partners"));
   app.use("/api/plan", planRoutes);
   console.log("Plan OK");
 } catch(e) {

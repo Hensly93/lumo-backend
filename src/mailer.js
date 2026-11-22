@@ -312,4 +312,21 @@ async function enviarSeguimiento({ email, asunto, preheader, titulo, intro, bloq
   return true;
 }
 
-module.exports = { enviarSeguimiento, enviarBienvenida, enviarRecupero, enviarConfirmacionReset, enviarAvisoVigilante };
+
+// ─── Avisos a los partners de LumoBi ──────────────────────────────────────────
+async function enviarPartner({ email, nombre, titulo, mensaje, url, boton }) {
+  if (!process.env.SMTP_USER || !email) return false;
+  const base = require("./frontend_url").FRONTEND_URL;
+  const html = wrapper(`
+    ${logoBlock()}
+    <p style="color:${SUAVE};font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin:0 0 10px;">LumoBi Partners</p>
+    <h1 style="color:${TINTA};font-size:22px;font-weight:700;margin:0 0 14px;line-height:1.3;">${escHtml(titulo)}</h1>
+    <p style="color:${TEXTO};font-size:15px;line-height:1.7;margin:0 0 28px;">${escHtml(mensaje)}</p>
+    ${botonBlock(url || base + "/partners/panel", boton || "Ver mi panel")}
+    ${footerBlock("Te escribimos porque sos partner de LumoBi" + (nombre ? ", " + escHtml(String(nombre).split(" ")[0]) : "") + ".")}
+  `);
+  await transporter.sendMail({ from: FROM, to: email, subject: titulo, html });
+  return true;
+}
+
+module.exports = { enviarPartner, enviarSeguimiento, enviarBienvenida, enviarRecupero, enviarConfirmacionReset, enviarAvisoVigilante };
