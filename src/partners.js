@@ -18,7 +18,7 @@
 //   · El partner ve de sus comercios el nombre, el estado del plan y si ya arrancó. Nunca ventas, montos ni datos de contacto.
 //
 // Montos ajustables desde Render (sin tocar código):
-//   PARTNER_ALTA_MONTO (22500) · PARTNER_CARTERA_MONTO (10000) · PARTNER_ELITE_CLIENTES (30) · PARTNER_ELITE_CARTERA_MONTO (12000)
+//   PARTNER_ALTA_MONTO (22500) · PARTNER_CARTERA_MONTO (10000) · PARTNER_ELITE_CLIENTES (30) · PARTNER_ELITE_CARTERA_MONTO (15000)
 //   PARTNER_BONO_POR_NEGOCIO (6000) · PARTNER_BONO_TOPE (10) · PARTNER_RETENCION_DIAS (15) · PARTNER_IVA (0.21, el IVA incluido en el cobro)
 //   PARTNER_PRECIO_BASE (45000, solo para mostrar)
 
@@ -31,7 +31,7 @@ function reglas() {
     alta_monto: num(process.env.PARTNER_ALTA_MONTO, 22500),
     cartera_monto: num(process.env.PARTNER_CARTERA_MONTO, 10000),
     elite_clientes: num(process.env.PARTNER_ELITE_CLIENTES, 30),
-    elite_cartera_monto: num(process.env.PARTNER_ELITE_CARTERA_MONTO, 12000),
+    elite_cartera_monto: num(process.env.PARTNER_ELITE_CARTERA_MONTO, 15000),
     bono_por_negocio: num(process.env.PARTNER_BONO_POR_NEGOCIO, 6000),
     bono_tope: num(process.env.PARTNER_BONO_TOPE, 10),
     retencion_dias: num(process.env.PARTNER_RETENCION_DIAS, 15),
