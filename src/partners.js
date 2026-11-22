@@ -274,7 +274,7 @@ async function panel(partnerId) {
   return {
     partner: {
       nombre: p.nombre, email: p.email, codigo: p.codigo, estado: p.estado, zona: p.zona, desde: p.creado, formacion: !!p.formacion_completa,
-      cobro: { cuit: p.cuit, alias_cbu: p.alias_cbu, titular: p.titular, completo: !!(p.cuit && p.alias_cbu && p.titular) },
+      cobro: { cuit: p.cuit, alias_cbu: p.alias_cbu, titular: p.titular, completo: !!p.alias_cbu },
     },
     reglas: reglasPublicas(),
     resumen: {

@@ -177,7 +177,7 @@ router.patch('/yo', authPartner, async (req, res) => {
     if (cuit !== undefined && cuit && cuit.length !== 11) return res.status(400).json({ error: 'El CUIT/CUIL tiene que tener 11 números.' });
     const alias = b.alias_cbu != null ? String(b.alias_cbu).trim().slice(0, 40) : undefined;
     if (alias !== undefined && alias && !(/^\d{22}$/.test(alias) || /^[a-zA-Z0-9.-]{6,20}$/.test(alias))) {
-      return res.status(400).json({ error: 'Poné un alias (6 a 20 letras, números, puntos o guiones) o un CBU/CVU de 22 números.' });
+      return res.status(400).json({ error: 'Poné un CBU o CVU (22 números) o un alias (6 a 20 letras, números, puntos o guiones).' });
     }
     const titular = b.titular != null ? String(b.titular).trim().slice(0, 80) : undefined;
     const celular = b.celular != null ? String(b.celular).replace(/[^0-9+ ()-]/g, '').slice(0, 20) : undefined;
@@ -285,7 +285,7 @@ router.post('/admin/:id/liquidar', authAdmin, async (req, res) => {
     await client.query('BEGIN');
     const p = (await client.query('SELECT id, nombre, email, alias_cbu, cuit, titular FROM partners WHERE id=$1 FOR UPDATE', [id])).rows[0];
     if (!p) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'No encontrado' }); }
-    if (!p.alias_cbu || !p.cuit) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'El partner todavía no cargó su CUIT y su alias/CBU.' }); }
+    if (!p.alias_cbu) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'El partner todavía no cargó su CBU, CVU o alias.' }); }
     const k = await client.query("SELECT id, monto FROM partner_comisiones WHERE partner_id=$1 AND estado='disponible' FOR UPDATE", [id]);
     const total = Math.round(k.rows.reduce((a, x) => a + Number(x.monto), 0) * 100) / 100;
     if (!(total > 0)) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'No tiene comisiones disponibles para liquidar.' }); }
