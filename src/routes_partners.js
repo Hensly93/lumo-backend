@@ -7,7 +7,7 @@
 //   POST /api/partners/login             { email, password }
 // Partner (token propio, header Authorization: Bearer):
 //   GET   /api/partners/yo               panel completo
-//   PATCH /api/partners/yo               datos de cobro { cuit, alias_cbu, titular } y celular/zona
+//   PATCH /api/partners/yo               datos de cobro { cuit, alias_cbu, titular }, celular/zona y { formacion: true } al terminar la formación
 //   GET   /api/partners/material         mensajes listos para mandar, con su link
 // Admin (cuenta de LumoBi cuyo mail está en ADMIN_EMAILS):
 //   GET  /api/partners/admin/lista
@@ -78,7 +78,7 @@ async function authAdmin(req, res, next) {
 
 const primerNombre = (n) => String(n || '').trim().split(/\s+/)[0] || '';
 const emailOk = (e) => typeof e === 'string' && e.length <= 120 && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e);
-const linkDe = (codigo) => `${FRONTEND_URL}/landing?p=${encodeURIComponent(codigo)}`;
+const linkDe = (codigo) => `${FRONTEND_URL}/p/${encodeURIComponent(codigo)}`;
 
 // ─── Público ─────────────────────────────────────────────────────────────────
 router.get('/codigo/:codigo', frenoCodigo, async (req, res) => {
@@ -125,7 +125,8 @@ router.post('/registro', frenoRegistro, async (req, res) => {
     require('./mailer').enviarPartner({
       email, nombre,
       titulo: `Bienvenido a LumoBi Partners, ${primerNombre(nombre)}`,
-      mensaje: `Tu link es ${linkDe(codigo)} y tu código es ${codigo}. Todo negocio que se registre con ese link queda en tu cartera. En tu panel tenés los mensajes listos para mandar por WhatsApp.`,
+      url: `${FRONTEND_URL}/partners/formacion`, boton: 'Hacer la formación (5 minutos)',
+      mensaje: `Tu link es ${linkDe(codigo)} y tu código es ${codigo}. Todo negocio que se registre con ese link queda en tu cartera. Antes de arrancar, hacé la formación: son 5 lecciones cortas y te explican todo.`,
     }).catch(() => {});
     try {
       require('./aviso_fundador').avisarFundador({ tipo: 'fundador_partner_nuevo', clave: 'partner_' + p.id, negocioId: null,
@@ -182,6 +183,7 @@ router.patch('/yo', authPartner, async (req, res) => {
     const titular = b.titular != null ? String(b.titular).trim().slice(0, 80) : undefined;
     const celular = b.celular != null ? String(b.celular).replace(/[^0-9+ ()-]/g, '').slice(0, 20) : undefined;
     const zona = b.zona != null ? String(b.zona).trim().slice(0, 80) : undefined;
+    if (b.formacion === true) await pool.query('UPDATE partners SET formacion_completa=COALESCE(formacion_completa, NOW()) WHERE id=$1', [req.partner.id]);
     await pool.query(
       `UPDATE partners SET cuit=COALESCE($2, cuit), alias_cbu=COALESCE($3, alias_cbu), titular=COALESCE($4, titular),
               celular=COALESCE($5, celular), zona=COALESCE($6, zona) WHERE id=$1`,
@@ -231,7 +233,7 @@ router.get('/admin/lista', authAdmin, async (req, res) => {
     await P.liberarPendientes().catch(() => {});
     const r = await pool.query(
       `SELECT p.id, p.nombre, p.email, p.celular, p.zona, p.codigo, p.estado, p.creado, p.ultimo_ingreso,
-              p.cuit, p.alias_cbu, p.titular, r.nombre AS referido_por,
+              p.cuit, p.alias_cbu, p.titular, p.formacion_completa, r.nombre AS referido_por,
               (SELECT COUNT(*)::int FROM partner_clientes pc WHERE pc.partner_id=p.id) AS clientes,
               (SELECT COUNT(*)::int FROM partner_clientes pc WHERE pc.partner_id=p.id AND pc.primer_pago IS NOT NULL) AS pagaron,
               COALESCE((SELECT SUM(monto) FROM partner_comisiones k WHERE k.partner_id=p.id AND k.estado='pendiente'),0)::float AS pendiente,

@@ -49,6 +49,7 @@ function asegurar() {
         celular TEXT, zona TEXT, codigo TEXT NOT NULL, referido_por INTEGER REFERENCES partners(id),
         estado TEXT NOT NULL DEFAULT 'activo', cuit TEXT, alias_cbu TEXT, titular TEXT,
         acepto_terminos TIMESTAMPTZ, creado TIMESTAMPTZ DEFAULT NOW(), ultimo_ingreso TIMESTAMPTZ)`);
+      await pool.query('ALTER TABLE partners ADD COLUMN IF NOT EXISTS formacion_completa TIMESTAMPTZ');
       await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_partners_email ON partners(LOWER(email))');
       await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS idx_partners_codigo ON partners(codigo)');
       await pool.query(`CREATE TABLE IF NOT EXISTS partner_clientes(
@@ -210,7 +211,7 @@ async function panel(partnerId) {
   await liberarPendientes().catch(() => {});
   const R = reglas();
   const p = (await pool.query(
-    'SELECT id, nombre, email, celular, zona, codigo, estado, cuit, alias_cbu, titular, creado, referido_por FROM partners WHERE id=$1', [partnerId])).rows[0];
+    'SELECT id, nombre, email, celular, zona, codigo, estado, cuit, alias_cbu, titular, creado, referido_por, formacion_completa FROM partners WHERE id=$1', [partnerId])).rows[0];
   if (!p) return null;
   const cli = await pool.query(
     `SELECT pc.negocio_id, n.nombre, n.tipo_negocio, pc.creado, pc.primer_pago, pc.cartera_pct,
@@ -260,7 +261,7 @@ async function panel(partnerId) {
   const elite = (await clientesPagando(partnerId)) >= R.elite_clientes;
   return {
     partner: {
-      nombre: p.nombre, email: p.email, codigo: p.codigo, estado: p.estado, zona: p.zona, desde: p.creado,
+      nombre: p.nombre, email: p.email, codigo: p.codigo, estado: p.estado, zona: p.zona, desde: p.creado, formacion: !!p.formacion_completa,
       cobro: { cuit: p.cuit, alias_cbu: p.alias_cbu, titular: p.titular, completo: !!(p.cuit && p.alias_cbu && p.titular) },
     },
     reglas: { precio_base: R.precio_base, alta_pct: R.alta_pct, cartera_pct: R.cartera_pct, elite_clientes: R.elite_clientes, elite_cartera_pct: R.elite_cartera_pct, bono_referido: R.bono_referido, bono_meta: R.bono_meta, retencion_dias: R.retencion_dias },
